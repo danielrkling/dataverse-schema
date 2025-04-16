@@ -17,6 +17,9 @@ export default defineConfig({
     minify: false,
     target: "esnext",
   },
+  test:{
+    environment:"jsdom"
+  },
   plugins: [
     dts({
       rollupTypes: true,

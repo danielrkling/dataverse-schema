@@ -1,25 +1,48 @@
 {
   "name": "dataverse-schema",
-  "version": "1.0.1",
+  "version": "1.0.2",
+  "description": "A Schema library designed for Microsoft Dataverse to aid in Web API calls",
   "type": "module",
   "files": [
     "dist"
   ],
-  "module": "./dist/dataverse-schema.js",
+  "main": ".dist/dataverse-schema.js",
+  "module": "dist/dataverse-schema.js",
+  "typings": "dist/dataverse-schema.d.ts",
   "exports": {
     ".": {
       "import": "./dist/dataverse-schema.js"
     }
   },
+  "keywords": [
+    "dataverse",
+    "webresource",
+    "schema",
+    "dynamics",
+    "crm",
+    "api"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielrkling/dataverse-schema.git"
+  },
+  "author": "LeviEyal",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/danielrkling/dataverse-schema/issues"
+  },
+  "homepage": "https://github.com/danielrkling/dataverse-schema#readme",
   "devDependencies": {
+    "jsdom": "^26.1.0",
     "vite": "^6.2.6",
-    "vite-plugin-dts": "^4.5.3"
+    "vite-plugin-dts": "^4.5.3",
+    "vitest": "^3.1.1"
   },
   "dependencies": {
     "@standard-schema/spec": "^1.0.0"
   },
   "scripts": {
-    "build":"vite build",
-    "dev":"vite"
+    "build": "vite build",
+    "dev": "vite"
   }
 }
