@@ -9,7 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function NotIn(name: string, ...values: string[]): string {
-  return `Microsoft.Dynamics.CRM.NotIn(PropertyName=${name},PropertyValues=[${values
+  return `Microsoft.Dynamics.CRM.NotIn(PropertyName=${wrapString(name)},PropertyValues=[${values
     .map(wrapString)
     .join(",")}])`;
 }

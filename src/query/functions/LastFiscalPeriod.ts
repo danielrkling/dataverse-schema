@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "LastFiscalPeriod" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function LastFiscalPeriod(name: string): string {
-  return `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${wrapString(name)})`;
 }

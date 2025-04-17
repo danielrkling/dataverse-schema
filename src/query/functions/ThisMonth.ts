@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "ThisMonth" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function ThisMonth(name: string): string {
-  return `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${wrapString(name)})`;
 }

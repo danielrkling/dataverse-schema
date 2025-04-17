@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "EqualUserOrUserHierarchyAndTeams" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function EqualUserOrUserHierarchyAndTeams(name: string): string {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${wrapString(name)})`;
 }

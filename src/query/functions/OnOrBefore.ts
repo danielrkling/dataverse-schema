@@ -9,7 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function OnOrBefore(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }

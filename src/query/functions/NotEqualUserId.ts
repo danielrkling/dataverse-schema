@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NotEqualUserId" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function NotEqualUserId(name: string): string {
-  return `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${wrapString(name)})`;
 }

@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NextXFiscalPeriods" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function NextXFiscalPeriods(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

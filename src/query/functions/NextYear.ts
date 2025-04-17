@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NextYear" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function NextYear(name: string): string {
-  return `Microsoft.Dynamics.CRM.NextYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextYear(PropertyName=${wrapString(name)})`;
 }

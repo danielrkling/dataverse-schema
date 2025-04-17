@@ -14,7 +14,7 @@ export function NotBetween(
   value1: string,
   value2: string
 ): string {
-  return `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${name},PropertyValues=[${wrapString(
+  return `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${wrapString(name)},PropertyValues=[${wrapString(
     value1
   )},${wrapString(value2)}])`;
 }

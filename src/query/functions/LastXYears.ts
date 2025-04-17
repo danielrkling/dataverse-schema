@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "LastXYears" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function LastXYears(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

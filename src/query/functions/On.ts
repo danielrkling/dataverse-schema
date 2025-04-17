@@ -9,7 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function On(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.On(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.On(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }

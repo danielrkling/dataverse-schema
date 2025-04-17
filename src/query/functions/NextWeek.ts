@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NextWeek" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function NextWeek(name: string): string {
-  return `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${wrapString(name)})`;
 }

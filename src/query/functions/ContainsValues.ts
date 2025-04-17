@@ -9,5 +9,5 @@ import { wrapString } from "../../util";
  */
 
 export function ContainsValues(name: string, ...values: string[]): string {
-  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${name},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
 }

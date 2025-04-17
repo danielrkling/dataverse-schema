@@ -9,5 +9,5 @@ import { wrapString } from "../../util";
  */
 
 export function Above(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.Above(PropertyName=${name},PropertyValue=${wrapString(value)})`;
+  return `Microsoft.Dynamics.CRM.Above(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
 }

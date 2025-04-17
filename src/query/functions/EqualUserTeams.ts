@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "EqualUserTeams" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function EqualUserTeams(name: string): string {
-  return `Microsoft.Dynamics.CRM.EqualUserTeams(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserTeams(PropertyName=${wrapString(name)})`;
 }

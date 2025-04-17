@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NextXHours" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function NextXHours(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

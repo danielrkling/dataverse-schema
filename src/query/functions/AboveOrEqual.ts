@@ -9,5 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function AboveOrEqual(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${name},PropertyValue=${wrapString(value)})`;
+  return `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
 }
+
+

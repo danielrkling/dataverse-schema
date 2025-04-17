@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "InFiscalPeriod" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function InFiscalPeriod(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

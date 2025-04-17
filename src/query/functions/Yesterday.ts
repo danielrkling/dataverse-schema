@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "Yesterday" operator in Microsoft Dynamics CRM.
  *
@@ -5,5 +6,5 @@
  * @returns {string} The query expression for the "Yesterday" operator.
  */
 export function Yesterday(name: string): string {
-  return `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${wrapString(name)})`;
 }

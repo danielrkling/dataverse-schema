@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "ThisFiscalPeriod" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function ThisFiscalPeriod(name: string): string {
-  return `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${wrapString(name)})`;
 }

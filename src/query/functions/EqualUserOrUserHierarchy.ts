@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "EqualUserOrUserHierarchy" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function EqualUserOrUserHierarchy(name: string): string {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${wrapString(name)})`;
 }

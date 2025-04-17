@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "Last7Days" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function Last7Days(name: string): string {
-  return `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${wrapString(name)})`;
 }

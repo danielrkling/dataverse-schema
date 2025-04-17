@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "InOrAfterFiscalPeriodAndYear" operator in Microsoft Dynamics CRM.
  *
@@ -12,5 +13,5 @@ export function InOrAfterFiscalPeriodAndYear(
   fiscalPeriod: number,
   fiscalYear: number
 ): string {
-  return `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${name},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+  return `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
 }

@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "LastMonth" operator in Microsoft Dynamics CRM.
  *
@@ -6,5 +7,5 @@
  */
 
 export function LastMonth(name: string): string {
-  return `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${wrapString(name)})`;
 }

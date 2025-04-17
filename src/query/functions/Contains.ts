@@ -9,5 +9,5 @@ import { wrapString } from "../../util";
  */
 
 export function Contains(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.Contains(PropertyName=${name},PropertyValue=${wrapString(value)})`;
+  return `Microsoft.Dynamics.CRM.Contains(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
 }

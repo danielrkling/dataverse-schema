@@ -9,7 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function Under(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.Under(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.Under(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }

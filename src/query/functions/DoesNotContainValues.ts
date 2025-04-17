@@ -12,5 +12,5 @@ export function DoesNotContainValues(
   name: string,
   ...values: string[]
 ): string {
-  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${name},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
 }

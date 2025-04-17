@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "LastXFiscalYears" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function LastXFiscalYears(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

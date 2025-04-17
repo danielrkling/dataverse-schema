@@ -727,311 +727,311 @@ function lessThanOrEqual(name, value) {
 }
 
 function Above(name, value) {
-  return `Microsoft.Dynamics.CRM.Above(PropertyName=${name},PropertyValue=${wrapString(value)})`;
+  return `Microsoft.Dynamics.CRM.Above(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
 }
 
 function AboveOrEqual(name, value) {
-  return `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${name},PropertyValue=${wrapString(value)})`;
+  return `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
 }
 
 function Between(name, value1, value2) {
-  return `Microsoft.Dynamics.CRM.Between(PropertyName=${name},PropertyValues${wrapString(value1)},${wrapString(
+  return `Microsoft.Dynamics.CRM.Between(PropertyName=${wrapString(name)},PropertyValues${wrapString(value1)},${wrapString(
     value2
   )}])`;
 }
 
 function Contains(name, value) {
-  return `Microsoft.Dynamics.CRM.Contains(PropertyName=${name},PropertyValue=${wrapString(value)})`;
+  return `Microsoft.Dynamics.CRM.Contains(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
 }
 
 function ContainsValues(name, ...values) {
-  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${name},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
 }
 
 function DoesNotContainValues(name, ...values) {
-  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${name},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
 }
 
 function EqualBusinessId(name) {
-  return `Microsoft.Dynamics.CRM.EqualBusinessId(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualBusinessId(PropertyName=${wrapString(name)})`;
 }
 
 function EqualRoleBusinessId(name) {
-  return `Microsoft.Dynamics.CRM.EqualRoleBusinessId(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualRoleBusinessId(PropertyName=${wrapString(name)})`;
 }
 
 function EqualUserId(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserId(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserId(PropertyName=${wrapString(name)})`;
 }
 
 function EqualUserLanguage(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserLanguage(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserLanguage(PropertyName=${wrapString(name)})`;
 }
 
 function EqualUserOrUserHierarchy(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${wrapString(name)})`;
 }
 
 function EqualUserOrUserHierarchyAndTeams(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${wrapString(name)})`;
 }
 
 function EqualUserOrUserTeams(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserTeams(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserOrUserTeams(PropertyName=${wrapString(name)})`;
 }
 
 function EqualUserTeams(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserTeams(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.EqualUserTeams(PropertyName=${wrapString(name)})`;
 }
 
 function In(name, ...values) {
-  return `Microsoft.Dynamics.CRM.In(PropertyName=${name},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.In(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
 }
 
 function InFiscalPeriod(name, value) {
-  return `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function InFiscalPeriodAndYear(name, fiscalPeriod, fiscalYear) {
-  return `Microsoft.Dynamics.CRM.InFiscalPeriodAndYear(PropertyName=${name},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+  return `Microsoft.Dynamics.CRM.InFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
 }
 
 function InFiscalYear(name, value) {
-  return `Microsoft.Dynamics.CRM.InFiscalYear(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.InFiscalYear(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function InOrAfterFiscalPeriodAndYear(name, fiscalPeriod, fiscalYear) {
-  return `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${name},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+  return `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
 }
 
 function InOrBeforeFiscalPeriodAndYear(name, fiscalPeriod, fiscalYear) {
-  return `Microsoft.Dynamics.CRM.InOrBeforeFiscalPeriodAndYear(PropertyName=${name},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+  return `Microsoft.Dynamics.CRM.InOrBeforeFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
 }
 
 function Last7Days(name) {
-  return `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${wrapString(name)})`;
 }
 
 function LastFiscalPeriod(name) {
-  return `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${wrapString(name)})`;
 }
 
 function LastFiscalYear(name) {
-  return `Microsoft.Dynamics.CRM.LastFiscalYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastFiscalYear(PropertyName=${wrapString(name)})`;
 }
 
 function LastMonth(name) {
-  return `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${wrapString(name)})`;
 }
 
 function LastWeek(name) {
-  return `Microsoft.Dynamics.CRM.LastWeek(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastWeek(PropertyName=${wrapString(name)})`;
 }
 
 function LastXDays(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXDays(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXDays(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastXFiscalPeriods(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastXFiscalYears(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastXHours(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXHours(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXHours(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastXMonths(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXMonths(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXMonths(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastXWeeks(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXWeeks(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXWeeks(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastXYears(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function LastYear(name) {
-  return `Microsoft.Dynamics.CRM.LastYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.LastYear(PropertyName=${wrapString(name)})`;
 }
 
 function Next7Days(name) {
-  return `Microsoft.Dynamics.CRM.Next7Days(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Next7Days(PropertyName=${wrapString(name)})`;
 }
 
 function NextFiscalPeriod(name) {
-  return `Microsoft.Dynamics.CRM.NextFiscalPeriod(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextFiscalPeriod(PropertyName=${wrapString(name)})`;
 }
 
 function NextFiscalYear(name) {
-  return `Microsoft.Dynamics.CRM.NextFiscalYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextFiscalYear(PropertyName=${wrapString(name)})`;
 }
 
 function NextMonth(name) {
-  return `Microsoft.Dynamics.CRM.NextMonth(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextMonth(PropertyName=${wrapString(name)})`;
 }
 
 function NextWeek(name) {
-  return `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${wrapString(name)})`;
 }
 
 function NextXDays(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXDays(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXDays(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextXFiscalPeriods(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextXFiscalYears(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXFiscalYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXFiscalYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextXHours(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextXMonths(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextXWeeks(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXWeeks(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXWeeks(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextXYears(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
 
 function NextYear(name) {
-  return `Microsoft.Dynamics.CRM.NextYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NextYear(PropertyName=${wrapString(name)})`;
 }
 
 function NotBetween(name, value1, value2) {
-  return `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${name},PropertyValues=[${wrapString(
+  return `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${wrapString(name)},PropertyValues=[${wrapString(
     value1
   )},${wrapString(value2)}])`;
 }
 
 function NotEqualBusinessId(name) {
-  return `Microsoft.Dynamics.CRM.NotEqualBusinessId(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NotEqualBusinessId(PropertyName=${wrapString(name)})`;
 }
 
 function NotEqualUserId(name) {
-  return `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${wrapString(name)})`;
 }
 
 function NotIn(name, ...values) {
-  return `Microsoft.Dynamics.CRM.NotIn(PropertyName=${name},PropertyValues=[${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.NotIn(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
 }
 
 function NotUnder(name, value) {
-  return `Microsoft.Dynamics.CRM.NotUnder(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.NotUnder(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OlderThanXDays(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXDays(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXDays(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OlderThanXHours(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXHours(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXHours(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OlderThanXMinutes(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXMinutes(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXMinutes(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OlderThanXMonths(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OlderThanXWeeks(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXWeeks(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXWeeks(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OlderThanXYears(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXYears(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXYears(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function On(name, value) {
-  return `Microsoft.Dynamics.CRM.On(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.On(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OnOrAfter(name, value) {
-  return `Microsoft.Dynamics.CRM.OnOrAfter(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OnOrAfter(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function OnOrBefore(name, value) {
-  return `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function ThisFiscalPeriod(name) {
-  return `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${wrapString(name)})`;
 }
 
 function ThisFiscalYear(name) {
-  return `Microsoft.Dynamics.CRM.ThisFiscalYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisFiscalYear(PropertyName=${wrapString(name)})`;
 }
 
 function ThisMonth(name) {
-  return `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${wrapString(name)})`;
 }
 
 function ThisWeek(name) {
-  return `Microsoft.Dynamics.CRM.ThisWeek(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisWeek(PropertyName=${wrapString(name)})`;
 }
 
 function ThisYear(name) {
-  return `Microsoft.Dynamics.CRM.ThisYear(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.ThisYear(PropertyName=${wrapString(name)})`;
 }
 
 function Today(name) {
-  return `Microsoft.Dynamics.CRM.Today(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Today(PropertyName=${wrapString(name)})`;
 }
 
 function Tomorrow(name) {
-  return `Microsoft.Dynamics.CRM.Tomorrow(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Tomorrow(PropertyName=${wrapString(name)})`;
 }
 
 function Under(name, value) {
-  return `Microsoft.Dynamics.CRM.Under(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.Under(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function UnderOrEqual(name, value) {
-  return `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }
 
 function Yesterday(name) {
-  return `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${name})`;
+  return `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${wrapString(name)})`;
 }
 
 function query(query2) {

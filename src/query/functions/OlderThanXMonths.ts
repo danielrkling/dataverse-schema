@@ -9,7 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function OlderThanXMonths(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }

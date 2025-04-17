@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "LastXFiscalPeriods" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function LastXFiscalPeriods(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

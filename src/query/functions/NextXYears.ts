@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NextXYears" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function NextXYears(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }

@@ -9,7 +9,7 @@ import { wrapString } from "../../util";
  */
 
 export function UnderOrEqual(name: string, value: string): string {
-  return `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${name},PropertyValue=${wrapString(
+  return `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
     value
   )})`;
 }

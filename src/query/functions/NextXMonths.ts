@@ -1,3 +1,4 @@
+import { wrapString } from "../../util";
 /**
  * Generates a query expression for the "NextXMonths" operator in Microsoft Dynamics CRM.
  *
@@ -7,5 +8,5 @@
  */
 
 export function NextXMonths(name: string, value: number): string {
-  return `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${name},PropertyValue=${value})`;
+  return `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${wrapString(name)},PropertyValue=${value})`;
 }
