@@ -364,10 +364,18 @@ export declare type DataverseRecord = Record<string, Primitive>;
 export declare function date(name: string): DateProperty;
 
 /**
+ * A factory function to create a new DateProperty instance.
+ *
+ * @param name The name of the date property.
+ * @returns A new DateProperty instance.
+ */
+export declare function dateOnly(name: string): DateOnlyProperty;
+
+/**
  * Represents a date property within a dataverse schema.
  * Extends the base Property class with a Date or null type and a default value of null.
  */
-declare class DateOnlyProperty extends Schema<Date | null> {
+export declare class DateOnlyProperty extends Schema<Date | null> {
     /**
      * The kind of schema element for a date property, which is "value".
      */

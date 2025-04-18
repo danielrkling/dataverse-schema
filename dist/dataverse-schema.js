@@ -553,6 +553,59 @@ function date(name) {
   return new DateProperty(name);
 }
 
+class DateOnlyProperty extends Schema {
+  /**
+   * The kind of schema element for a date property, which is "value".
+   */
+  kind = "value";
+  /**
+   * The type of the property, which is "date".
+   */
+  type = "dateOnly";
+  /**
+   * Creates a new DateProperty instance.
+   *
+   * @param name The name of the date property.
+   */
+  constructor(name) {
+    super(name, null);
+    this.check(
+      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
+    );
+  }
+  /**
+   * Transforms a value received from Dataverse into a Date object or null.
+   * If the value is null, it returns null. Otherwise, it creates a new Date object from the Dataverse value.
+   *
+   * @param value The value received from Dataverse.
+   * @returns A Date object or null.
+   */
+  transformValueFromDataverse(value) {
+    if (value === null) return null;
+    return parseDateOnly(value);
+  }
+  transformValueToDataverse(value) {
+    return toDateOnly(value);
+  }
+}
+function dateOnly(name) {
+  return new DateOnlyProperty(name);
+}
+function parseDateOnly(dateString) {
+  const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
+  return new Date(year ?? 0, (month ?? 0) - 1, day);
+}
+function toDateOnly(date) {
+  try {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  } catch (e) {
+    return null;
+  }
+}
+
 class LookupProperty extends Schema {
   /**
    * The kind of schema element for an expand property, which is "navigation".
@@ -1791,4 +1844,4 @@ function pattern(regex, message) {
   };
 }
 
-export { Above, AboveOrEqual, Between, BooleanProperty, CollectionIdsProperty, CollectionProperty, Contains, ContainsValues, DateProperty, DoesNotContainValues, EqualBusinessId, EqualRoleBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, EqualUserTeams, Etag, ImageProperty, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListProperty, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberProperty, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, PrimaryKeyProperty, RetrieveAadUserRoles, RetrieveTotalRecordCount, StringProperty, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, activateRecord, aggregate, and, associateRecord, associateRecordToList, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, contains, count, date, deactivateRecord, deletePropertyValue, deleteRecord, disssociateRecord, email, endsWith, equals, expand, fetchXml, getAssociatedRecord, getAssociatedRecords, getImageUrl, getNextLink, getPropertyRawValue, getPropertyRawValueURL, getPropertyValue, getRecord, getRecords, globalConfig, greaterThan, greaterThanOrEqual, groupby, image, integer, isNonEmptyString, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, number, numeric, or, orderby, patchRecord, pattern, postRecord, postRecordGetId, primaryKey, query, required, select, setConfig, startsWith, string, sum, table, toBase64, tryFetch, updatePropertyValue, wrapString, xml };
+export { Above, AboveOrEqual, Between, BooleanProperty, CollectionIdsProperty, CollectionProperty, Contains, ContainsValues, DateOnlyProperty, DateProperty, DoesNotContainValues, EqualBusinessId, EqualRoleBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, EqualUserTeams, Etag, ImageProperty, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListProperty, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberProperty, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, PrimaryKeyProperty, RetrieveAadUserRoles, RetrieveTotalRecordCount, StringProperty, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, activateRecord, aggregate, and, associateRecord, associateRecordToList, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, contains, count, date, dateOnly, deactivateRecord, deletePropertyValue, deleteRecord, disssociateRecord, email, endsWith, equals, expand, fetchXml, getAssociatedRecord, getAssociatedRecords, getImageUrl, getNextLink, getPropertyRawValue, getPropertyRawValueURL, getPropertyValue, getRecord, getRecords, globalConfig, greaterThan, greaterThanOrEqual, groupby, image, integer, isNonEmptyString, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, number, numeric, or, orderby, patchRecord, pattern, postRecord, postRecordGetId, primaryKey, query, required, select, setConfig, startsWith, string, sum, table, toBase64, tryFetch, updatePropertyValue, wrapString, xml };
