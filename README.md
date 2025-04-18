@@ -4,6 +4,10 @@ A TypeScript library for working with the Dataverse Web API. This library provid
 
 ## Installation
 
+```
+npm i dataverse-schema
+```
+
 Copy the files from dist into your project
 
 Note: Most of the JSDoc documentation was generate by AI and by not be accurate/ or up to date
