@@ -11,6 +11,7 @@ import {
   ImageProperty,
   ListProperty,
 } from "./properties";
+import { DateOnlyProperty } from "./properties/dateOnly";
 import { Schema } from "./schema";
 import { Table } from "./table";
 import { Etag } from "./util";
@@ -114,6 +115,7 @@ export type GenericValueProperty =
   | NumberProperty // Represents a numeric value.
   | BooleanProperty // Represents a boolean value.
   | DateProperty // Represents a date and/or time value.
+  | DateOnlyProperty
   | ImageProperty // Represents an image value.
   | ListProperty<string | number>; // Represents a list of strings or numbers
 
