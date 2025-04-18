@@ -30,7 +30,7 @@ export async function getAssociatedRecord(
   id: DataverseKey,
   navigationPropertyName: string,
   query?: string
-): Promise<DataverseRecord> {
+): Promise<DataverseRecord|null> {
   return tryFetch(
     `${globalConfig.url}/${entitySetName}(${id})/${navigationPropertyName}?${query}`
   ).then(attachEtag);

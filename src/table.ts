@@ -23,6 +23,7 @@ import {
 import { query } from "./query";
 import { Schema } from "./schema";
 import {
+  AlternateKey,
   DataverseKey,
   DataverseRecord,
   GenericNavigationProperty,
@@ -129,7 +130,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   /**
    * Retrieves a single record from the table by its ID.
    *
-   * @param id The unique identifier of the record to retrieve.
+   * @param keys The unique identifier of the record to retrieve.
    * @returns A promise that resolves to the retrieved record, or null if not found.
    *
    * @example
@@ -142,6 +143,10 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     return getRecord(this.name, id, buildQuery(this)).then((v) =>
       this.transformValueFromDataverse(v)
     );
+  }
+
+  getAlternateKeys(value: Partial<Infer<TProperties>>): AlternateKey {
+    return Object.entries(value).map(kv => `${this.properties[kv[0]].name}=${kv[1]}`).join(',') as AlternateKey
   }
 
   /**
@@ -268,8 +273,8 @@ export class Table<TProperties extends GenericProperties> extends Schema<
         const ids =
           property.type === "collection"
             ? await Promise.all(
-                value.map((v: any) => property.table.saveRecord(v))
-              )
+              value.map((v: any) => property.table.saveRecord(v))
+            )
             : (value as DataverseKey[]);
         return associateRecordToList(
           this.name,
@@ -633,8 +638,8 @@ function buildQuery(
     filter: q?.filter,
     orderby: q?.orderby
       ? Object.entries(q?.orderby ?? {})
-          .map(([key, value]) => `${table.properties[key].name} ${value}`)
-          .join(",")
+        .map(([key, value]) => `${table.properties[key].name} ${value}`)
+        .join(",")
       : undefined,
     select: buildSelect(table),
     expand: buildExpand(table),

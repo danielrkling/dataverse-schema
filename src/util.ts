@@ -83,6 +83,7 @@ export async function tryFetch(url: RequestInfo | URL, init?: RequestInit) {
   if (response.headers.get("Content-Type")?.includes("application/json")) {
     const data = await response.json();
     if (data.error) {
+      if (data.error.code === "0x80060891") return null //Record not Found
       throw data.error;
     }
     return data;
@@ -263,6 +264,11 @@ export function getImageUrl(entity: string, name: string, id: string): string {
 export function isNonEmptyString(value: any): boolean {
   return typeof value === "string" && value.length > 0;
 }
+
+
+const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/
+
 /**
  * Wraps a value in single quotes if it's a string, otherwise converts it to a string.
  * This is used to properly format values in OData queries.
@@ -274,13 +280,13 @@ export function isNonEmptyString(value: any): boolean {
  * wrapString("hello"); // returns "'hello'"
  * wrapString(123);     // returns "123"
  */
-
-export function wrapString(value: any): string {
-  return typeof value === "string" ? `'${value}'` : String(value);
+export function wrapString(value: any) {
+  return (typeof value === "string" && !rxGUID.test(value) && !rxDateOnly.test(value)) ? `'${value}'` : String(value);
 }
 
 export function attachEtag<T>(v: T): T {
-  //@ts-expect-error
+  if (v && typeof v === "object")
+      //@ts-expect-error
   v[Etag] = v["@odata.etag"];
   return v;
 }

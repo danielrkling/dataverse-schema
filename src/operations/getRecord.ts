@@ -27,6 +27,6 @@ export async function getRecord(
   entitySetName: string,
   id: DataverseKey,
   query?: string
-): Promise<DataverseRecord> {
+): Promise<DataverseRecord|null> {
   return tryFetch(`${globalConfig.url}/${entitySetName}(${id})?${query}`).then(attachEtag);
 }
