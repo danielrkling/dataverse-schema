@@ -421,14 +421,13 @@ export class Table<TProperties extends GenericProperties> extends Schema<
         )
       );
     } else {
+      const record = await postRecord(
+        this.name,
+        this.transformValueToDataverse(value),
+        query({ select: pk })
+      )
       //we need primary key of new record
-      id = this.getPrimaryId(
-        (await postRecord(
-          this.name,
-          this.transformValueToDataverse(value),
-          query({ select: pk })
-        )) as Partial<Infer<TProperties>>
-      )!;
+      id = record[pk] as GUID
     }
 
     for (const [key, property] of Object.entries(this.properties)) {

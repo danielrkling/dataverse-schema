@@ -1393,13 +1393,12 @@ class Table extends Schema {
         )
       );
     } else {
-      id = this.getPrimaryId(
-        await postRecord(
-          this.name,
-          this.transformValueToDataverse(value),
-          query({ select: pk })
-        )
+      const record = await postRecord(
+        this.name,
+        this.transformValueToDataverse(value),
+        query({ select: pk })
       );
+      id = record[pk];
     }
     for (const [key, property] of Object.entries(this.properties)) {
       if (property.getReadOnly() || !(key in value)) continue;
