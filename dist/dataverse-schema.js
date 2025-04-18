@@ -27,6 +27,7 @@ async function tryFetch(url, init) {
   if (response.headers.get("Content-Type")?.includes("application/json")) {
     const data = await response.json();
     if (data.error) {
+      if (data.error.code === "0x80060891") return null;
       throw data.error;
     }
     return data;
@@ -92,11 +93,14 @@ function getImageUrl(entity, name, id) {
 function isNonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
 }
+const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
 function wrapString(value) {
-  return typeof value === "string" ? `'${value}'` : String(value);
+  return typeof value === "string" && !rxGUID.test(value) && !rxDateOnly.test(value) ? `'${value}'` : String(value);
 }
 function attachEtag(v) {
-  v[Etag] = v["@odata.etag"];
+  if (v && typeof v === "object")
+    v[Etag] = v["@odata.etag"];
   return v;
 }
 function mergeRecords(prevRecords, newRecords) {
@@ -1112,7 +1116,7 @@ class Table extends Schema {
   /**
    * Retrieves a single record from the table by its ID.
    *
-   * @param id The unique identifier of the record to retrieve.
+   * @param keys The unique identifier of the record to retrieve.
    * @returns A promise that resolves to the retrieved record, or null if not found.
    *
    * @example
@@ -1125,6 +1129,9 @@ class Table extends Schema {
     return getRecord(this.name, id, buildQuery(this)).then(
       (v) => this.transformValueFromDataverse(v)
     );
+  }
+  getAlternateKeys(value) {
+    return Object.entries(value).map((kv) => `${this.properties[kv[0]].name}=${kv[1]}`).join(",");
   }
   /**
    * Retrieves multiple records from the table, optionally with a query.

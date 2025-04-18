@@ -367,6 +367,36 @@ export declare function date(name: string): DateProperty;
  * Represents a date property within a dataverse schema.
  * Extends the base Property class with a Date or null type and a default value of null.
  */
+declare class DateOnlyProperty extends Schema<Date | null> {
+    /**
+     * The kind of schema element for a date property, which is "value".
+     */
+    kind: "value";
+    /**
+     * The type of the property, which is "date".
+     */
+    type: "dateOnly";
+    /**
+     * Creates a new DateProperty instance.
+     *
+     * @param name The name of the date property.
+     */
+    constructor(name: string);
+    /**
+     * Transforms a value received from Dataverse into a Date object or null.
+     * If the value is null, it returns null. Otherwise, it creates a new Date object from the Dataverse value.
+     *
+     * @param value The value received from Dataverse.
+     * @returns A Date object or null.
+     */
+    transformValueFromDataverse(value: any): Date | null;
+    transformValueToDataverse(value: any): string | null;
+}
+
+/**
+ * Represents a date property within a dataverse schema.
+ * Extends the base Property class with a Date or null type and a default value of null.
+ */
 export declare class DateProperty extends Schema<Date | null> {
     /**
      * The kind of schema element for a date property, which is "value".
@@ -662,7 +692,7 @@ export declare type GenericProperty = GenericNavigationProperty | GenericValuePr
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-export declare type GenericValueProperty = PrimaryKeyProperty | StringProperty | NumberProperty | BooleanProperty | DateProperty | ImageProperty | ListProperty<string | number>;
+export declare type GenericValueProperty = PrimaryKeyProperty | StringProperty | NumberProperty | BooleanProperty | DateProperty | DateOnlyProperty | ImageProperty | ListProperty<string | number>;
 
 /**
  * Retrieves a single associated record from a navigation property of a Dataverse record.
@@ -687,7 +717,7 @@ export declare type GenericValueProperty = PrimaryKeyProperty | StringProperty |
  * .then(parentAccount => console.log('Parent Account:', parentAccount))
  * .catch(error => console.error('Error retrieving parent account:', error));
  */
-export declare function getAssociatedRecord(entitySetName: string, id: DataverseKey, navigationPropertyName: string, query?: string): Promise<DataverseRecord>;
+export declare function getAssociatedRecord(entitySetName: string, id: DataverseKey, navigationPropertyName: string, query?: string): Promise<DataverseRecord | null>;
 
 /**
  * Retrieves multiple associated records from a navigation property of a Dataverse record.
@@ -844,7 +874,7 @@ export declare function getPropertyValue(entitySetName: string, id: DataverseKey
  * .then(account => console.log(account))
  * .catch(error => console.error('Error retrieving account with query:', error));
  */
-export declare function getRecord(entitySetName: string, id: DataverseKey, query?: string): Promise<DataverseRecord>;
+export declare function getRecord(entitySetName: string, id: DataverseKey, query?: string): Promise<DataverseRecord | null>;
 
 /**
  * Retrieves multiple records from a Dataverse entity set.
@@ -2356,7 +2386,7 @@ export declare class Table<TProperties extends GenericProperties> extends Schema
     /**
      * Retrieves a single record from the table by its ID.
      *
-     * @param id The unique identifier of the record to retrieve.
+     * @param keys The unique identifier of the record to retrieve.
      * @returns A promise that resolves to the retrieved record, or null if not found.
      *
      * @example
@@ -2366,6 +2396,7 @@ export declare class Table<TProperties extends GenericProperties> extends Schema
      * }
      */
     getRecord(id: DataverseKey): Promise<Infer<TProperties> | null>;
+    getAlternateKeys(value: Partial<Infer<TProperties>>): AlternateKey;
     /**
      * Retrieves multiple records from the table, optionally with a query.
      *
