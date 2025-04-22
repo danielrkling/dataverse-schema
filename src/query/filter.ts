@@ -248,3 +248,20 @@ export function lessThan(name: string, value: Primitive) {
 export function lessThanOrEqual(name: string, value: Primitive) {
   return `(${name} le ${wrapString(value)})`;
 }
+
+
+export function isActive(): string {
+  return "statecode eq 0";
+}
+
+export function isInactive(): string {
+  return "statecode eq 1";
+}
+
+export function isNull(name: string): string {
+  return `${name} eq null`;
+}
+
+export function isNotNull(name: string): string {
+  return `${name} ne null`;
+}

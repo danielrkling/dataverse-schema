@@ -9,5 +9,5 @@ import { wrapString } from "../../util";
  */
 
 export function In(name: string, ...values: string[]): string {
-  return `Microsoft.Dynamics.CRM.In(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.In(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
 }

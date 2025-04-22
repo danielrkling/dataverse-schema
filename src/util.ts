@@ -102,6 +102,12 @@ export async function tryFetch(url: RequestInfo | URL, init?: RequestInit) {
   return await response.text();
 }
 
+export async function fetchChoices(name: string): Promise<{ value: number; color: string; label: string; description: string; }[]>{
+  return tryFetch(`${globalConfig.url}/GlobalOptionSetDefinitions(Name=${wrapString(name)})`).then(
+    (v) => mapChoices(v)
+  );
+}
+
 /**
  * Maps choice/picklist data from a Dataverse option set into a more usable format.
  *

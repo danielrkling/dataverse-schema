@@ -3,6 +3,7 @@ export * from './collection';
 export * from './date';
 export * from './dateOnly';
 export * from './lookup';
+export * from './formatted';
 export * from './image';
 export * from './list';
 export * from './lookupId';
