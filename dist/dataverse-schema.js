@@ -42,6 +42,11 @@ async function tryFetch(url, init) {
   }
   return await response.text();
 }
+async function fetchChoices(name) {
+  return tryFetch(`${globalConfig.url}/GlobalOptionSetDefinitions(Name=${wrapString(name)})`).then(
+    (v) => mapChoices(v)
+  );
+}
 function mapChoices(data) {
   return [...data.Options].map((option) => ({
     value: Number(option.Value),
@@ -655,6 +660,29 @@ function lookup(name, getTable) {
   return new LookupProperty(name, getTable);
 }
 
+class FormattedProperty extends Schema {
+  /**
+   * The kind of schema element for a string property, which is "value".
+   */
+  kind = "value";
+  /**
+   * The type of the property, which is "string".
+   */
+  type = "formatted";
+  /**
+   * Creates a new StringProperty instance.
+   *
+   * @param name The name of the string property.
+   */
+  constructor(name) {
+    super(`${name}@OData.Community.Display.V1.FormattedValue`, null);
+    this.setReadOnly(true);
+  }
+}
+function formatted(name) {
+  return new FormattedProperty(name);
+}
+
 function isTypeOrNull(type) {
   return (v) => {
     if (v === null) return;
@@ -782,6 +810,18 @@ function lessThan(name, value) {
 function lessThanOrEqual(name, value) {
   return `(${name} le ${wrapString(value)})`;
 }
+function isActive() {
+  return "statecode eq 0";
+}
+function isInactive() {
+  return "statecode eq 1";
+}
+function isNull(name) {
+  return `${name} eq null`;
+}
+function isNotNull(name) {
+  return `${name} ne null`;
+}
 
 function Above(name, value) {
   return `Microsoft.Dynamics.CRM.Above(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
@@ -792,7 +832,7 @@ function AboveOrEqual(name, value) {
 }
 
 function Between(name, value1, value2) {
-  return `Microsoft.Dynamics.CRM.Between(PropertyName=${wrapString(name)},PropertyValues${wrapString(value1)},${wrapString(
+  return `Microsoft.Dynamics.CRM.Between(PropertyName=${wrapString(name)},PropertyValues=[${wrapString(value1)},${wrapString(
     value2
   )}])`;
 }
@@ -802,11 +842,11 @@ function Contains(name, value) {
 }
 
 function ContainsValues(name, ...values) {
-  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
 }
 
 function DoesNotContainValues(name, ...values) {
-  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
 }
 
 function EqualBusinessId(name) {
@@ -842,7 +882,7 @@ function EqualUserTeams(name) {
 }
 
 function In(name, ...values) {
-  return `Microsoft.Dynamics.CRM.In(PropertyName=${wrapString(name)},PropertyValues${values.map(wrapString).join(",")}])`;
+  return `Microsoft.Dynamics.CRM.In(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
 }
 
 function InFiscalPeriod(name, value) {
@@ -1134,8 +1174,10 @@ class Table extends Schema {
   }
   getIssues(value, path = []) {
     const issues = super.getIssues(value, path);
+    if (typeof value !== "object") value = {};
     for (const [key, property] of Object.entries(this.properties)) {
-      issues.push(...property.getIssues(value[key], [...path, key]));
+      if (!property.getReadOnly())
+        issues.push(...property.getIssues(value[key], [...path, key]));
     }
     return issues;
   }
@@ -1843,4 +1885,4 @@ function pattern(regex, message) {
   };
 }
 
-export { Above, AboveOrEqual, Between, BooleanProperty, CollectionIdsProperty, CollectionProperty, Contains, ContainsValues, DateOnlyProperty, DateProperty, DoesNotContainValues, EqualBusinessId, EqualRoleBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, EqualUserTeams, Etag, ImageProperty, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListProperty, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberProperty, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, PrimaryKeyProperty, RetrieveAadUserRoles, RetrieveTotalRecordCount, StringProperty, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, activateRecord, aggregate, and, associateRecord, associateRecordToList, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, contains, count, date, dateOnly, deactivateRecord, deletePropertyValue, deleteRecord, disssociateRecord, email, endsWith, equals, expand, fetchXml, getAssociatedRecord, getAssociatedRecords, getImageUrl, getNextLink, getPropertyRawValue, getPropertyRawValueURL, getPropertyValue, getRecord, getRecords, globalConfig, greaterThan, greaterThanOrEqual, groupby, image, integer, isNonEmptyString, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, number, numeric, or, orderby, patchRecord, pattern, postRecord, postRecordGetId, primaryKey, query, required, select, setConfig, startsWith, string, sum, table, toBase64, tryFetch, updatePropertyValue, wrapString, xml };
+export { Above, AboveOrEqual, Between, BooleanProperty, CollectionIdsProperty, CollectionProperty, Contains, ContainsValues, DateOnlyProperty, DateProperty, DoesNotContainValues, EqualBusinessId, EqualRoleBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, EqualUserTeams, Etag, FormattedProperty, ImageProperty, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListProperty, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberProperty, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, PrimaryKeyProperty, RetrieveAadUserRoles, RetrieveTotalRecordCount, StringProperty, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, activateRecord, aggregate, and, associateRecord, associateRecordToList, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, contains, count, date, dateOnly, deactivateRecord, deletePropertyValue, deleteRecord, disssociateRecord, email, endsWith, equals, expand, fetchChoices, fetchXml, formatted, getAssociatedRecord, getAssociatedRecords, getImageUrl, getNextLink, getPropertyRawValue, getPropertyRawValueURL, getPropertyValue, getRecord, getRecords, globalConfig, greaterThan, greaterThanOrEqual, groupby, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, number, numeric, or, orderby, patchRecord, pattern, postRecord, postRecordGetId, primaryKey, query, required, select, setConfig, startsWith, string, sum, table, toBase64, tryFetch, updatePropertyValue, wrapString, xml };

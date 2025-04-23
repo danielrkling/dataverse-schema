@@ -70,8 +70,10 @@ export class Table<TProperties extends GenericProperties> extends Schema<
 
   getIssues(value: any, path: PropertyKey[] = []): StandardSchemaV1.Issue[] {
     const issues = super.getIssues(value, path);
+    if (typeof value !== "object") value = {}
     for (const [key, property] of Object.entries(this.properties)) {
-      issues.push(...property.getIssues(value[key], [...path, key]));
+      if (!property.getReadOnly())
+        issues.push(...property.getIssues(value[key], [...path, key]));
     }
     return issues;
   }

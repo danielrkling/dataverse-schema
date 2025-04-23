@@ -675,7 +675,43 @@ export declare const Etag: unique symbol;
  */
 export declare function expand(values: string | Record<string, NestedQuery>): string;
 
+export declare function fetchChoices(name: string): Promise<{
+    value: number;
+    color: string;
+    label: string;
+    description: string;
+}[]>;
+
 export declare function fetchXml(entitySetName: string, xml: string): Promise<Record<string, Primitive>[]>;
+
+/**
+ * A factory function to create a new StringProperty instance.
+ *
+ * @param name The name of the string property.
+ * @returns A new StringProperty instance.
+ */
+export declare function formatted(name: string): FormattedProperty;
+
+/**
+ * Represents a string property within a dataverse schema.
+ * Extends the base Property class with a string or null type and a default value of null.
+ */
+export declare class FormattedProperty extends Schema<string | null> {
+    /**
+     * The kind of schema element for a string property, which is "value".
+     */
+    kind: "value";
+    /**
+     * The type of the property, which is "string".
+     */
+    type: "formatted";
+    /**
+     * Creates a new StringProperty instance.
+     *
+     * @param name The name of the string property.
+     */
+    constructor(name: string);
+}
 
 /**
  * Represents a generic navigation property in a Dataverse entity.  Navigation
@@ -1091,6 +1127,10 @@ export declare function InOrBeforeFiscalPeriodAndYear(name: string, fiscalPeriod
  */
 export declare function integer(): Validator<number | string>;
 
+export declare function isActive(): string;
+
+export declare function isInactive(): string;
+
 /**
  * Checks if a value is a non-empty string.
  *
@@ -1104,6 +1144,10 @@ export declare function integer(): Validator<number | string>;
  * isNonEmptyString(null);    // returns false
  */
 export declare function isNonEmptyString(value: any): boolean;
+
+export declare function isNotNull(name: string): string;
+
+export declare function isNull(name: string): string;
 
 /**
  * Creates an OData key string from a record of key-value pairs.
