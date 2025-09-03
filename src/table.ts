@@ -621,6 +621,11 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   ): Table<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
     return new Table(this.name, { ...this.properties, ...properties });
   }
+
+  /**
+   * Use for typescript only. const x: typeof table.T
+   */
+  T!: Infer<TProperties>
 }
 
 export function table<TProperties extends GenericProperties>(

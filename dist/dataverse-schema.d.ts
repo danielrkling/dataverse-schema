@@ -2666,6 +2666,10 @@ export declare class Table<TProperties extends GenericProperties> extends Schema
      * });
      */
     appendProperties<TAppendedProperties extends GenericProperties>(properties: TAppendedProperties): Table<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties>;
+    /**
+     * Use for typescript only. const x: typeof table.T
+     */
+    T: Infer<TProperties>;
 }
 
 export declare function table<TProperties extends GenericProperties>(name: string, properties: TProperties): Table<TProperties>;

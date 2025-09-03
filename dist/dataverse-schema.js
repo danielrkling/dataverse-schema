@@ -1607,6 +1607,10 @@ class Table extends Schema {
   appendProperties(properties) {
     return new Table(this.name, { ...this.properties, ...properties });
   }
+  /**
+   * Use for typescript only. const x: typeof table.T
+   */
+  T;
 }
 function table(name, properties) {
   return new Table(name, properties);
