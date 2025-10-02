@@ -297,7 +297,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
       } else {
         const childId =
           property.type === "lookup"
-            ? await this.saveRecord(value)
+            ? await property.table.saveRecord(value)
             : (value as GUID);
         return associateRecord(
           this.name,

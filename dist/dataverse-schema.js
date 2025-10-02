@@ -1350,7 +1350,7 @@ class Table extends Schema {
       if (value === null) {
         return disssociateRecord(this.name, id, name);
       } else {
-        const childId = property.type === "lookup" ? await this.saveRecord(value) : value;
+        const childId = property.type === "lookup" ? await property.table.saveRecord(value) : value;
         return associateRecord(
           this.name,
           id,
