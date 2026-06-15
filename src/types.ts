@@ -3,15 +3,20 @@ import {
   LookupProperty,
   LookupIdProperty,
   CollectionIdsProperty,
-  PrimaryKeyProperty,
-  StringProperty,
-  NumberProperty,
-  BooleanProperty,
-  DateProperty,
-  ImageProperty,
-  ListProperty,
-} from "./properties";
-import { DateOnlyProperty } from "./properties/dateOnly";
+  PrimaryKeyField,
+  StringField,
+  NumberField,
+  BooleanField,
+  DateTimeField,
+  ImageField,
+  ListField,
+  NullableStringField,
+  NullableNumberField,
+  NullableDateTimeField,
+  NullableDateField,
+  FileField,
+} from "./fields";
+import { DateField } from "./fields";
 import { Schema } from "./schema";
 import { Table } from "./table";
 import { Etag } from "./util";
@@ -44,7 +49,7 @@ export type AlternateKey =
 /**
  * Represents a Dataverse key, which can be either a GUID (primary key) or an AlternateKey.
  */
-export type DataverseKey = GUID | AlternateKey;
+export type DataverseKey = GUID | AlternateKey | string;
 
 /**
  * Utility type to narrow down the keys of an object `T`
@@ -110,14 +115,19 @@ export type GenericNavigationProperty =
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
 export type GenericValueProperty =
-  | PrimaryKeyProperty // Represents the primary key of an entity (usually a GUID).
-  | StringProperty // Represents a string value.
-  | NumberProperty // Represents a numeric value.
-  | BooleanProperty // Represents a boolean value.
-  | DateProperty // Represents a date and/or time value.
-  | DateOnlyProperty
-  | ImageProperty // Represents an image value.
-  | ListProperty<string | number>; // Represents a list of strings or numbers
+  | PrimaryKeyField // Represents the primary key of an entity (usually a GUID).
+  | StringField // Represents a string value.
+  | NullableStringField
+  | NumberField // Represents a numeric value.
+  | NullableNumberField
+  | BooleanField // Represents a boolean value.
+  | DateTimeField // Represents a date and/or time value.
+  | NullableDateTimeField
+  | DateField  
+  | NullableDateField
+  | ImageField // Represents an image value.
+  | ListField<string | number> // Represents a list of strings or numbers
+  | FileField
 
 /**
  * Represents a generic property in a Dataverse entity.  A property can be
@@ -125,68 +135,5 @@ export type GenericValueProperty =
  */
 export type GenericProperty = GenericNavigationProperty | GenericValueProperty;
 
-/** The Standard Schema interface. */
-interface StandardSchemaV1<Input = unknown, Output = Input> {
-  /** The Standard Schema properties. */
-  readonly "~standard": StandardSchemaV1.Props<Input, Output>;
-}
-declare namespace StandardSchemaV1 {
-  /** The Standard Schema properties interface. */
-  export interface Props<Input = unknown, Output = Input> {
-    /** The version number of the standard. */
-    readonly version: 1;
-    /** The vendor name of the schema library. */
-    readonly vendor: string;
-    /** Validates unknown input values. */
-    readonly validate: (
-      value: unknown
-    ) => Result<Output> | Promise<Result<Output>>;
-    /** Inferred types associated with the schema. */
-    readonly types?: Types<Input, Output> | undefined;
-  }
-  /** The result interface of the validate function. */
-  export type Result<Output> = SuccessResult<Output> | FailureResult;
-  /** The result interface if validation succeeds. */
-  export interface SuccessResult<Output> {
-    /** The typed output value. */
-    readonly value: Output;
-    /** The non-existent issues. */
-    readonly issues?: undefined;
-  }
-  /** The result interface if validation fails. */
-  export interface FailureResult {
-    /** The issues of failed validation. */
-    readonly issues: ReadonlyArray<Issue>;
-  }
-  /** The issue interface of the failure output. */
-  export interface Issue {
-    /** The error message of the issue. */
-    readonly message: string;
-    /** The path of the issue, if any. */
-    readonly path?: ReadonlyArray<PropertyKey | PathSegment> | undefined;
-  }
-  /** The path segment interface of the issue. */
-  export interface PathSegment {
-    /** The key representing a path segment. */
-    readonly key: PropertyKey;
-  }
-  /** The Standard Schema types interface. */
-  export interface Types<Input = unknown, Output = Input> {
-    /** The input type of the schema. */
-    readonly input: Input;
-    /** The output type of the schema. */
-    readonly output: Output;
-  }
-  /** Infers the input type of a Standard Schema. */
-  export type InferInput<Schema extends StandardSchemaV1> = NonNullable<
-    Schema["~standard"]["types"]
-  >["input"];
-  /** Infers the output type of a Standard Schema. */
-  export type InferOutput<Schema extends StandardSchemaV1> = NonNullable<
-    Schema["~standard"]["types"]
-  >["output"];
-}
-
-export { type StandardSchemaV1 };
 export type GetTable<T = any> = () => T;
 export type Validator<T> = (value: T) => void | undefined | string;

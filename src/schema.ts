@@ -1,5 +1,6 @@
-import { StandardSchemaV1, type Validator } from "./types";
-import { required } from "./validators/required";
+import { type Validator } from "./types";
+import { required } from "./validators";
+import { StandardSchemaV1 } from "@standard-schema/spec";
 
 /**
  * Represents a generic property within a dataverse schema.
@@ -9,6 +10,8 @@ import { required } from "./validators/required";
  */
 export class Schema<T> implements StandardSchemaV1<T> {
   name: string;
+  toDataverseName: string
+  fromDataverseName: string
   kind = "schema";
   type = "schema";
 
@@ -25,6 +28,8 @@ export class Schema<T> implements StandardSchemaV1<T> {
    */
   constructor(name: string, defaultValue: T) {
     this.name = name;
+    this.fromDataverseName = name
+    this.toDataverseName = name
     this.#default = defaultValue;
   }
 
@@ -120,7 +125,10 @@ export class Schema<T> implements StandardSchemaV1<T> {
     return value;
   }
 
-  getIssues(value: unknown, path: PropertyKey[] = []): StandardSchemaV1.Issue[] {
+  getIssues(
+    value: unknown,
+    path: PropertyKey[] = [],
+  ): StandardSchemaV1.Issue[] {
     const issues: StandardSchemaV1.Issue[] = [];
     this.#validators.forEach((fn: any) => {
       try {
@@ -141,7 +149,10 @@ export class Schema<T> implements StandardSchemaV1<T> {
     return issues;
   }
 
-  validate(value: unknown, path: PropertyKey[] = []): StandardSchemaV1.Result<T> {
+  validate(
+    value: unknown,
+    path: PropertyKey[] = [],
+  ): StandardSchemaV1.Result<T> {
     const issues = this.getIssues(value, path);
 
     return issues.length > 0
