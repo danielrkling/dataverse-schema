@@ -5,8 +5,12 @@ export const Etag = Symbol("etag");
 
 export function attachEtag<T>(v: T): T {
   if (v && typeof v === "object")
-  v[Etag] = v["@odata.etag"];
+  (v as any)[Etag] = (v as any)["@odata.etag"];
   return v;
+}
+
+export function getEtag(v: any): string | undefined {
+  return v?.[Etag];
 }
 
 /**

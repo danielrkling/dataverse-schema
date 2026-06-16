@@ -1,11 +1,12 @@
 import { expect, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { table, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer } from "../src"
+import { table, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 import { http, HttpResponse } from "msw"
 import { server } from "./mocks/server"
 
 const client = new DataverseClient({ url: BASE_URL })
+const API = `${BASE_URL}/api/data/v9.2`
 
 const Address = table(client, "addresses", {
   id: primaryKey("addressid"),
@@ -106,47 +107,47 @@ test("table.getRecords with query options passes filter and orderby", async () =
   expect(capturedUrl).toContain("top=10")
 })
 
-test("table.postRecord creates and returns GUID", async () => {
+test("table.insertRecord creates and returns GUID", async () => {
   server.use(
     http.post(`${BASE_URL}/api/data/v9.2/people`, () => {
       return HttpResponse.json({ personid: "new-id-1234" })
     }),
   )
-  const id = await Person.postRecord({ name: "New Person", age: 20, active: true })
+  const id = await Person.insertRecord({ name: "New Person", age: 20, active: true })
   expect(id).toBe("new-id-1234")
 })
 
-test("table.patchRecord updates and returns id", async () => {
+test("table.updateRecord updates and returns id", async () => {
   server.use(
     http.patch(`${BASE_URL}/api/data/v9.2/people(existing-id)`, () => {
       return new HttpResponse(null, { status: 204 })
     }),
   )
-  const id = await Person.patchRecord("existing-id", { name: "Updated" })
+  const id = await Person.updateRecord("existing-id", { name: "Updated" })
   expect(id).toBe("existing-id")
 })
 
-test("table.patchRecord throws when id is empty", async () => {
-  await expect(Person.patchRecord("" as any, {})).rejects.toThrow("No ID provided")
+test("table.updateRecord throws when id is empty", async () => {
+  await expect(Person.updateRecord("", {})).rejects.toThrow("No ID provided")
 })
 
-test("table.saveRecord creates a new record when no id", async () => {
+test("table.upsertRecord creates a new record when no id", async () => {
   server.use(
     http.post(`${BASE_URL}/api/data/v9.2/people`, () => {
       return HttpResponse.json({ personid: "new-saved-id" })
     }),
   )
-  const id = await Person.saveRecord({ name: "Saved Person" })
+  const id = await Person.upsertRecord(undefined, { name: "Saved Person" })
   expect(id).toBe("new-saved-id")
 })
 
-test("table.saveRecord updates existing record when id present", async () => {
+test("table.upsertRecord updates existing record when id present", async () => {
   server.use(
     http.patch(`${BASE_URL}/api/data/v9.2/people(existing-id)`, () => {
       return new HttpResponse(null, { status: 204 })
     }),
   )
-  const id = await Person.saveRecord({ pk: "existing-id" as any, name: "Updated" })
+  const id = await Person.upsertRecord("existing-id", { name: "Updated" })
   expect(id).toBe("existing-id")
 })
 
@@ -156,7 +157,7 @@ test("table.deleteRecord deletes and returns id", async () => {
       return new HttpResponse(null, { status: 204 })
     }),
   )
-  const id = await Person.deleteRecord("delete-id" as any)
+  const id = await Person.deleteRecord("delete-id")
   expect(id).toBe("delete-id")
 })
 
@@ -166,7 +167,7 @@ test("table.activateRecord sets statecode to 0", async () => {
       return new HttpResponse(null, { status: 204 })
     }),
   )
-  const id = await Person.activateRecord("test-id" as any)
+  const id = await Person.activateRecord("test-id")
   expect(id).toBe("test-id")
 })
 
@@ -176,7 +177,7 @@ test("table.deactivateRecord sets statecode to 1", async () => {
       return new HttpResponse(null, { status: 204 })
     }),
   )
-  const id = await Person.deactivateRecord("test-id" as any)
+  const id = await Person.deactivateRecord("test-id")
   expect(id).toBe("test-id")
 })
 
@@ -186,7 +187,7 @@ test("table.associateRecord links through navigation property", async () => {
       return new HttpResponse(null, { status: 204 })
     }),
   )
-  const id = await Person.associateRecord("primaryAddressId", "parent-id", "child-id")
+  const id = await Person.associateRecord("primaryAddressId", "parent-id" as unknown as GUID, "child-id" as unknown as GUID)
   expect(id).toBe("child-id")
 })
 
@@ -267,7 +268,7 @@ test("table.transformValueToDataverse maps field names", () => {
 })
 
 test.skip("table.transformValueToDataverse skips read-only fields", () => {
-  const result = Person.transformValueToDataverse({ pk: "some-id", name: "Charlie", age: 40 })
+  const result = Person.transformValueToDataverse({ pk: "some-id" as unknown as GUID, name: "Charlie", age: 40 })
   expect(result.personid).toBeUndefined()
 })
 
@@ -304,7 +305,144 @@ test("table.validate returns issues for invalid data", () => {
   expect(validation.issues).toBeDefined()
 })
 
+//
+// --- TABLE ACTION / FUNCTION ---
+//
+
+test("table.executeAction calls bound action on entity set", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/people/Microsoft.Dynamics.CRM.TestAction`, async ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ Result: "ok" })
+    }),
+  )
+  const result = await Person.executeAction("TestAction", { Param1: "value1" })
+  expect(capturedUrl).toContain("Microsoft.Dynamics.CRM.TestAction")
+  expect(result.Result).toBe("ok")
+})
+
+test("table.executeAction with id calls bound action on record", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/:path/Microsoft.Dynamics.CRM.TestActionOnRecord`, async ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ Result: "ok" })
+    }),
+  )
+  const result = await Person.executeAction("TestActionOnRecord", { Param1: "value1" }, "test-id")
+  expect(capturedUrl).toContain("Microsoft.Dynamics.CRM.TestActionOnRecord")
+  expect(result.Result).toBe("ok")
+})
+
+test("table.executeFunction calls bound function on record", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/:path/:rest`, ({ request, params }) => {
+      if ((params.rest as string).startsWith("Microsoft.Dynamics.CRM.TestFunction")) {
+        capturedUrl = request.url
+        return HttpResponse.json({ value: 99 })
+      }
+    }),
+  )
+  const result = await Person.executeFunction("TestFunction", "test-id", { Param1: "value1" })
+  expect(capturedUrl).toContain("Microsoft.Dynamics.CRM.TestFunction(Param1='value1')")
+  expect(result.value).toBe(99)
+})
+
+//
+// --- TABLE BULK OPERATIONS ---
+//
+
+test("table.createMultiple transforms and bulk-creates records", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/people/Microsoft.Dynamics.CRM.CreateMultiple`, async ({ request }) => {
+      capturedBody = await request.json()
+      return HttpResponse.json({ Targets: [{ id: "bulk-1" }, { id: "bulk-2" }] })
+    }),
+  )
+  const result = await Person.createMultiple([{ name: "Alice" }, { name: "Bob" }])
+  // Values should be transformed through schema (name → fullname)
+  expect(capturedBody.Targets[0].fullname).toBe("Alice")
+  expect(capturedBody.Targets[1].fullname).toBe("Bob")
+  expect(result.Targets).toHaveLength(2)
+})
+
+test("table.deleteMultiple sends IDs for bulk delete", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/people/Microsoft.Dynamics.CRM.DeleteMultiple`, async ({ request }) => {
+      capturedBody = await request.json()
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Person.deleteMultiple(["id-1", "id-2"])
+  expect(capturedBody.Targets).toHaveLength(2)
+  expect(capturedBody.Targets[0]["@odata.id"]).toContain("people(id-1)")
+})
+
 test("table has T property for type inference", () => {
-  const _typeCheck: Person["T"] = {} as any
+  const _typeCheck: (typeof Person)["T"] = {} as any
   expect(true).toBe(true)
+})
+
+//
+// --- ETag Conditional Operations ---
+//
+
+test("table.updateRecord with explicit etag passes it to client", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.patch(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("people(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await Person.updateRecord("existing-id", { name: "Updated" }, '"my-etag"')
+  expect(capturedIfMatch).toBe('"my-etag"')
+})
+
+test("table.upsertRecord with etag sends If-Match on update", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.patch(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("people(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await Person.upsertRecord("existing-id", { name: "Updated" }, '"upsert-etag"')
+  expect(capturedIfMatch).toBe('"upsert-etag"')
+})
+
+test("table.deleteRecord with etag passes it to client", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.delete(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("people(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await Person.deleteRecord("delete-id", '"delete-etag"')
+  expect(capturedIfMatch).toBe('"delete-etag"')
+})
+
+test("table.updateRecord without etag does not send If-Match", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.patch(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("people(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await Person.updateRecord("existing-id", { name: "Updated" })
+  expect(capturedIfMatch).toBe("")
 })

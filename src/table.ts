@@ -84,7 +84,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   async getRecord(id: DataverseKey): Promise<Infer<TProperties> | null> {
     return this.client
-      .getRecord(this.name, id, buildQuery(this))
+      .getRecord(this.name, id, buildQuery(this as unknown as Table<GenericProperties>))
       .then((v) => this.transformValueFromDataverse(v));
   }
 
@@ -101,7 +101,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     queryOptions?: QueryForTable<TProperties>,
   ): Promise<Infer<TProperties>[]> {
     return this.client
-      .getRecords(this.name, buildQuery(this, queryOptions))
+      .getRecords(this.name, buildQuery(this as unknown as Table<GenericProperties>, queryOptions as QueryForTable<GenericProperties>))
       .then((values) => values.map((v) => this.transformValueFromDataverse(v)));
   }
 
@@ -110,7 +110,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   async getPropertyValue<TKey extends keyof TProperties>(
     key: TKey,
-    id: GUID,
+    id: DataverseKey,
     queryOptions?: QueryForTable<TProperties>,
   ): Promise<Infer<TProperties[TKey]>> {
     const prop = this.fields[key];
@@ -127,7 +127,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
           this.name,
           id,
           prop.name,
-          buildQuery(prop.table, queryOptions), // Note: buildQuery needs to handle related table schema
+          buildQuery(prop.table as Table<GenericProperties>, queryOptions as QueryForTable<GenericProperties>), // Note: buildQuery needs to handle related table schema
         )
         .then(
           (v) =>
@@ -155,7 +155,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   async updatePropertyValue<TKey extends keyof TProperties>(
     key: TKey,
-    id: GUID,
+    id: DataverseKey,
     value: Infer<TProperties[TKey]>,
   ): Promise<GUID> {
     const prop = this.fields[key];
@@ -169,12 +169,12 @@ export class Table<TProperties extends GenericProperties> extends Schema<
         prop.transformValueToDataverse(value),
       );
     }
-    return id;
+    return id as GUID;
   }
 
   protected async updateNavigationProperty(
     property: GenericNavigationProperty,
-    id: GUID,
+    id: DataverseKey,
     value: any,
   ) {
     if (property.type === "collection" || property.type === "collectionIds") {
@@ -182,7 +182,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
         const ids =
           property.type === "collection"
             ? await Promise.all(
-                value.map((v: any) => property.table.saveRecord(v)),
+                value.map((v: any) => property.table.upsertRecord(undefined, v)),
               )
             : (value as GUID[]);
         return this.client.associateRecordToList(
@@ -203,7 +203,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
       } else {
         const childId =
           property.type === "lookup"
-            ? await property.table.saveRecord(value)
+            ? await property.table.upsertRecord(undefined, value)
             : (value as GUID);
         return this.client.associateRecord(
           this.name,
@@ -221,7 +221,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   async associateRecord<
     TKey extends NarrowKeysByValue<TProperties, GenericNavigationProperty>,
-  >(key: TKey, id: GUID, childId: GUID): Promise<GUID> {
+  >(key: TKey, id: DataverseKey, childId: GUID): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
       return this.client.associateRecord(
@@ -244,16 +244,16 @@ export class Table<TProperties extends GenericProperties> extends Schema<
       TProperties,
       CollectionProperty<any> | CollectionIdsProperty
     >,
-  >(key: TKey, id: GUID, childId: GUID): Promise<GUID>;
+  >(key: TKey, id: DataverseKey, childId: GUID): Promise<GUID>;
   async dissociateRecord<
     TKey extends NarrowKeysByValue<
       TProperties,
       LookupProperty<any> | LookupIdProperty
     >,
-  >(key: TKey, id: GUID): Promise<GUID>;
+  >(key: TKey, id: DataverseKey): Promise<GUID>;
   async dissociateRecord<
     TKey extends NarrowKeysByValue<TProperties, GenericNavigationProperty>,
-  >(key: TKey, id: GUID, childId?: GUID): Promise<GUID> {
+  >(key: TKey, id: DataverseKey, childId?: GUID): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
       return this.client.dissociateRecord(this.name, id, prop.name, childId);
@@ -262,7 +262,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     }
   }
 
-  async postRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
+  async insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
     const pkName = this.getPrimaryKey().property.name;
     const record = await this.client.postRecord(
       this.name,
@@ -272,23 +272,25 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     return record?.[pkName] as GUID;
   }
 
-  async patchRecord(id: GUID, value: Partial<Infer<TProperties>>): Promise<GUID> {
+  async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     if (!id) throw new Error("No ID provided")
     await this.client.patchRecord(
       this.name,
       id,
-      this.transformValueToDataverse(value)
+      this.transformValueToDataverse(value),
+      "",
+      etag,
     );
-    return id;
+    return id as GUID;
   }
 
   /**
-   * Saves a record to the table. Handles both creating new records and updating existing ones.
+   * Upserts a record to the table. Creates a new record if id is undefined,
+   * or updates an existing one if an id is provided.
    */
-  async saveRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
+  async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     const promises: Promise<any>[] = [];
     const pkName = this.getPrimaryKey().property.name;
-    let id = this.getPrimaryId(value);
 
     if (id) {
       promises.push(
@@ -297,6 +299,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
           id,
           this.transformValueToDataverse(value),
           query({ select: pkName }),
+          etag,
         ),
       );
     } else {
@@ -321,21 +324,21 @@ export class Table<TProperties extends GenericProperties> extends Schema<
       }
     }
     await Promise.all(promises);
-    return id;
+    return id as GUID;
   }
 
   /**
    * Deletes a record from the table by its ID.
    */
-  async deleteRecord(id: GUID): Promise<GUID> {
-    return this.client.deleteRecord(this.name, id);
+  async deleteRecord(id: DataverseKey, etag?: string): Promise<GUID> {
+    return this.client.deleteRecord(this.name, id, etag);
   }
 
-  async activateRecord(id: GUID): Promise<GUID>{
+  async activateRecord(id: DataverseKey): Promise<GUID>{
     return this.client.activateRecord(this.name,id)
   }
 
-    async deactivateRecord(id: GUID): Promise<GUID>{
+    async deactivateRecord(id: DataverseKey): Promise<GUID>{
     return this.client.deactivateRecord(this.name,id)
   }
 
@@ -344,12 +347,66 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   async deletePropertyValue<
     TKey extends NarrowKeysByValue<TProperties, GenericValueProperty>,
-  >(key: TKey, id: GUID): Promise<GUID> {
+  >(key: TKey, id: DataverseKey): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "value") {
       return this.client.deletePropertyValue(this.name, id, prop.name);
     }
     throw new Error("Cannot delete navigation property values");
+  }
+
+  //
+  // --- ACTIONS & FUNCTIONS ---
+  //
+
+  /**
+   * Executes a bound Dataverse action on this entity set.
+   * POST /{entitySet}/Microsoft.Dynamics.CRM.{ActionName}
+   */
+  async executeAction(actionName: string, params?: Record<string, any>, id?: DataverseKey): Promise<any> {
+    if (id) {
+      return this.client.executeBoundAction(this.name, actionName, params, id as string);
+    }
+    return this.client.executeBoundAction(this.name, actionName, params);
+  }
+
+  /**
+   * Executes a bound Dataverse function on this entity set.
+   * GET /{entitySet}({id})/Microsoft.Dynamics.CRM.{FunctionName}(...)
+   */
+  async executeFunction(functionName: string, id: DataverseKey, params?: Record<string, any>): Promise<any> {
+    return this.client.executeBoundFunction(this.name, id as string, functionName, params);
+  }
+
+  //
+  // --- BULK OPERATIONS ---
+  //
+
+  /**
+   * Creates multiple records in a single API call.
+   */
+  async createMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
+    return this.client.createMultiple(
+      this.name,
+      records.map((r) => this.transformValueToDataverse(r)),
+    );
+  }
+
+  /**
+   * Updates multiple records in a single API call.
+   */
+  async updateMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
+    return this.client.updateMultiple(
+      this.name,
+      records.map((r) => this.transformValueToDataverse(r)),
+    );
+  }
+
+  /**
+   * Deletes multiple records in a single API call by their IDs.
+   */
+  async deleteMultiple(ids: string[]): Promise<any> {
+    return this.client.deleteMultiple(this.name, ids);
   }
 
   getPrimaryKey() {
@@ -427,11 +484,10 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   appendProperties<TAppendedProperties extends GenericProperties>(
     properties: TAppendedProperties,
   ): Table<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
-    // Pass the client instance to the new Table
     return new Table(this.client, this.name, {
       ...this.fields,
       ...properties,
-    });
+    } as any);
   }
 
   /** Use for typescript only. const x: typeof table.T */

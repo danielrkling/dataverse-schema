@@ -5,6 +5,7 @@ import { http, HttpResponse } from "msw"
 import { server } from "./mocks/server"
 
 const client = new DataverseClient({ url: BASE_URL })
+const API = `${BASE_URL}/api/data/v9.2`
 
 test("constructor merges options with defaults", () => {
   const c = new DataverseClient({ url: BASE_URL, token: "test-token" })
@@ -248,6 +249,138 @@ test.skip("associateRecordToList syncs association list", async () => {
   expect(ids).toEqual(["new-id"])
 })
 
+//
+// --- ACTIONS ---
+//
+
+test("executeAction calls an unbound action with POST", async () => {
+  let capturedBody = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/WinOpportunity`, async ({ request }) => {
+      capturedBody = await request.json()
+      return HttpResponse.json({ Status: "won" })
+    }),
+  )
+  const result = await client.executeAction("WinOpportunity", { OpportunityId: "opp-123" })
+  expect(capturedBody).toEqual({ OpportunityId: "opp-123" })
+  expect(result.Status).toBe("won")
+})
+
+test("executeBoundAction calls a bound action with POST", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/:path/Microsoft.Dynamics.CRM.CalculateRollupField`, async ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: { RollupField: "estimatedvalue", RollupValue: 42 } })
+    }),
+  )
+  const result = await client.executeBoundAction("accounts", "CalculateRollupField", { FieldName: "estimatedvalue" }, "a1b2c3d4-e5f6-7890-1234-567890abcdef")
+  expect(capturedUrl).toContain("Microsoft.Dynamics.CRM.CalculateRollupField")
+  expect(result.value.RollupValue).toBe(42)
+})
+
+test("executeBoundAction without id calls collection-bound action", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts/Microsoft.Dynamics.CRM.BulkDetectDuplicates`, async ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ JobId: "job-123" })
+    }),
+  )
+  const result = await client.executeBoundAction("accounts", "BulkDetectDuplicates", { })
+  expect(capturedUrl).toContain("accounts/Microsoft.Dynamics.CRM.BulkDetectDuplicates")
+  expect(result.JobId).toBe("job-123")
+})
+
+//
+// --- FUNCTIONS ---
+//
+
+test("executeFunction calls an unbound function with GET", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/CalculateRollupField*`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: 42 })
+    }),
+  )
+  const result = await client.executeFunction("CalculateRollupField", { FieldName: "estimatedvalue" })
+  expect(capturedUrl).toContain("CalculateRollupField(FieldName='estimatedvalue')")
+  expect(result.value).toBe(42)
+})
+
+test("executeBoundFunction calls a bound function with GET", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/:path/:rest`, ({ request, params }) => {
+      if ((params.rest as string).startsWith("Microsoft.Dynamics.CRM.CalculateRollupField")) {
+        capturedUrl = request.url
+        return HttpResponse.json({ value: 42 })
+      }
+    }),
+  )
+  const result = await client.executeBoundFunction("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", "CalculateRollupField", { FieldName: "estimatedvalue" })
+  expect(capturedUrl).toContain("Microsoft.Dynamics.CRM.CalculateRollupField(FieldName='estimatedvalue')")
+  expect(result.value).toBe(42)
+})
+
+test("executeFunction works with no params", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/WhoAmI*`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ UserId: "u-1" })
+    }),
+  )
+  const result = await client.executeFunction("WhoAmI")
+  expect(capturedUrl).toContain("WhoAmI()")
+  expect(result.UserId).toBe("u-1")
+})
+
+//
+// --- BULK OPERATIONS ---
+//
+
+test("createMultiple sends POST with Targets array", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts/Microsoft.Dynamics.CRM.CreateMultiple`, async ({ request }) => {
+      capturedBody = await request.json()
+      return HttpResponse.json({ Targets: [{ id: "new-1" }, { id: "new-2" }] })
+    }),
+  )
+  const result = await client.createMultiple("accounts", [{ name: "A" }, { name: "B" }])
+  expect(capturedBody).toEqual({ Targets: [{ name: "A" }, { name: "B" }] })
+  expect(result.Targets).toHaveLength(2)
+})
+
+test("updateMultiple sends POST with Targets array", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts/Microsoft.Dynamics.CRM.UpdateMultiple`, async ({ request }) => {
+      capturedBody = await request.json()
+      return HttpResponse.json({ Targets: [{ id: "upd-1" }] })
+    }),
+  )
+  const result = await client.updateMultiple("accounts", [{ accountid: "id-1", name: "Updated" }])
+  expect(capturedBody).toEqual({ Targets: [{ accountid: "id-1", name: "Updated" }] })
+  expect(result.Targets).toHaveLength(1)
+})
+
+test("deleteMultiple sends POST with @odata.id targets", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts/Microsoft.Dynamics.CRM.DeleteMultiple`, async ({ request }) => {
+      capturedBody = await request.json()
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await client.deleteMultiple("accounts", ["id-1", "id-2"])
+  expect(capturedBody.Targets).toHaveLength(2)
+  expect(capturedBody.Targets[0]["@odata.id"]).toContain("accounts(id-1)")
+  expect(capturedBody.Targets[1]["@odata.id"]).toContain("accounts(id-2)")
+})
+
 test("fetch handles 204 without OData-EntityId", async () => {
   server.use(
     http.delete(`${BASE_URL}/api/data/v9.2/accounts/:id`, () => {
@@ -256,4 +389,100 @@ test("fetch handles 204 without OData-EntityId", async () => {
   )
   const result = await client.fetch("accounts(test-id)", { method: "DELETE" })
   expect(result).toBeUndefined()
+})
+
+//
+// --- ETag Conditional Operations ---
+//
+
+test("getRecord with etag sends If-None-Match header", async () => {
+  let capturedIfNoneMatch = ""
+  server.use(
+    http.get(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("accounts(")) {
+        capturedIfNoneMatch = request.headers.get("If-None-Match") ?? ""
+        return HttpResponse.json({ accountid: "a1b2c3d4-e5f6-7890-1234-567890abcdef", name: "Test Corp" })
+      }
+    }),
+  )
+  const result = await client.getRecord("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", "", '"12345"')
+  expect(capturedIfNoneMatch).toBe('"12345"')
+  expect(result.name).toBe("Test Corp")
+})
+
+test("getRecord with etag returns null on 304", async () => {
+  server.use(
+    http.get(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("accounts(")) {
+        return new HttpResponse(null, { status: 304 })
+      }
+    }),
+  )
+  const result = await client.getRecord("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", "", '"12345"')
+  expect(result).toBeNull()
+})
+
+test("patchRecord with etag sends If-Match header", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.patch(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("accounts(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await client.patchRecord("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", { name: "Updated" }, "", '"etag-value"')
+  expect(capturedIfMatch).toBe('"etag-value"')
+})
+
+test("patchRecord without etag does not send If-Match", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.patch(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("accounts(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await client.patchRecord("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", { name: "Updated" })
+  expect(capturedIfMatch).toBe("")
+})
+
+test("deleteRecord with etag sends If-Match header", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.delete(`${API}/:path`, ({ request, params }) => {
+      if ((params.path as string).startsWith("accounts(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await client.deleteRecord("accounts", "some-id", '"etag-value"')
+  expect(capturedIfMatch).toBe('"etag-value"')
+})
+
+test("getEtag extracts symbol value from record", async () => {
+  const { Etag, getEtag } = await import("../src/util")
+  const record: any = { name: "test" }
+  record[Etag] = '"w/\\"abc123\\""'
+  expect(getEtag(record)).toBe('"w/\\"abc123\\""')
+  expect(getEtag({})).toBeUndefined()
+  expect(getEtag(null)).toBeUndefined()
+})
+
+test("updatePropertyValue with etag sends If-Match header", async () => {
+  let capturedIfMatch = ""
+  server.use(
+    http.put(`${API}/:path/:property`, ({ request, params }) => {
+      if ((params.path as string).startsWith("accounts(")) {
+        capturedIfMatch = request.headers.get("If-Match") ?? ""
+        return new HttpResponse(null, { status: 204 })
+      }
+    }),
+  )
+  await client.updatePropertyValue("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", "name", "New Name", '"etag-value"')
+  expect(capturedIfMatch).toBe('"etag-value"')
 })

@@ -279,19 +279,19 @@ export class CollectionProperty<
 > extends Schema<Infer<TProperties>[]> {
   kind = "navigation" as const;
   type = "collection" as const;
-  #getTable: GetTable<Table<TProperties>>;
+  #getTable: GetTable<Table<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable<Table<TProperties>>) {
     super(name, []);
-    this.#getTable = getTable;
+    this.#getTable = getTable as unknown as GetTable<Table<GenericProperties>>;
     this.check((v) =>
       !Array.isArray(v) ? "value is not an array" : undefined,
     );
   }
 
-  #table: Table<TProperties> | undefined;
+  #table: Table<GenericProperties> | undefined;
   get table(): Table<TProperties> {
-    return (this.#table ??= this.#getTable());
+    return (this.#table ??= this.#getTable()) as unknown as Table<TProperties>;
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties>[] {
@@ -373,16 +373,16 @@ export class LookupProperty<
 > extends Schema<Infer<TProperties> | null> {
   kind = "navigation" as const;
   type = "lookup" as const;
-  #getTable: GetTable<Table<TProperties>>;
+  #getTable: GetTable<Table<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable<Table<TProperties>>) {
     super(name, null);
-    this.#getTable = getTable;
+    this.#getTable = getTable as unknown as GetTable<Table<GenericProperties>>;
   }
 
-  #table: Table<TProperties> | undefined;
+  #table: Table<GenericProperties> | undefined;
   get table(): Table<TProperties> {
-    return (this.#table ??= this.#getTable());
+    return (this.#table ??= this.#getTable()) as unknown as Table<TProperties>;
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties> | null {

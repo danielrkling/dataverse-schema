@@ -30,10 +30,7 @@ type OrderDef = {
     descending?: boolean;
 };
 
-type FilterDef = {
-    type: "and" | "or";
-    conditions: string[];
-};
+
 
 export class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
     private _aliasCounter = 0;
@@ -50,7 +47,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         intersect?: boolean;
     }> = [];
     private _isDistinct: boolean = false;
-    private _filters: FilterDef[] = [];
+    private _filters: string[] = [];
     private _proxy: FieldProxy<TProps>;
     private _top?: number;
     private _page?: number;
@@ -58,8 +55,8 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     private _isAggregate: boolean = false;
     private _returnTotalRecordCount: boolean = false;
     private _useRawOrderBy: boolean = false;
-    private _latematerialize: boolean = false;
-    private _aggregatelimit?: number;
+    private _lateMaterialize: boolean = false;
+    private _aggregateLimit?: number;
     private _orders: OrderDef[] = [];
     private _pagingCookie?: string;
     private _datasource?: string;
@@ -97,34 +94,8 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         filter: string | ((f: FieldProxy<TProps>) => string),
     ): this {
         const str = typeof filter === "function" ? filter(this._proxy) : filter;
-        this._getAndFilter().conditions.push(str);
+        this._filters.push(str);
         return this;
-    }
-
-    public orWhere(
-        filter: string | ((f: FieldProxy<TProps>) => string),
-    ): this {
-        const str = typeof filter === "function" ? filter(this._proxy) : filter;
-        this._getOrFilter().conditions.push(str);
-        return this;
-    }
-
-    private _getAndFilter(): FilterDef {
-        for (const f of this._filters) {
-            if (f.type === "and") return f;
-        }
-        const f: FilterDef = { type: "and", conditions: [] };
-        this._filters.push(f);
-        return f;
-    }
-
-    private _getOrFilter(): FilterDef {
-        for (const f of this._filters) {
-            if (f.type === "or") return f;
-        }
-        const f: FilterDef = { type: "or", conditions: [] };
-        this._filters.push(f);
-        return f;
     }
 
     public join<
@@ -196,23 +167,23 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
-    public returntotalrecordcount(): this {
+    public returnTotalRecordCount(): this {
         this._returnTotalRecordCount = true;
         return this;
     }
 
-    public useraworderby(): this {
+    public useRawOrderBy(): this {
         this._useRawOrderBy = true;
         return this;
     }
 
-    public latematerialize(): this {
-        this._latematerialize = true;
+    public lateMaterialize(): this {
+        this._lateMaterialize = true;
         return this;
     }
 
-    public aggregatelimit(n: number): this {
-        this._aggregatelimit = n;
+    public aggregateLimit(n: number): this {
+        this._aggregateLimit = n;
         return this;
     }
 
@@ -340,8 +311,8 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         if (this._isAggregate) fetchAttrs.push(`aggregate="true"`);
         if (this._returnTotalRecordCount) fetchAttrs.push(`returntotalrecordcount="true"`);
         if (this._useRawOrderBy) fetchAttrs.push(`useraworderby="true"`);
-        if (this._latematerialize) fetchAttrs.push(`latematerialize="true"`);
-        if (this._aggregatelimit !== undefined) fetchAttrs.push(`aggregatelimit='${this._aggregatelimit}'`);
+        if (this._lateMaterialize) fetchAttrs.push(`latematerialize="true"`);
+        if (this._aggregateLimit !== undefined) fetchAttrs.push(`aggregatelimit='${this._aggregateLimit}'`);
         if (this._pagingCookie) fetchAttrs.push(`paging-cookie='${this._pagingCookie}'`);
         if (this._datasource) fetchAttrs.push(`datasource='${this._datasource}'`);
         if (this._options) fetchAttrs.push(`options='${this._options}'`);
@@ -367,10 +338,9 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
             lines.push(`    <order ${parts.join(" ")} />`);
         }
 
-        for (const filter of this._filters) {
-            if (!filter.conditions.length) continue;
-            lines.push(`    <filter type="${filter.type}">`);
-            for (const c of filter.conditions) {
+        if (this._filters.length > 0) {
+            lines.push(`    <filter type="and">`);
+            for (const c of this._filters) {
                 lines.push(`      ${c}`);
             }
             lines.push(`    </filter>`);
@@ -388,10 +358,9 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 
             lines.push(`    <link-entity ${linkAttrs.join(" ")}>`);
 
-            for (const filter of link.builder._filters) {
-                if (!filter.conditions.length) continue;
-                lines.push(`      <filter type="${filter.type}">`);
-                for (const c of filter.conditions) {
+            if (link.builder._filters.length > 0) {
+                lines.push(`      <filter type="and">`);
+                for (const c of link.builder._filters) {
                     const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
                     lines.push(`        ${entityScoped}`);
                 }
@@ -422,10 +391,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 
   public async execute(): Promise<TResult[]> {
       const raw = await this._table.client.getRecords(this._table.name, this.toString());
-      if (this._attributes.length === 0) {
-          return raw.map((v: any) => this._table.transformValueFromDataverse(v)) as TResult[];
-      }
-      return raw as TResult[];
+      return raw.map((v: any) => this._table.transformValueFromDataverse(v)) as TResult[];
   }
 }
 
@@ -445,15 +411,6 @@ export function filterOr(...conditions: string[]): string {
 
 // --- Root Entry Point ---
 
-export class RootQueryBuilder {
-    from<TProps extends GenericProperties>(table: Table<TProps>) {
-        return new EntityQueryBuilder(table);
-    }
-}
-
-export function fetchXml<TProps extends GenericProperties, TResult extends Record<string, any>>(
-    queryBuilderFn: (q: RootQueryBuilder) => EntityQueryBuilder<TProps, TResult>,
-): EntityQueryBuilder<TProps, TResult> {
-    const root = new RootQueryBuilder();
-    return queryBuilderFn(root);
+export function fetchXml<TProps extends GenericProperties>(table: Table<TProps>): EntityQueryBuilder<TProps, Infer<TProps>> {
+    return new EntityQueryBuilder(table);
 }

@@ -147,7 +147,7 @@ export const handlers = [
 
   // ==================== FUNCTIONS ====================
 
-  http.get(`${API}/WhoAmI`, () => HttpResponse.json({
+  http.get(`${API}/WhoAmI*`, () => HttpResponse.json({
     BusinessUnitId: 'bu-1111-2222-3333-4444',
     UserId: 'user-1111-2222-3333-4444',
     OrganizationId: 'org-1111-2222-3333-4444',
@@ -163,6 +163,48 @@ export const handlers = [
   http.get(`${API}/RetrieveAadUserRoles*`, () => HttpResponse.json({
     value: [{ name: 'System Administrator' }, { name: 'Sales Manager' }],
   })),
+
+  // ==================== ACTIONS (POST) ====================
+
+  http.post(`${API}/WinOpportunity`, async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({ Status: "won", OpportunityCloseId: "close-123" })
+  }),
+
+  http.post(`${API}/:entitySet/Microsoft.Dynamics.CRM.CalculateRollupField`, async ({ params, request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({ value: { RollupField: body.FieldName, RollupValue: 42 } })
+  }),
+
+  // ==================== BULK OPERATIONS ====================
+
+  http.post(`${API}/:entitySet/Microsoft.Dynamics.CRM.CreateMultiple`, async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({
+      Targets: body.Targets.map((_: any, i: number) => ({
+        id: `bulk-create-${i}`,
+      })),
+    })
+  }),
+
+  http.post(`${API}/:entitySet/Microsoft.Dynamics.CRM.UpdateMultiple`, async ({ request }) => {
+    const body = await request.json() as any
+    return HttpResponse.json({
+      Targets: body.Targets.map((_: any, i: number) => ({
+        id: `bulk-update-${i}`,
+      })),
+    })
+  }),
+
+  http.post(`${API}/:entitySet/Microsoft.Dynamics.CRM.DeleteMultiple`, async () => {
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // ==================== FUNCTIONS (GET) ====================
+
+  http.get(`${API}/CalculateRollupField*`, () => {
+    return HttpResponse.json({ value: 42 })
+  }),
 
   // ==================== NEXT LINK PAGINATION ====================
 

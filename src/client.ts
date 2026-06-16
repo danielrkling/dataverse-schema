@@ -1,5 +1,6 @@
 import { DataverseKey, GUID } from "./types";
 import { getName, Name } from "./util";
+import { wrapString } from "./query";
 
 const parenthesesRegEx = /\(([^)]+)\)/;
 
@@ -55,6 +56,11 @@ export class DataverseClient {
             return;
         }
 
+        if (response.status === 304) {
+            // Not Modified (conditional GET)
+            return null;
+        }
+
         if (response.headers.get("Content-Type")?.includes("application/json")) {
             const data = await response.json();
             if (data.error) {
@@ -88,8 +94,11 @@ export class DataverseClient {
     // --- PUBLIC API METHODS ---
     //
 
-    async getRecord(entitySetName: Name, id: DataverseKey, query: string = "") {
+    async getRecord(entitySetName: Name, id: DataverseKey, query: string = "", etag?: string) {
         const resource = `${getName(entitySetName)}(${id})?${query}`;
+        if (etag) {
+            return this.fetch(resource, { headers: { "If-None-Match": etag } as Record<string, string> });
+        }
         return this.fetch(resource);
     }
 
@@ -113,55 +122,61 @@ export class DataverseClient {
         });
     }
 
-    async patchRecord(entitySetName: Name, id: string, value: object, query: string = "") {
+    async patchRecord(entitySetName: Name, id: string, value: object, query: string = "", etag?: string) {
+        const extraHeaders: Record<string, string> = { Prefer: "return=representation" };
+        if (etag) extraHeaders["If-Match"] = etag;
         return this.fetch(`${getName(entitySetName)}(${id})?${query}`, {
             method: "PATCH",
-            headers: { Prefer: "return=representation" },
+            headers: extraHeaders,
             body: JSON.stringify(value),
         });
     }
 
-    async deleteRecord(entitySetName: Name, id: GUID): Promise<GUID> {
-        await this.fetch(`${getName(entitySetName)}(${id})`, { method: "DELETE" });
-        return id;
+    async deleteRecord(entitySetName: Name, id: string, etag?: string): Promise<GUID> {
+        const options: RequestInit = { method: "DELETE" };
+        if (etag) options.headers = { "If-Match": etag } as Record<string, string>;
+        await this.fetch(`${getName(entitySetName)}(${id})`, options);
+        return id as GUID;
     }
 
-    async updatePropertyValue(entitySetName: Name, id: GUID, propertyName: Name, value: any): Promise<GUID> {
-        await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
+    async updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, etag?: string): Promise<GUID> {
+        const options: RequestInit = {
             method: "PUT",
             body: JSON.stringify({ value }),
-        });
-        return id;
+        };
+        if (etag) options.headers = { "If-Match": etag } as Record<string, string>;
+        await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options);
+        return id as GUID;
     }
 
-    async deletePropertyValue(entitySetName: Name, id: GUID, propertyName: Name): Promise<GUID> {
+    async deletePropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<GUID> {
         await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
             method: "DELETE",
         });
-        return id;
+        return id as GUID;
     }
 
-    async getPropertyValue(entitySetName: Name, id: GUID, propertyName: Name): Promise<any> {
+    async getPropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<any> {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`).then((r) => r.value);
     }
 
-    async getPropertyRawValue(entitySetName: Name, id: GUID, propertyName: Name): Promise<any> {
+    async getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name): Promise<any> {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`);
     }
 
-    getPropertyRawValueURL(entitySetName: Name, id: GUID, propertyName: Name): string {
+    getPropertyRawValueURL(entitySetName: Name, id: string, propertyName: Name): string {
         return `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`;
     }
 
-    getImageFullSizeURL(entitySetName: Name, id: GUID, propertyName: Name): string {
+    getImageFullSizeURL(entitySetName: Name, id: string, propertyName: Name): string {
         return `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})/${getName(propertyName)}/$value?size=full`;
     }
 
-    getImageDownloadURL(entitySetName: Name, id: GUID, propertyName: Name): string {
+    getImageDownloadURL(entitySetName: Name, id: string, propertyName: Name): string {
         return `${this.options.url}/Image/download.aspx?Entity=${getName(entitySetName)}&Attribute=${getName(propertyName)}&Id=${id}&Full=true`;
     }
 
-    async updateFileProperty(entitySetName: Name, id: GUID, propertyName: Name, filename: string, body: string | Blob | BufferSource) {
+    async updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource) {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
             method: "PATCH",
             headers: {
@@ -172,20 +187,20 @@ export class DataverseClient {
         });
     }
 
-    async activateRecord(entitySetName: Name, id: GUID): Promise<GUID> {
+    async activateRecord(entitySetName: Name, id: string): Promise<GUID> {
         return this.updatePropertyValue(entitySetName, id, "statecode", 0);
     }
 
-    async deactivateRecord(entitySetName: Name, id: GUID): Promise<GUID> {
+    async deactivateRecord(entitySetName: Name, id: string): Promise<GUID> {
         return this.updatePropertyValue(entitySetName, id, "statecode", 1);
     }
 
     async associateRecord(
         entitySetName: Name,
-        parentId: GUID,
+        parentId: string,
         propertyName: Name,
         childEntitySetName: Name,
-        childId: GUID,
+        childId: string,
     ): Promise<GUID> {
         await this.fetch(`${getName(entitySetName)}(${parentId})/${getName(propertyName)}/$ref`, {
             method: "PUT",
@@ -193,18 +208,18 @@ export class DataverseClient {
                 "@odata.id": `${this.options.url}/api/data/v9.2/${getName(childEntitySetName)}(${childId})`,
             }),
         });
-        return childId;
+        return childId as GUID;
     }
 
-    async dissociateRecord(entitySetName: Name, parentId: GUID, propertyName: Name, childId?: GUID): Promise<GUID> {
+    async dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string): Promise<GUID> {
         const resource = `${getName(entitySetName)}(${parentId})/${getName(propertyName)}${childId ? `(${childId})` : ""}/$ref`;
         await this.fetch(resource, { method: "DELETE" });
-        return childId ?? parentId;
+        return (childId ?? parentId) as GUID;
     }
 
     async getAssociatedRecords(
         entitySetName: Name,
-        id: GUID,
+        id: string,
         navigationPropertyName: Name,
         query: string = "",
     ): Promise<any[]> {
@@ -212,18 +227,18 @@ export class DataverseClient {
         return this.fetch(resource).then((r) => r.value);
     }
 
-    async getAssociatedRecord(entitySetName: Name, id: GUID, navigationPropertyName: Name, query: string = "") {
+    async getAssociatedRecord(entitySetName: Name, id: string, navigationPropertyName: Name, query: string = "") {
         const resource = `${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}?${query}`;
         return this.fetch(resource);
     }
 
     async associateRecordToList(
         entitySetName: Name,
-        parentId: GUID,
+        parentId: string,
         propertyName: Name,
         childEntitySetName: Name,
         childPrimaryKeyName: Name,
-        childIds: GUID[],
+        childIds: string[],
     ): Promise<GUID[]> {
         const currentAssociated = await this.getAssociatedRecords(
             entitySetName,
@@ -250,7 +265,115 @@ export class DataverseClient {
         }
 
         await Promise.all(promises);
-        return childIds;
+        return childIds as GUID[];
+    }
+
+    //
+    // --- ACTIONS (POST - have side effects) ---
+    //
+
+    /**
+     * Executes an unbound Dataverse action.
+     * POST /{ActionName}
+     */
+    async executeAction(actionName: string, params?: Record<string, any>): Promise<any> {
+        return this.fetch(actionName, {
+            method: "POST",
+            body: params ? JSON.stringify(params) : undefined,
+        });
+    }
+
+    /**
+     * Executes a bound Dataverse action on a specific record or entity set.
+     * POST /{entitySet}({id})/Microsoft.Dynamics.CRM.{ActionName}  (bound to record)
+     * POST /{entitySet}/Microsoft.Dynamics.CRM.{ActionName}        (bound to entity set)
+     */
+    async executeBoundAction(
+        entitySetName: Name,
+        actionName: string,
+        params?: Record<string, any>,
+        id?: string,
+    ): Promise<any> {
+        const path = id
+            ? `${getName(entitySetName)}(${id})/Microsoft.Dynamics.CRM.${actionName}`
+            : `${getName(entitySetName)}/Microsoft.Dynamics.CRM.${actionName}`;
+        return this.fetch(path, {
+            method: "POST",
+            body: params ? JSON.stringify(params) : undefined,
+        });
+    }
+
+    //
+    // --- FUNCTIONS (GET - no side effects) ---
+    //
+
+    /**
+     * Executes an unbound Dataverse function.
+     * GET /{FunctionName}(Param1=value1,Param2='string')
+     */
+    async executeFunction(functionName: string, params?: Record<string, any>): Promise<any> {
+        const paramString = params
+            ? `(${Object.entries(params).map(([k, v]) => `${k}=${wrapString(v)}`).join(",")})`
+            : "()";
+        return this.fetch(`${functionName}${paramString}`);
+    }
+
+    /**
+     * Executes a bound Dataverse function on a specific record.
+     * GET /{entitySet}({id})/Microsoft.Dynamics.CRM.{FunctionName}(Param1=value1)
+     */
+    async executeBoundFunction(
+        entitySetName: Name,
+        id: string,
+        functionName: string,
+        params?: Record<string, any>,
+    ): Promise<any> {
+        const paramString = params
+            ? `(${Object.entries(params).map(([k, v]) => `${k}=${wrapString(v)}`).join(",")})`
+            : "()";
+        return this.fetch(
+            `${getName(entitySetName)}(${id})/Microsoft.Dynamics.CRM.${functionName}${paramString}`
+        );
+    }
+
+    //
+    // --- BULK OPERATIONS ---
+    //
+
+    /**
+     * Creates multiple records in a single API call.
+     * POST /{entitySet}/Microsoft.Dynamics.CRM.CreateMultiple
+     */
+    async createMultiple(entitySetName: Name, records: Record<string, any>[]): Promise<any> {
+        return this.fetch(
+            `${getName(entitySetName)}/Microsoft.Dynamics.CRM.CreateMultiple`,
+            { method: "POST", body: JSON.stringify({ Targets: records }) },
+        );
+    }
+
+    /**
+     * Updates multiple records in a single API call.
+     * POST /{entitySet}/Microsoft.Dynamics.CRM.UpdateMultiple
+     */
+    async updateMultiple(entitySetName: Name, records: Record<string, any>[]): Promise<any> {
+        return this.fetch(
+            `${getName(entitySetName)}/Microsoft.Dynamics.CRM.UpdateMultiple`,
+            { method: "POST", body: JSON.stringify({ Targets: records }) },
+        );
+    }
+
+    /**
+     * Deletes multiple records in a single API call by their IDs.
+     * POST /{entitySet}/Microsoft.Dynamics.CRM.DeleteMultiple
+     */
+    async deleteMultiple(entitySetName: Name, ids: string[]): Promise<any> {
+        const targets = ids.map(id => ({
+            "@odata.id": `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})`,
+        }));
+        return this.fetch(
+            `${getName(entitySetName)}/Microsoft.Dynamics.CRM.DeleteMultiple`,
+            { method: "POST", body: JSON.stringify({ Targets: targets }) },
+        );
     }
 
     _batchTxs: NestedStringArray | null = null;
@@ -287,7 +410,7 @@ export class DataverseClient {
 
         this._batchTxs.push([
             `${options.method} /api/data/v9.2/${resource} HTTP/1.1`,
-            `Content-Type: ${options.headers?.["Content-Type"]}`,
+            `Content-Type: ${(options.headers as Record<string, string>)?.["Content-Type"]}`,
             "",
             options.body?.toString() ?? "",
         ]);

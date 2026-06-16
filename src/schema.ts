@@ -15,17 +15,8 @@ export class Schema<T> implements StandardSchemaV1<T> {
   kind = "schema";
   type = "schema";
 
-  /**
-   * The default value of the property. This is a private field.
-   */
-  #default: T;
+  #default: any;
 
-  /**
-   * Creates a new Property instance.
-   *
-   * @param name The name of the property.
-   * @param defaultValue The default value for the property.
-   */
   constructor(name: string, defaultValue: T) {
     this.name = name;
     this.fromDataverseName = name
@@ -33,24 +24,13 @@ export class Schema<T> implements StandardSchemaV1<T> {
     this.#default = defaultValue;
   }
 
-  /**
-   * Sets the default value of the property.
-   *
-   * @param value The new default value.
-   * @returns The Property instance for chaining.
-   */
   setDefault(value: T): this {
     this.#default = value;
     return this;
   }
 
-  /**
-   * Gets the default value of the property.
-   *
-   * @returns The default value.
-   */
   getDefault(): T {
-    return this.#default;
+    return this.#default as T;
   }
 
   /**
@@ -78,17 +58,8 @@ export class Schema<T> implements StandardSchemaV1<T> {
     return this.#readOnly;
   }
 
-  /**
-   * An array of validators associated with this property.
-   */
-  #validators: Array<Validator<T>> = [];
+  #validators: Array<Validator<any>> = [];
 
-  /**
-   * Adds a validator to the property.
-   *
-   * @param v The validator function or object to add.
-   * @returns The Property instance for chaining.
-   */
   check(v: Validator<T>): this {
     this.#validators.push(v);
     return this;

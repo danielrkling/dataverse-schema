@@ -40,7 +40,7 @@ type ODataFieldProxy<T extends GenericProperties> = {
 export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _table: Table<T>
   private _fields: string[] = []
-  private _filter = ""
+  private _filters: string[] = []
   private _expands: Array<{ name: string; query: string; isRef?: boolean }> = []
   private _orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
   private _top?: number
@@ -60,7 +60,8 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
 
   private _buildProxyForTable(table: Table<any>, prefix?: string): Record<string, any> {
     const proxy: Record<string, any> = {}
-    for (const [key, prop] of Object.entries(table.fields)) {
+    const fields = table.fields as Record<string, any>
+    for (const [key, prop] of Object.entries(fields)) {
       const dataverseName = prop.fromDataverseName ?? prop.name
       if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
         const navProp = prop as LookupProperty<any> | CollectionProperty<any>
@@ -72,7 +73,8 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
               const sub = this._buildProxyForTable(navProp.table, currentPrefix)
               sub.toString = () => dataverseName
               const lambdaMap: Record<string, string> = {}
-              for (const [lk, lp] of Object.entries(navProp.table.fields)) {
+              const navFields = navProp.table.fields as Record<string, any>
+              for (const [lk, lp] of Object.entries(navFields)) {
                 lambdaMap[lk] = lp.fromDataverseName ?? lp.name
               }
               const buildLambdaProxy = (alias: string) => {
@@ -117,7 +119,8 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   where(filter: string): this
   where(filter: (f: ODataFieldProxy<T>) => string): this
   where(filter: string | ((f: ODataFieldProxy<T>) => string)): this {
-    this._filter = typeof filter === "string" ? filter : filter(this._proxy)
+    const str = typeof filter === "string" ? filter : filter(this._proxy)
+    this._filters.push(str)
     return this
   }
 
@@ -181,7 +184,11 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _build(): string {
     const parts: string[] = []
     if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`)
-    if (this._filter) parts.push(`$filter=${this._filter}`)
+    if (this._filters.length === 1) {
+      parts.push(`$filter=${this._filters[0]}`)
+    } else if (this._filters.length > 1) {
+      parts.push(`$filter=${this._filters.join(" and ")}`)
+    }
     if (this._orderby.length) {
       parts.push(`$orderby=${this._orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
     }
@@ -209,6 +216,6 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   }
 }
 
-export function from<T extends GenericProperties>(table: Table<T>): ODataQuery<T, Infer<T>> {
+export function fetchOdata<T extends GenericProperties>(table: Table<T>): ODataQuery<T, Infer<T>> {
   return new ODataQuery(table)
 }
