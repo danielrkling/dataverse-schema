@@ -18,7 +18,8 @@ export default defineConfig({
     target: "esnext",
   },
   test:{
-    environment:"jsdom"
+    environment:"jsdom",
+    setupFiles:["./test/setup.ts"],
   },
   plugins: [
     dts({
