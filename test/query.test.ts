@@ -47,13 +47,13 @@ test("orderby accepts string array", () => {
 })
 
 test("asc formats field name", () => {
-  expect(asc("name")).toBe("name asc")
-  expect(asc({ name: "fullname" })).toBe("fullname asc")
+  expect(`${asc("name")}`).toBe("name asc")
+  expect(`${asc({ name: "fullname" })}`).toBe("fullname asc")
 })
 
 test("desc formats field name", () => {
-  expect(desc("name")).toBe("name desc")
-  expect(desc({ name: "fullname" })).toBe("fullname desc")
+  expect(`${desc("name")}`).toBe("name desc")
+  expect(`${desc({ name: "fullname" })}`).toBe("fullname desc")
 })
 
 test("expand formats flat string", () => {

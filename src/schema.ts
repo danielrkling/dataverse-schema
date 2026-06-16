@@ -81,7 +81,7 @@ export class Schema<T> implements StandardSchemaV1<T> {
   /**
    * An array of validators associated with this property.
    */
-  #validators: Array<any> = [];
+  #validators: Array<Validator<T>> = [];
 
   /**
    * Adds a validator to the property.
@@ -130,18 +130,18 @@ export class Schema<T> implements StandardSchemaV1<T> {
     path: PropertyKey[] = [],
   ): StandardSchemaV1.Issue[] {
     const issues: StandardSchemaV1.Issue[] = [];
-    this.#validators.forEach((fn: any) => {
+    this.#validators.forEach((fn) => {
       try {
-        let message = fn(value);
+        let message = fn(value as T);
         if (message) {
           issues.push({
             message,
             path,
           });
         }
-      } catch ({ message }: any) {
+      } catch (e: any) {
         issues.push({
-          message,
+          message: e?.message ?? String(e),
           path,
         });
       }

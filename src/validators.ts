@@ -17,7 +17,7 @@ import { Validator } from "./types";
 
 export function required() {
   return (v: any) => {
-    if (!v) return "Required";
+    if (v === null || v === undefined) return "Required";
   };
 } /**
  * Creates a validator function that checks if a string matches a regular expression.

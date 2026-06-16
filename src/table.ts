@@ -473,7 +473,8 @@ function buildSelect(table: Table<GenericProperties>): string {
     .join(",");
 }
 
-function buildExpand(table: Table<GenericProperties>): string {
+function buildExpand(table: Table<GenericProperties>, depth = 0): string {
+  if (depth > 3) return "";
   return Object.values(table.fields)
     .filter(
       (v) =>
@@ -483,9 +484,8 @@ function buildExpand(table: Table<GenericProperties>): string {
     )
     .map((v) => {
       const navProp = v as CollectionProperty<any> | LookupProperty<any>;
-      // Recursively build select and expand for nested tables
       const innerSelect = buildSelect(navProp.table);
-      const innerExpand = buildExpand(navProp.table);
+      const innerExpand = buildExpand(navProp.table, depth + 1);
       let expandQuery = `$select=${innerSelect}`;
       if (innerExpand) {
         expandQuery += `;$expand=${innerExpand}`;

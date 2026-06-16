@@ -144,11 +144,14 @@ export function toDateOnly(date: Date) {
     return null;
   }
 }
-/** A field name can be a string or an object with a name property. */
-export type Name = string | { name: string; };
+/** A field name can be a string or an object with a name or toString method. */
+export type Name = string | { name: string; } | { toString(): string; };
 /** Extracts the string name from a FieldName type. */
 
 export function getName(name: Name): string {
-  return typeof name === "string" ? name : name.name;
+  if (typeof name === "string") return name;
+  if ("name" in name) return (name as { name: string }).name;
+  if (typeof (name as any).toString === "function") return (name as any).toString();
+  return String(name);
 }
 

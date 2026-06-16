@@ -79,12 +79,22 @@ export function orderby(values: { [key: string]: "asc" | "desc" } | string[]): s
     .join(",");
 }
 
-export function asc(name: Name){
-  return `${getName(name)} asc`
+export class OrderSpec {
+  constructor(
+    readonly fields: string[],
+    readonly direction: "asc" | "desc",
+  ) {}
+  toString(): string {
+    return this.fields.map(f => `${f} ${this.direction}`).join(",")
+  }
 }
 
-export function desc(name: Name){
-  return `${getName(name)} desc`
+export function asc(...fields: Name[]): OrderSpec {
+  return new OrderSpec(fields.map(getName), "asc")
+}
+
+export function desc(...fields: Name[]): OrderSpec {
+  return new OrderSpec(fields.map(getName), "desc")
 }
 
 /** Formats an object of key-value pairs for alternate key operations. */
@@ -381,3 +391,31 @@ export const UnderOrEqual = (field: Name, value: string) =>
   `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
 export const Yesterday = (field: Name) =>
   `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${getName(field)})`;
+
+// --- Lambda operators for collection nav property filters ---
+
+export function any(
+  collectionProperty: Name,
+  alias: string,
+  condition: string,
+): string {
+  return `${getName(collectionProperty)}/any(${alias}: ${condition})`;
+}
+
+export function all(
+  collectionProperty: Name,
+  alias: string,
+  condition: string,
+): string {
+  return `${getName(collectionProperty)}/all(${alias}: ${condition})`;
+}
+
+// --- Column comparison (valueof) ---
+
+export function compare(
+  field: Name,
+  operator: string,
+  otherField: Name,
+): string {
+  return `(${getName(field)} ${operator} ${getName(otherField)})`;
+}

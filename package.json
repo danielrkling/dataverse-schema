@@ -6,7 +6,7 @@
   "files": [
     "dist"
   ],
-  "main": ".dist/dataverse-schema.js",
+  "main": "./dist/dataverse-schema.js",
   "module": "dist/dataverse-schema.js",
   "typings": "dist/dataverse-schema.d.ts",
   "exports": {

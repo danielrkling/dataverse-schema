@@ -257,15 +257,19 @@ export class DataverseClient {
 
     async batch(fn: () => Promise<void>) {
         if (this._batchTxs) throw new Error("Cannot nest batches")
-        this._batchTxs = [];
-        await fn();
-        const tx = this._batchTxs;
-        this._batchTxs = null;
+        let tx: NestedStringArray | null = [];
+        this._batchTxs = tx;
+        try {
+            await fn();
+        } finally {
+            tx = this._batchTxs;
+            this._batchTxs = null;
+        }
+        if (!tx) return;
 
         const batchId = crypto.randomUUID();
 
         const body = [tx.map((v, i) => [`--batch_${batchId}`, v]), `--batch_${batchId}--`].flat(10).join("\n");
-        // console.log("batch",body)
 
         const result = await this.fetch("$batch", {
             method: "POST",
@@ -293,30 +297,29 @@ export class DataverseClient {
 
     _changeSetTxs: NestedStringArray | null = null;
 
-    async changeset(fn: () => Promise<void>) {
+    async changeset(fn: () => Promise<void>): Promise<void> {
         if (this._changeSetTxs) throw new Error("Cannot nest changesets")
         if (!this._batchTxs) return this.batch(()=>this.changeset(fn))
         this._changeSetTxs = [];
-        await fn();
-        const id = crypto.randomUUID();
-        this._batchTxs!.push([
-            `Content-Type: multipart/mixed; boundary="changeset_${id}"`,
-            "",
-            this._changeSetTxs.map((v, i) => [
-                `--changeset_${id}`,
-                `Content-Type: application/http`,
-                `Content-Transfer-Encoding: binary`,
-                `Content-ID: ${i + 1}`,
+        try {
+            await fn();
+        } finally {
+            const id = crypto.randomUUID();
+            this._batchTxs!.push([
+                `Content-Type: multipart/mixed; boundary="changeset_${id}"`,
                 "",
-                v,
-            ]),
-            `--changeset_${id}--`,
-        ]);
-        this._changeSetTxs = null;
-
-
-
-        // console.log("changeset",this._batchTxs)
+                this._changeSetTxs.map((v, i) => [
+                    `--changeset_${id}`,
+                    `Content-Type: application/http`,
+                    `Content-Transfer-Encoding: binary`,
+                    `Content-ID: ${i + 1}`,
+                    "",
+                    v,
+                ]),
+                `--changeset_${id}--`,
+            ]);
+            this._changeSetTxs = null;
+        }
     }
 
     _processChangeset(resource: string, options: RequestInit): boolean {

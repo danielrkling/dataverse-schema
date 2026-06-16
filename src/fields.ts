@@ -125,7 +125,7 @@ export class DateField extends Schema<Date> {
   constructor(name: string) {
     super(name, parseDateOnly(new Date().toISOString()));
     this.check((v) =>
-      v === null || v instanceof Date ? undefined : "value is not Date or null",
+      v instanceof Date ? undefined : "value is not Date",
     );
   }
   transformValueFromDataverse(value: any): Date {
@@ -244,7 +244,7 @@ export class LookupIdProperty extends Schema<GUID | null> {
   kind = "navigation" as const;
   type = "lookupId" as const;
   navigationName: string;
-  #getTable: GetTable;
+  #getTable: GetTable<Table<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable) {
     super(name, null);
@@ -257,7 +257,7 @@ export class LookupIdProperty extends Schema<GUID | null> {
   #table: Table<{ id: PrimaryKeyField }> | undefined;
   get table(): Table<{ id: PrimaryKeyField }> {
     if (!this.#table) {
-      const table = this.#getTable() as Table<GenericProperties>;
+      const table = this.#getTable();
       const { property } = table.getPrimaryKey();
       this.#table = new Table(table.client, table.name, { id: property });
     }
@@ -295,7 +295,7 @@ export class CollectionProperty<
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties>[] {
-    return Array.from(value).map((v: any) =>
+    return Array.from(value ?? []).map((v: any) =>
       this.table.transformValueFromDataverse(v),
     );
   }
@@ -323,7 +323,7 @@ export function collection<TProperties extends GenericProperties>(
 export class CollectionIdsProperty extends Schema<GUID[]> {
   kind = "navigation" as const;
   type = "collectionIds" as const;
-  #getTable: GetTable;
+  #getTable: GetTable<Table<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable) {
     super(name, []);
@@ -336,7 +336,7 @@ export class CollectionIdsProperty extends Schema<GUID[]> {
   #table: Table<{ id: PrimaryKeyField }> | undefined;
   get table(): Table<{ id: PrimaryKeyField }> {
     if (!this.#table) {
-      const table = this.#getTable() as Table<GenericProperties>;
+      const table = this.#getTable();
       const { property } = table.getPrimaryKey();
       this.#table = new Table(table.client, table.name, { id: property });
     }

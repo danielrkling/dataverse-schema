@@ -176,11 +176,14 @@ test("setReadOnly marks field as read-only", () => {
   expect(f.getReadOnly()).toBe(false)
 })
 
-test("required validator returns message for empty", () => {
-  const f = string("name").check(required())
-  const issues = f.getIssues("")
+test("required validator returns message for null", () => {
+  const f = nullableString("name").check(required())
+  const issues = f.getIssues(null)
   expect(issues).toHaveLength(1)
   expect(issues[0].message).toBe("Required")
+  // empty string should pass required (it's a valid non-null value)
+  const issues2 = f.getIssues("")
+  expect(issues2).toHaveLength(0)
 })
 
 test("required validator passes for non-empty", () => {
@@ -273,10 +276,10 @@ test("collection has type collection", () => {
 })
 
 test("validation works with multiple validators", () => {
-  const f = string("name")
+  const f = nullableString("name")
     .check(required())
     .check((v) => v && v.length < 2 ? "Too short" : undefined)
-  const issues = f.getIssues("")
+  const issues = f.getIssues(null)
   expect(issues).toHaveLength(1)
   expect(issues[0].message).toBe("Required")
   const issues2 = f.getIssues("A")
