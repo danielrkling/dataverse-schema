@@ -32,6 +32,22 @@ type OrderDef = {
 
 
 
+/**
+ * Builds a FetchXML query for Dataverse with full type support.
+ *
+ * Use `fetchXml(table)` to create a builder, then chain methods to construct
+ * the query. Call `execute()` to run it or `toXml()` to get the raw XML.
+ *
+ * @example
+ * const q = fetchXml(contactTable)
+ *   .select(f => ({ name: f.name, email: f.email }))
+ *   .where(f => condition(f.status, "eq", 1))
+ *   .orderby(f => desc(f.name))
+ *   .top(10);
+ *
+ * const xml = q.toXml();
+ * const results = await q.execute();
+ */
 export class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
     private _aliasCounter = 0;
 
@@ -62,6 +78,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     private _datasource?: string;
     private _options?: string;
 
+    /** @param table The Table definition to build the query against. */
     constructor(table: Table<TProps>) {
         this._table = table;
         this._proxy = this._buildProxy();
@@ -75,6 +92,14 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return proxy;
     }
 
+    /**
+     * Selects specific fields to include in the FetchXML query.
+     * The result type is narrowed to only include selected fields.
+     *
+     * @example
+     * fetchXml(contactTable)
+     *   .select(f => ({ name: f.name, email: f.email }))
+     */
     public select<TSelect extends Record<string, keyof TProps>>(
         selector: (fields: FieldSelector<TProps>) => TSelect,
     ): EntityQueryBuilder<TProps, Simplify<TResult & { [K in keyof TSelect]: Infer<TProps[TSelect[K]]> }>> {
@@ -90,6 +115,19 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this as any;
     }
 
+    /**
+     * Adds a filter condition to the FetchXML query.
+     * Accepts a raw filter string or a callback that receives a field proxy.
+     * Multiple `where()` calls are combined with AND.
+     *
+     * @example
+     * // With callback
+     * fetchXml(contactTable).where(f => condition(f.status, "eq", 1))
+     *
+     * @example
+     * // Raw filter string
+     * fetchXml(contactTable).where(condition("statuscode", "eq", "1"))
+     */
     public where(
         filter: string | ((f: FieldProxy<TProps>) => string),
     ): this {
@@ -98,6 +136,16 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /**
+     * Adds a link-entity join to another table. The result type merges the
+     * joined entity's selected fields.
+     *
+     * @example
+     * fetchXml(contactTable)
+     *   .select(f => ({ name: f.name }))
+     *   .join("inner", accountTable, a => a.accountid, c => c.parentcustomerid,
+     *     q => q.select(a => ({ accountName: a.name })))
+     */
     public join<
         TTable extends Table<any>,
         TFrom extends keyof TTable["fields"],
@@ -132,6 +180,15 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this as any;
     }
 
+    /**
+     * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
+     *
+     * @example
+     * fetchXml(contactTable)
+     *   .select(f => ({ name: f.name }))
+     *   .innerJoin(accountTable, a => a.accountid, c => c.parentcustomerid,
+     *     q => q.select(a => ({ accountName: a.name })))
+     */
     public innerJoin<
         TTable extends Table<any>,
         TFrom extends keyof TTable["fields"],
@@ -147,61 +204,87 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this.join("inner", table, from, to, subquery, intersect);
     }
 
+    /** Enables distinct (deduplicated) results. */
     public distinct(): this {
         this._isDistinct = true;
         return this;
     }
 
+    /** Limits the number of returned records. */
     public top(n: number): this {
         this._top = n;
         return this;
     }
 
+    /** Sets the page number for paginated results. */
     public page(n: number): this {
         this._page = n;
         return this;
     }
 
+    /** Sets the number of records per page. */
     public pageSize(n: number): this {
         this._pageSize = n;
         return this;
     }
 
+    /** Requests the server to include the total record count. */
     public returnTotalRecordCount(): this {
         this._returnTotalRecordCount = true;
         return this;
     }
 
+    /** Instructs the server to use the raw order-by string. */
     public useRawOrderBy(): this {
         this._useRawOrderBy = true;
         return this;
     }
 
+    /** Enables late materialization for better performance on large datasets. */
     public lateMaterialize(): this {
         this._lateMaterialize = true;
         return this;
     }
 
+    /** Sets the aggregate limit for grouped results. */
     public aggregateLimit(n: number): this {
         this._aggregateLimit = n;
         return this;
     }
 
+    /** Sets custom query options. */
     public options(value: string): this {
         this._options = value;
         return this;
     }
 
+    /** Sets an alternate datasource (e.g. for federated queries). */
     public datasource(value: string): this {
         this._datasource = value;
         return this;
     }
 
+    /** Marks the query as an aggregate (grouped) query. */
     public aggregate(): this {
         this._isAggregate = true;
         return this;
     }
 
+  /**
+   * Adds ordering to the FetchXML query.
+   *
+   * @example
+   * // With asc/desc helpers
+   * fetchXml(contactTable).orderby(f => desc(f.name))
+   *
+   * @example
+   * // With record syntax
+   * fetchXml(contactTable).orderby(f => ({ name: 'asc', createdon: 'desc' }))
+   *
+   * @example
+   * // With explicit entity name
+   * fetchXml(contactTable).orderby("contact", "createdon", "desc")
+   */
   public orderby(
       spec: ((f: FieldProxy<TProps>) => OrderSpec | OrderSpec[] | Record<string, 'asc' | 'desc'>)
   ): this;
@@ -233,6 +316,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
       return this;
   }
 
+    /** Adds a SUM aggregate. Marks the query as aggregate. */
     public sum(field: keyof TProps, alias: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -240,6 +324,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds an AVG aggregate. Marks the query as aggregate. */
     public avg(field: keyof TProps, alias: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -247,6 +332,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds a MIN aggregate. Marks the query as aggregate. */
     public min(field: keyof TProps, alias: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -254,6 +340,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds a MAX aggregate. Marks the query as aggregate. */
     public max(field: keyof TProps, alias: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -261,6 +348,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds a COUNT aggregate. Marks the query as aggregate. */
     public count(field: keyof TProps, alias: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -268,6 +356,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds a COUNTCOLUMN aggregate with optional distinct flag. Marks the query as aggregate. */
     public countColumn(field: keyof TProps, alias: string, distinct?: boolean): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -275,12 +364,14 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds a custom row aggregate. */
     public rowAggregate(field: keyof TProps, alias: string, rowaggregate: string): this {
         const fieldDef = this._table.fields[field];
         this._attributes.push({ name: fieldDef.name, alias, rowaggregate });
         return this;
     }
 
+    /** Adds a GROUP BY on a field. Marks the query as aggregate. */
     public groupBy(field: keyof TProps, alias: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -288,6 +379,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Adds a GROUP BY with date grouping (e.g. "day", "month", "year"). Marks the query as aggregate. */
     public groupByDate(field: keyof TProps, alias: string, dategrouping: string): this {
         this._isAggregate = true;
         const fieldDef = this._table.fields[field];
@@ -295,11 +387,25 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
+    /** Sets the paging cookie for navigating paginated results. */
     public pagingCookie(cookie: string): this {
         this._pagingCookie = cookie;
         return this;
     }
 
+    /**
+     * Returns the full FetchXML string.
+     *
+     * @example
+     * const xml = fetchXml(contactTable)
+     *   .select(f => ({ name: f.name }))
+     *   .toXml();
+     * // <fetch version="1.0" mapping="logical">
+     * //   <entity name="contact">
+     * //     <attribute name="fullname" alias="name" />
+     * //   </entity>
+     * // </fetch>
+     */
     public toXml(): string {
         const lines: string[] = [];
         const fetchAttrs: string[] = [`version="1.0"`, `mapping="logical"`];
@@ -385,10 +491,27 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return lines.join("\n");
     }
 
+    /**
+     * Returns the URL-encoded query string for use in the Dataverse API.
+     *
+     * @example
+     * fetchXml(contactTable).select(f => ({ name: f.name })).toString()
+     * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
+     */
     public toString(): string {
         return `fetchXml=${encodeURIComponent(this.toXml())}`;
     }
 
+  /**
+   * Executes the FetchXML query against Dataverse and returns the parsed results.
+   *
+   * @example
+   * const contacts = await fetchXml(contactTable)
+   *   .select(f => ({ name: f.name, email: f.email }))
+   *   .where(f => condition(f.status, "eq", 1))
+   *   .execute();
+   * // contacts: Array<{ name: string; email: string }>
+   */
   public async execute(): Promise<TResult[]> {
       const raw = await this._table.client.getRecords(this._table.name, this.toString());
       return raw.map((v: any) => this._table.transformValueFromDataverse(v)) as TResult[];
@@ -397,20 +520,56 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 
 // --- Helpers ---
 
+/**
+ * Creates a FetchXML condition element string.
+ *
+ * @example
+ * condition("statuscode", "eq", 1)
+ * // '<condition attribute="statuscode" operator="eq" value="1" />'
+ */
 export function condition(attribute: string, operator: string, value: unknown): string {
     return `<condition attribute="${attribute}" operator="${operator}" value="${value}" />`;
 }
 
+/**
+ * Combines conditions with a logical AND.
+ *
+ * @example
+ * filterAnd(
+ *   condition("statecode", "eq", 0),
+ *   condition("statuscode", "eq", 1),
+ * )
+ */
 export function filterAnd(...conditions: string[]): string {
     return `<filter type="and">${conditions.join("")}</filter>`;
 }
 
+/**
+ * Combines conditions with a logical OR.
+ *
+ * @example
+ * filterOr(
+ *   condition("statecode", "eq", 0),
+ *   condition("statecode", "eq", 1),
+ * )
+ */
 export function filterOr(...conditions: string[]): string {
     return `<filter type="or">${conditions.join("")}</filter>`;
 }
 
 // --- Root Entry Point ---
 
+/**
+ * Creates a new FetchXML query builder for the given table.
+ * Returns an `EntityQueryBuilder` that starts with all table fields selected
+ * and narrows the result type as you chain methods.
+ *
+ * @example
+ * const results = await fetchXml(contactTable)
+ *   .select(f => ({ name: f.name }))
+ *   .where(f => condition(f.statecode, "eq", 0))
+ *   .execute();
+ */
 export function fetchXml<TProps extends GenericProperties>(table: Table<TProps>): EntityQueryBuilder<TProps, Infer<TProps>> {
     return new EntityQueryBuilder(table);
 }

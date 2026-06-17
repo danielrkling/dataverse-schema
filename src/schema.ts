@@ -3,10 +3,19 @@ import { required } from "./validators";
 import { StandardSchemaV1 } from "@standard-schema/spec";
 
 /**
- * Represents a generic property within a dataverse schema.
- * Implements the StandardSchemaV1 interface.
+ * Base class for all Dataverse schema properties. Implements the StandardSchemaV1 interface
+ * for validation and transformation.
  *
- * @template T The type of the property's value.
+ * @template T The TypeScript type of the property's value (e.g. `string`, `number`, `Date`).
+ *
+ * @example
+ * // Custom string property with a regex validator
+ * class SSNField extends Schema<string> {
+ *   constructor(name: string) {
+ *     super(name, "");
+ *     this.check((v) => /^\d{3}-\d{2}-\d{4}$/.test(v) ? undefined : "Invalid SSN");
+ *   }
+ * }
  */
 export class Schema<T> implements StandardSchemaV1<T> {
   name: string;
@@ -17,6 +26,10 @@ export class Schema<T> implements StandardSchemaV1<T> {
 
   #default: any;
 
+  /**
+   * @param name The Dataverse logical name of the column/attribute.
+   * @param defaultValue The default value used when no value is provided.
+   */
   constructor(name: string, defaultValue: T) {
     this.name = name;
     this.fromDataverseName = name
@@ -24,25 +37,36 @@ export class Schema<T> implements StandardSchemaV1<T> {
     this.#default = defaultValue;
   }
 
+  /**
+   * Overrides the default value for this property.
+   *
+   * @example
+   * const field = new StringField("firstname").setDefault("John");
+   * field.getDefault(); // "John"
+   */
   setDefault(value: T): this {
     this.#default = value;
     return this;
   }
 
+  /**
+   * Returns the default value for this property.
+   */
   getDefault(): T {
     return this.#default as T;
   }
 
-  /**
-   * Indicates if the property is read-only. This is a private field.
-   */
   #readOnly: boolean = false;
 
   /**
-   * Sets whether the property is read-only.
+   * Marks this property as read-only. Read-only properties are excluded
+   * when transforming data for Dataverse (e.g. they won't be sent in create/update).
    *
-   * @param [value=true] True if the property should be read-only, false otherwise. Defaults to true.
-   * @returns The Property instance for chaining.
+   * @param value Whether the property should be read-only. Defaults to `true`.
+   *
+   * @example
+   * const field = new StringField("createdby").setReadOnly(true);
+   * field.getReadOnly(); // true
    */
   setReadOnly(value: boolean = true): this {
     this.#readOnly = value;
@@ -50,9 +74,7 @@ export class Schema<T> implements StandardSchemaV1<T> {
   }
 
   /**
-   * Gets whether the property is read-only.
-   *
-   * @returns True if the property is read-only, false otherwise.
+   * Returns whether this property is read-only.
    */
   getReadOnly(): boolean {
     return this.#readOnly;
@@ -60,37 +82,67 @@ export class Schema<T> implements StandardSchemaV1<T> {
 
   #validators: Array<Validator<any>> = [];
 
+  /**
+   * Adds a validation function to this property. Validators run during
+   * {@link validate} and {@link parse}. A validator returns `undefined` if valid,
+   * or an error message string if invalid.
+   *
+   * @example
+   * const field = new StringField("zip").check((v) =>
+   *   /^\d{5}(-\d{4})?$/.test(v) ? undefined : "Invalid ZIP code"
+   * );
+   * field.parse("12345"); // ok
+   * field.parse("abc");   // throws
+   */
   check(v: Validator<T>): this {
     this.#validators.push(v);
     return this;
   }
 
   /**
-   * Adds a required validator to the property.
+   * Adds a "required" validator that rejects `null` or `undefined` values.
    *
-   * @returns The Property instance for chaining.
+   * @example
+   * const field = new StringField("email").required();
+   * field.validate(null);  // { issues: [{ message: "Required" }] }
+   * field.validate("a@b"); // { value: "a@b" }
    */
   required(): this {
     return this.check(required());
   }
 
   /**
-   * Transforms a value received from Dataverse into the property's type.
-   * By default, it returns the value as is. Subclasses can override this for custom transformations.
+   * Transforms a raw value from Dataverse into the property's TypeScript type.
+   * Override this in subclasses for custom deserialization (e.g. string → Date).
    *
-   * @param value The value received from Dataverse.
-   * @returns The transformed value of type T.
+   * @param value The raw value from the Dataverse API.
+   * @returns The typed value.
+   *
+   * @example
+   * // A custom date-only field
+   * class DateOnlyField extends Schema<Date> {
+   *   transformValueFromDataverse(value: any): Date {
+   *     return new Date(value + "T00:00:00Z");
+   *   }
+   * }
    */
   transformValueFromDataverse(value: any): T {
     return value;
   }
 
   /**
-   * Transforms the property's value into a format suitable for sending to Dataverse.
-   * By default, it returns the value as is. Subclasses can override this for custom transformations.
+   * Transforms the property's value into a format suitable for Dataverse.
+   * Override this in subclasses for custom serialization (e.g. Date → string).
    *
-   * @param value The property's value.
-   * @returns The transformed value suitable for Dataverse.
+   * @param value The property value to send to Dataverse.
+   * @returns The serialized value.
+   *
+   * @example
+   * class DateOnlyField extends Schema<Date> {
+   *   transformValueToDataverse(value: Date): string {
+   *     return value.toISOString().slice(0, 10);
+   *   }
+   * }
    */
   transformValueToDataverse(value: any): any {
     return value;
@@ -120,6 +172,15 @@ export class Schema<T> implements StandardSchemaV1<T> {
     return issues;
   }
 
+  /**
+   * Validates a value against this property's validators. Returns either
+   * `{ value }` on success or `{ issues }` on failure.
+   *
+   * @example
+   * const field = new StringField("email").required();
+   * field.validate("test@example.com"); // { value: "test@example.com" }
+   * field.validate(null);               // { issues: [{ message: "Required", path: [] }] }
+   */
   validate(
     value: unknown,
     path: PropertyKey[] = [],
@@ -133,6 +194,19 @@ export class Schema<T> implements StandardSchemaV1<T> {
         };
   }
 
+  /**
+   * Validates a value and returns it if valid, or throws if invalid.
+   * This is a convenience wrapper around {@link validate}.
+   *
+   * @throws {Error} If validation fails, the error message contains the JSON-serialized issues.
+   *
+   * @example
+   * const field = new StringField("age").check((v) =>
+   *   Number(v) >= 0 ? undefined : "Must be non-negative"
+   * );
+   * field.parse("25");  // "25"
+   * field.parse("-1");  // throws Error("[{\"message\":\"Must be non-negative\",\"path\":[]}]")
+   */
   parse(value: unknown): T {
     const result = this.validate(value);
     if (result.issues) {

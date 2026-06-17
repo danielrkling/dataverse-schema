@@ -26,10 +26,27 @@ export type QueryForTable<T> = {
 };
 
 /**
- * Represents a Dataverse table and provides methods for interacting with it.
- * This class now depends on a DataverseClient instance for all its operations.
+ * Represents a Dataverse table (entity) and provides methods for CRUD, querying,
+ * navigation properties, actions, functions, and bulk operations.
  *
- * @template TProperties An object defining the properties of the table.
+ * Use the {@link table} factory function to create instances. All API calls go
+ * through the provided {@link DataverseClient}.
+ *
+ * @template TProperties An object mapping property names to their field definitions.
+ *
+ * @example
+ * const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
+ *
+ * const Account = table(client, "accounts", {
+ *   id: primaryKey("accountid"),
+ *   name: string("name"),
+ *   revenue: number("revenue"),
+ *   primaryContact: lookup("primarycontactid", () => Contact),
+ * });
+ *
+ * // Type-safe queries
+ * const record = await Account.getRecord("GUID-HERE");
+ * console.log(record.name); // typed as string
  */
 export class Table<TProperties extends GenericProperties> extends Schema<
   Infer<TProperties>
@@ -40,11 +57,9 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   type = "table" as const;
 
   /**
-   * Creates a new Table instance.
-   *
-   * @param client An instance of the DataverseClient to use for all API operations.
-   * @param entitySetName The entity set name of the Dataverse table.
-   * @param props An object defining the properties of the table.
+   * @param client An instance of the DataverseClient for all API operations.
+   * @param entitySetName The logical collection name of the Dataverse table (e.g. `"accounts"`).
+   * @param props An object mapping property names to field definitions.
    */
   constructor(
     client: DataverseClient,
@@ -80,7 +95,14 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Retrieves a single record from the table by its ID.
+   * Retrieves a single record by its primary key (GUID) or alternate key.
+   * Returns `null` when the record is not found.
+   *
+   * @param id The primary key GUID, alternate key, or string identifier.
+   *
+   * @example
+   * const account = await Account.getRecord("acme-1234-abcd");
+   * if (account) console.log(account.name);
    */
   async getRecord(id: DataverseKey): Promise<Infer<TProperties> | null> {
     return this.client
@@ -95,7 +117,16 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Retrieves multiple records from the table, optionally with a query.
+   * Retrieves multiple records from the table, with optional filtering, sorting, and paging.
+   *
+   * @param queryOptions Optional query parameters (filter, orderby, top).
+   *
+   * @example
+   * const activeAccounts = await Account.getRecords({
+   *   filter: "statecode eq 0",
+   *   orderby: "name asc",
+   *   top: 10,
+   * });
    */
   async getRecords(
     queryOptions?: QueryForTable<TProperties>,
@@ -106,7 +137,12 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Retrieves the value of a specific property for a record.
+   * Retrieves the value of a single property for a record by ID.
+   * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
+   *
+   * @example
+   * const age = await Person.getPropertyValue("age", "some-guid");
+   * const address = await Person.getPropertyValue("primaryAddress", "some-guid");
    */
   async getPropertyValue<TKey extends keyof TProperties>(
     key: TKey,
@@ -151,7 +187,11 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Updates the value of a specific property for a record.
+   * Updates the value of a single property for a record by ID.
+   * For navigation properties, this associates/dissociates related records.
+   *
+   * @example
+   * await Person.updatePropertyValue("age", "some-guid", 35);
    */
   async updatePropertyValue<TKey extends keyof TProperties>(
     key: TKey,
@@ -217,7 +257,10 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Associates a child record with a parent record through a navigation property.
+   * Links an existing child record to a parent record through a navigation property.
+   *
+   * @example
+   * await Person.associateRecord("primaryAddress", "person-guid", "address-guid");
    */
   async associateRecord<
     TKey extends NarrowKeysByValue<TProperties, GenericNavigationProperty>,
@@ -237,7 +280,14 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Dissociates a child record from a parent record through a navigation property.
+   * Removes the link between a parent and child record through a navigation property.
+   * Overloads:
+   * - Collection/collectionIds: requires childId
+   * - Lookup/lookupId: omits childId (clears the lookup)
+   *
+   * @example
+   * await Person.dissociateRecord("addresses", "person-guid", "address-guid");
+   * await Person.dissociateRecord("primaryAddress", "person-guid"); // clears lookup
    */
   async dissociateRecord<
     TKey extends NarrowKeysByValue<
@@ -262,6 +312,14 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     }
   }
 
+  /**
+   * Creates a new record in Dataverse and returns its generated GUID.
+   *
+   * @param value The record data (partial — primary key is auto-generated).
+   *
+   * @example
+   * const newId = await Person.insertRecord({ name: "John", age: 30 });
+   */
   async insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
     const pkName = this.getPrimaryKey().property.name;
     const record = await this.client.postRecord(
@@ -272,6 +330,18 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     return record?.[pkName] as GUID;
   }
 
+  /**
+   * Updates an existing record by ID. Supports optimistic concurrency via etag.
+   *
+   * @param id The record's primary key.
+   * @param value The fields to update (partial record data).
+   * @param etag Optional etag for conditional updates (If-Match header).
+   *
+   * @example
+   * await Person.updateRecord("some-guid", { name: "Jane" });
+   * // With etag:
+   * await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
+   */
   async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     if (!id) throw new Error("No ID provided")
     await this.client.patchRecord(
@@ -285,8 +355,19 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Upserts a record to the table. Creates a new record if id is undefined,
-   * or updates an existing one if an id is provided.
+   * Creates or updates a record. If `id` is provided the record is updated;
+   * otherwise a new record is created. Navigation properties (collections, lookups)
+   * are also synced through nested upserts.
+   *
+   * @param id The GUID of an existing record, or `undefined` to create new.
+   * @param value The record data (partial for updates).
+   * @param etag Optional etag for conditional upsert.
+   *
+   * @example
+   * // Create
+   * const newId = await Person.upsertRecord(undefined, { name: "John" });
+   * // Update
+   * await Person.upsertRecord(existingId, { name: "Jane" });
    */
   async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     const promises: Promise<any>[] = [];
@@ -328,22 +409,44 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Deletes a record from the table by its ID.
+   * Deletes a record by its primary key. Supports optimistic concurrency via etag.
+   *
+   * @param id The primary key of the record to delete.
+   * @param etag Optional etag for conditional deletion.
+   *
+   * @example
+   * await Person.deleteRecord("some-guid");
    */
   async deleteRecord(id: DataverseKey, etag?: string): Promise<GUID> {
     return this.client.deleteRecord(this.name, id, etag);
   }
 
+  /**
+   * Activates a record by setting its `statecode` to 0.
+   *
+   * @example
+   * await Person.activateRecord("some-guid");
+   */
   async activateRecord(id: DataverseKey): Promise<GUID>{
     return this.client.activateRecord(this.name,id)
   }
 
-    async deactivateRecord(id: DataverseKey): Promise<GUID>{
+  /**
+   * Deactivates a record by setting its `statecode` to 1.
+   *
+   * @example
+   * await Person.deactivateRecord("some-guid");
+   */
+  async deactivateRecord(id: DataverseKey): Promise<GUID>{
     return this.client.deactivateRecord(this.name,id)
   }
 
   /**
-   * Deletes the value of a specific property for a record.
+   * Deletes (clears) the value of a value property for a record. Cannot be used
+   * on navigation properties.
+   *
+   * @example
+   * await Person.deletePropertyValue("name", "some-guid");
    */
   async deletePropertyValue<
     TKey extends NarrowKeysByValue<TProperties, GenericValueProperty>,
@@ -360,8 +463,18 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   //
 
   /**
-   * Executes a bound Dataverse action on this entity set.
-   * POST /{entitySet}/Microsoft.Dynamics.CRM.{ActionName}
+   * Executes a bound Dataverse action on this entity set or a specific record.
+   * POST /{entitySet}({id})/Microsoft.Dynamics.CRM.{ActionName}
+   *
+   * @param actionName The Dataverse action name (without the CRM namespace prefix, e.g. `"GenerateInvoice"`).
+   * @param params Optional parameters to pass in the request body.
+   * @param id Optional record GUID — if provided, the action is bound to a specific record.
+   *
+   * @example
+   * // Bound to entity set
+   * await Account.executeAction("BulkDetectDuplicates", { ... });
+   * // Bound to a record
+   * await Account.executeAction("CalculatePrice", { discount: 10 }, "record-guid");
    */
   async executeAction(actionName: string, params?: Record<string, any>, id?: DataverseKey): Promise<any> {
     if (id) {
@@ -371,8 +484,18 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Executes a bound Dataverse function on this entity set.
+   * Executes a bound Dataverse function on a record.
    * GET /{entitySet}({id})/Microsoft.Dynamics.CRM.{FunctionName}(...)
+   *
+   * @param functionName The Dataverse function name (e.g. `"CalculateActualValueOfOpportunity"`).
+   * @param id The record GUID to bind the function to.
+   * @param params Optional function parameters (appended as query parameters).
+   *
+   * @example
+   * const result = await Opportunity.executeFunction(
+   *   "CalculateActualValueOfOpportunity",
+   *   "opportunity-guid",
+   * );
    */
   async executeFunction(functionName: string, id: DataverseKey, params?: Record<string, any>): Promise<any> {
     return this.client.executeBoundFunction(this.name, id as string, functionName, params);
@@ -383,7 +506,15 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   //
 
   /**
-   * Creates multiple records in a single API call.
+   * Creates multiple records in a single API call via `CreateMultiple`.
+   *
+   * @param records Array of partial records to create.
+   *
+   * @example
+   * await Account.createMultiple([
+   *   { name: "Acme" },
+   *   { name: "Beta" },
+   * ]);
    */
   async createMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
     return this.client.createMultiple(
@@ -393,7 +524,15 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Updates multiple records in a single API call.
+   * Updates multiple records in a single API call via `UpdateMultiple`.
+   *
+   * @param records Array of partial records to update (must include primary key).
+   *
+   * @example
+   * await Account.updateMultiple([
+   *   { id: "guid-1", name: "Acme Updated" },
+   *   { id: "guid-2", name: "Beta Updated" },
+   * ]);
    */
   async updateMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
     return this.client.updateMultiple(
@@ -403,12 +542,25 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Deletes multiple records in a single API call by their IDs.
+   * Deletes multiple records in a single API call via `DeleteMultiple`.
+   *
+   * @param ids Array of record GUIDs to delete.
+   *
+   * @example
+   * await Account.deleteMultiple(["guid-1", "guid-2"]);
    */
   async deleteMultiple(ids: string[]): Promise<any> {
     return this.client.deleteMultiple(this.name, ids);
   }
 
+  /**
+   * Returns the primary key field definition for this table.
+   *
+   * @example
+   * const pk = Account.getPrimaryKey();
+   * console.log(pk.key);      // "id"
+   * console.log(pk.property.name); // "accountid"
+   */
   getPrimaryKey() {
     const result = Object.entries(this.fields).find(
       (f) => f[1].type === "primaryKey",
@@ -420,6 +572,13 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     };
   }
 
+  /**
+   * Extracts the primary key GUID from a record object, or `undefined` if not present.
+   *
+   * @example
+   * const account = await Account.getRecord("some-guid");
+   * const pk = Account.getPrimaryId(account); // GUID | undefined
+   */
   getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined {
     const { key } = this.getPrimaryKey();
     return value[key as keyof typeof value] as GUID | undefined;
@@ -453,7 +612,12 @@ export class Table<TProperties extends GenericProperties> extends Schema<
   }
 
   /**
-   * Creates a new Table instance with a subset of the original table's properties.
+   * Creates a new `Table` with only the specified properties. Useful for
+   * narrowing the type when querying a subset of columns.
+   *
+   * @example
+   * const NameOnly = Account.pickProperties("name", "id");
+   * const records = await NameOnly.getRecords(); // { name: string; id: GUID }[]
    */
   pickProperties<TKeys extends keyof TProperties>(
     ...keys: TKeys[]
@@ -461,12 +625,14 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => keys.includes(v[0] as any)),
     ) as Pick<TProperties, TKeys>;
-    // Pass the client instance to the new Table
     return new Table(this.client, this.name, properties);
   }
 
   /**
-   * Creates a new Table instance with all but the specified properties from the original table.
+   * Creates a new `Table` with the specified properties excluded.
+   *
+   * @example
+   * const WithoutSensitive = Person.omitProperties("ssn");
    */
   omitProperties<TKeys extends keyof TProperties>(
     ...keys: TKeys[]
@@ -474,12 +640,17 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => !keys.includes(v[0] as any)),
     ) as Omit<TProperties, TKeys>;
-    // Pass the client instance to the new Table
     return new Table(this.client, this.name, properties);
   }
 
   /**
-   * Creates a new Table instance with additional properties added to the original table's properties.
+   * Creates a new `Table` with additional properties appended.
+   *
+   * @example
+   * const Extended = Account.appendProperties({
+   *   customField: string("new_stringcolumn"),
+   * });
+   * // Extended has all original fields plus `customField`
    */
   appendProperties<TAppendedProperties extends GenericProperties>(
     properties: TAppendedProperties,
@@ -490,12 +661,31 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     } as any);
   }
 
-  /** Use for typescript only. const x: typeof table.T */
+  /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
   T!: Infer<TProperties>;
 }
 
 /**
- * Factory function to create a new Table instance.
+ * Creates a new {@link Table} instance bound to a Dataverse entity set.
+ * This is the primary entry point for defining table schemas.
+ *
+ * @param client The {@link DataverseClient} instance used for all API calls.
+ * @param name The logical collection name of the entity (e.g. `"accounts"`).
+ * @param properties An object mapping property names to field definitions (`primaryKey`, `string`, `number`, `lookup`, `collection`, etc.).
+ *
+ * @example
+ * const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
+ *
+ * const Contact = table(client, "contacts", {
+ *   id: primaryKey("contactid"),
+ *   fullName: string("fullname"),
+ *   email: string("emailaddress1"),
+ *   age: number("age"),
+ * });
+ *
+ * // Type-safe CRUD
+ * const record = await Contact.getRecord("guid");
+ * console.log(record.fullName); // string
  */
 export function table<TProperties extends GenericProperties>(
   client: DataverseClient,

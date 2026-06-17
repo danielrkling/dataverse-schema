@@ -185,57 +185,189 @@ export class FileField extends Schema<string> {
   }
 }
 
+/**
+ * Creates a boolean-typed Dataverse column definition.
+ *
+ * @param name The Dataverse logical name of the column (e.g. `"is_active"`).
+ *
+ * @example
+ * const table = defineTable({
+ *   isActive: boolean("is_active"),
+ * });
+ * // Infer<typeof table>["isActive"] → boolean
+ */
 export function boolean(name: string) {
   return new BooleanField(name);
 }
 
+/**
+ * Creates a number-typed Dataverse column definition.
+ *
+ * @param name The Dataverse logical name of the column (e.g. `"person_age"`).
+ *
+ * @example
+ * const table = defineTable({
+ *   age: number("person_age"),
+ * });
+ * // Infer<typeof table>["age"] → number
+ */
 export function number(name: string) {
   return new NumberField(name);
 }
 
+/**
+ * Creates a nullable number column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   age: nullableNumber("person_age"),
+ * });
+ * // Infer<typeof table>["age"] → number | null
+ */
 export function nullableNumber(name: string) {
   return new NullableNumberField(name);
 }
+
+/**
+ * Creates a string-typed Dataverse column definition.
+ *
+ * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
+ *
+ * @example
+ * const table = defineTable({
+ *   name: string("fullname"),
+ * });
+ * // Infer<typeof table>["name"] → string
+ */
 export function string(name: string) {
   return new StringField(name);
 }
 
+/**
+ * Creates a nullable string column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   middleName: nullableString("middlename"),
+ * });
+ * // Infer<typeof table>["middleName"] → string | null
+ */
 export function nullableString(name: string) {
   return new NullableStringField(name);
 }
 
+/**
+ * Creates a primary key (GUID) column definition for a Dataverse table.
+ *
+ * @param name The Dataverse logical name of the primary key column (e.g. `"contactid"`).
+ *
+ * @example
+ * const table = defineTable({
+ *   id: primaryKey("contactid"),
+ * });
+ * // Infer<typeof table>["id"] → `${string}-${string}-${string}-${string}-${string}`
+ */
 export function primaryKey(name: string) {
   return new PrimaryKeyField(name);
 }
 
+/**
+ * Creates a choice/option-set column definition with a fixed set of allowed values.
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param list The array of allowed string or numeric values.
+ *
+ * @example
+ * const table = defineTable({
+ *   gender: list("gendercode", [1, 2]),
+ * });
+ * // Infer<typeof table>["gender"] → 1 | 2 | null
+ */
 export function list<T extends string | number>(name: string, list: Array<T>) {
   return new ListField<T>(name, list);
 }
 
+/**
+ * Creates a date-time column definition (maps to JavaScript `Date`).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   createdAt: datetime("createdon"),
+ * });
+ * // Infer<typeof table>["createdAt"] → Date
+ */
 export function datetime(name: string) {
   return new DateTimeField(name);
 }
 
+/**
+ * Creates a date-only column definition (maps to JavaScript `Date`, time portion is zeroed).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   birthDate: date("birthdate"),
+ * });
+ * // Infer<typeof table>["birthDate"] → Date
+ */
 export function date(name: string) {
   return new DateField(name);
 }
 
+/**
+ * Creates a nullable date-only column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ */
 export function nullableDate(name: string){
   return new NullableDateField(name)
 }
 
+/**
+ * Creates a nullable date-time column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ */
 export function nullableDateTime(name: string){
   return new NullableDateTimeField(name)
 }
 
+/**
+ * Creates a formatted-value column definition for retrieving user-localized display values
+ * (e.g. for option-set labels). These are read-only.
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   statusLabel: formatted("statuscode"),
+ * });
+ */
 export function formatted(name: string) {
   return new FormattedField(name);
 }
 
+/**
+ * Creates an image column definition.
+ *
+ * @param name The Dataverse logical name of the image column.
+ */
 export function image(name: string) {
   return new ImageField(name);
 }
 
+/**
+ * Creates a file column definition. File columns are read-only and store the file name.
+ *
+ * @param name The Dataverse logical name of the file column.
+ */
 export function file(name: string){
   return new FileField(name)
 }
@@ -313,6 +445,21 @@ export class CollectionProperty<
   }
 }
 
+/**
+ * Creates a one-to-many (collection) navigation property definition. The related records
+ * can be expanded via OData `$expand` or fetched through the table API.
+ *
+ * @param name The Dataverse logical name of the collection navigation property.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), street: string("street"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   addresses: collection("person_addresses", () => Address),
+ * });
+ * // Infer<typeof Person>["addresses"] → { id: GUID; street: string }[]
+ */
 export function collection<TProperties extends GenericProperties>(
   name: string,
   getTable: GetTable<Table<TProperties>>,
@@ -360,10 +507,40 @@ export class CollectionIdsProperty extends Schema<GUID[]> {
   }
 }
 
+/**
+ * Creates a collection-of-IDs navigation property definition. Unlike a full collection,
+ * this only stores the related record IDs (GUIDs), not the full records.
+ *
+ * @param name The Dataverse logical name of the navigation property.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   addressIds: collectionIds("person_addresses", () => Address),
+ * });
+ * // Infer<typeof Person>["addressIds"] → `${string}-${string}-${string}-${string}-${string}`[]
+ */
 export function collectionIds(name: string, getTable: GetTable) {
   return new CollectionIdsProperty(name, getTable);
 }
 
+/**
+ * Creates a lookup-ID navigation property definition. This stores only the foreign-key
+ * GUID of the related record (not the full expanded record).
+ *
+ * @param name The Dataverse logical name of the lookup column.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   primaryAddressId: lookupId("primaryaddressid", () => Address),
+ * });
+ * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
+ */
 export function lookupId(name: string, getTable: GetTable) {
   return new LookupIdProperty(name, getTable);
 }
@@ -398,6 +575,21 @@ export class LookupProperty<
   }
 }
 
+/**
+ * Creates a many-to-one (lookup) navigation property definition. The related record
+ * can be expanded via OData `$expand` or fetched through the table API.
+ *
+ * @param name The Dataverse logical name of the lookup column.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   primaryAddress: lookup("primaryaddressid", () => Address),
+ * });
+ * // Infer<typeof Person>["primaryAddress"] → { id: GUID; ... } | null
+ */
 export function lookup<TProperties extends GenericProperties>(
   name: string,
   getTable: GetTable<Table<TProperties>>,

@@ -37,6 +37,26 @@ type ODataFieldProxy<T extends GenericProperties> = {
     : string
 }
 
+/**
+ * A type-safe OData query builder for Dataverse. Construct OData query strings
+ * with `$select`, `$filter`, `$expand`, `$orderby`, `$top`, `$count`, `$apply`,
+ * and `$ref` using auto-completing field proxies.
+ *
+ * Create one via {@link fetchOdata} — never instantiate directly.
+ *
+ * @template T The table's property definitions.
+ * @template TResult The result row shape (narrowed by `.select()`, `.expand()`, etc.).
+ *
+ * @example
+ * const q = fetchOdata(Person)
+ *   .select("name", "age")
+ *   .where(f => equals(f.name, "John"))
+ *   .orderby({ name: "asc" })
+ *   .top(10);
+ *
+ * const results = await q.execute();
+ * // results: { name: string; age: number }[]
+ */
 export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _table: Table<T>
   private _fields: string[] = []
@@ -111,11 +131,48 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     return proxy
   }
 
+  /**
+   * Restricts the returned columns to the specified fields.
+   * This narrows the result type to only the selected properties.
+   *
+   * @param keys One or more value-field keys (navigation properties are excluded).
+   *
+   * @example
+   * const q = fetchOdata(Person).select("name", "age");
+   * // TResult → { name: string; age: number }
+   */
   select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, { [P in K]: Infer<T[P]> }> {
     this._fields = keys.map(k => this._proxy[k] as string)
     return this as any
   }
 
+  /**
+   * Adds a `$filter` clause. Can be a raw OData filter string or a callback
+   * that receives a typed field proxy. Multiple `.where()` calls are combined
+   * with `and`.
+   *
+   * @overload
+   * @param filter A raw OData filter string.
+   *
+   * @overload
+   * @param filter A callback receiving a field proxy for type-safe filter construction.
+   *
+   * @example
+   * // String overload:
+   * fetchOdata(Person).where("fullname eq 'John'");
+   *
+   * @example
+   * // Callback with field proxy and filter helpers:
+   * fetchOdata(Person)
+   *   .where(f => and(equals(f.name, "John"), greaterThan(f.age, 20)));
+   *
+   * @example
+   * // Multiple where calls stack additively:
+   * fetchOdata(Person)
+   *   .where(f => equals(f.name, "John"))
+   *   .where(f => greaterThan(f.age, 20));
+   * // $filter=(fullname eq 'John') and (person_age gt 20)
+   */
   where(filter: string): this
   where(filter: (f: ODataFieldProxy<T>) => string): this
   where(filter: string | ((f: ODataFieldProxy<T>) => string)): this {
@@ -124,6 +181,26 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     return this
   }
 
+  /**
+   * Adds a `$expand` clause for a navigation property. The callback receives a
+   * nested {@link ODataQuery} scoped to the related table for further `.select()`,
+   * `.where()`, `.expand()`, etc.
+   *
+   * @param key The navigation property key.
+   * @param sub A callback to configure the nested query.
+   *
+   * @example
+   * fetchOdata(Person)
+   *   .select("name")
+   *   .expand("primaryAddress", sub => sub.select("street", "zip"));
+   *
+   * @example
+   * // Nested expand:
+   * fetchOdata(Person)
+   *   .expand("primaryAddress", sub =>
+   *     sub.expand("location", sub2 => sub2.select("name"))
+   *   );
+   */
   expand<K extends string & NavKeys<T>, R>(
     key: K,
     sub: (q: ODataQuery<RelatedProps<T, K>>) => ODataQuery<RelatedProps<T, K>, R>,
@@ -136,6 +213,25 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     return this as any
   }
 
+  /**
+   * Adds a `$orderby` clause. Supports function callback with auto-completing
+   * field proxy, `asc`/`desc` helpers, or a simple direction map.
+   *
+   * @overload
+   * @param spec Callback that receives a field proxy and returns an ordering spec.
+   *
+   * @overload
+   * @param keys An object mapping field names to `"asc"` or `"desc"`.
+   *
+   * @example
+   * // Function overload with asc/desc helpers:
+   * fetchOdata(Person).orderby(f => asc(f.name, f.age));
+   * fetchOdata(Person).orderby(f => desc(f.age));
+   *
+   * @example
+   * // Record overload:
+   * fetchOdata(Person).orderby({ name: "asc", age: "desc" });
+   */
   orderby(spec: (f: ODataFieldProxy<T>) => OrderSpec | OrderSpec[] | Record<string, "asc" | "desc">): this
   orderby(keys: { [K in keyof T]?: "asc" | "desc" }): this
   orderby(arg: any): this {
@@ -158,21 +254,54 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     return this
   }
 
+  /**
+   * Limits the number of returned records (`$top`).
+   *
+   * @example
+   * fetchOdata(Person).top(10);
+   */
   top(n: number): this {
     this._top = n
     return this
   }
 
+  /**
+   * Includes the total record count in the response (`$count=true`).
+   *
+   * @example
+   * const q = fetchOdata(Person).includeCount();
+   * // query string: "$count=true"
+   */
   includeCount(): this {
     this._includeCount = true
     return this
   }
 
+  /**
+   * Adds a `$apply` expression for server-side aggregation.
+   *
+   * @param expression A raw OData `$apply` expression.
+   *
+   * @example
+   * fetchOdata(Person).apply("groupby((person_age),aggregate(person_age with sum as total))");
+   */
   apply(expression: string): this {
     this._apply = expression
     return this
   }
 
+  /**
+   * Adds a `$expand` with `/$ref` to retrieve only the related record IDs
+   * instead of full expanded records. The navigation property is removed from
+   * the result type.
+   *
+   * @param key The navigation property key.
+   *
+   * @example
+   * const q = fetchOdata(Person).expandRef("primaryAddress");
+   * // query: "$expand=person_Address/$ref"
+   * // TResult no longer includes primaryAddress
+   */
   expandRef<K extends string & NavKeys<T>>(
     key: K,
   ): ODataQuery<T, Omit<TResult, K & keyof TResult>> {

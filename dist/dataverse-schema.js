@@ -1,70 +1,18 @@
 const Etag = Symbol("etag");
-const globalConfig = {
-  url: `${location.origin}/api/data/v9.2`,
-  headers: {
-    "OData-MaxVersion": "4.0",
-    "OData-Version": "4.0",
-    "Content-Type": "application/json; charset=utf-8",
-    "If-None-Match": "null",
-    Accept: "application/json",
-    MSCRMCallerID: localStorage.getItem("MSCRMCallerID") ?? "",
-    CallerObjectId: localStorage.getItem("CallerObjectId") ?? ""
-  }
-};
-function setConfig(config) {
-  globalConfig.headers = { ...globalConfig.headers, ...config.headers };
-  if (config.url) globalConfig.url = config.url;
+function attachEtag(v) {
+  if (v && typeof v === "object")
+    v[Etag] = v["@odata.etag"];
+  return v;
 }
-const parenthesesRegEx = /\(([^)]*)\)/g;
-async function tryFetch(url, init) {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      ...globalConfig.headers,
-      ...init?.headers
-    }
-  });
-  if (response.headers.get("Content-Type")?.includes("application/json")) {
-    const data = await response.json();
-    if (data.error) {
-      if (data.error.code === "0x80060891") return null;
-      throw data.error;
-    }
-    return data;
-  }
-  if (!response.ok) {
-    throw new Error(response.status + "-" + response.statusText);
-  }
-  if (response.status == 204) {
-    const entityId = response.headers.get("OData-EntityId");
-    if (entityId) return parenthesesRegEx.exec(entityId)?.[1];
-    return;
-  }
-  return await response.text();
+function getEtag(v) {
+  return v?.[Etag];
 }
-async function fetchChoices(name) {
-  return tryFetch(`${globalConfig.url}/GlobalOptionSetDefinitions(Name=${wrapString(name)})`).then(
-    (v) => mapChoices(v)
-  );
-}
-function mapChoices(data) {
-  return [...data.Options].map((option) => ({
-    value: Number(option.Value),
-    color: String(option.Color),
-    label: String(option.Label.UserLocalizedLabel.Label),
-    description: String(option.Description.UserLocalizedLabel.Label)
-  }));
+function mergeRecords(prevRecords, newRecords) {
+  const prevMap = new Map(prevRecords.map((v) => [v[Etag], v]));
+  return newRecords.map((v) => prevMap.get(v[Etag]) ?? v);
 }
 function xml(raw, ...values) {
-  let result = String.raw(raw, values);
-  result = result.replace(/>\s*/g, ">");
-  result = result.replace(/\s*</g, "<");
-  return result;
-}
-async function fetchXml(entitySetName, xml2) {
-  return tryFetch(`${globalConfig.url}/${entitySetName}?fetchXml=${xml2}`).then(
-    (v) => v.value
-  );
+  return String.raw(raw, values).trim().replace(/>\s+</g, "><");
 }
 function toBase64(file) {
   return new Promise((resolve, reject) => {
@@ -95,304 +43,1055 @@ function detectImageType(base64) {
 function getImageUrl(entity, name, id) {
   return `${location.origin}/Image/download.aspx?Entity=${entity}&Attribute=${name}&Id=${id}&Full=true`;
 }
+function parseDateOnly(dateString) {
+  const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
+  return new Date(year ?? 0, (month ?? 0) - 1, day);
+}
+function toDateOnly(date) {
+  try {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  } catch (e) {
+    return null;
+  }
+}
+function getName(name) {
+  if (typeof name === "string") return name;
+  if ("name" in name) return name.name;
+  if (typeof name.toString === "function") return name.toString();
+  return String(name);
+}
+
 function isNonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
 }
-const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
 const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
 function wrapString(value) {
-  return typeof value === "string" && !rxGUID.test(value) && !rxDateOnly.test(value) ? `'${value}'` : String(value);
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    if (rxGUID.test(value) || rxDateOnly.test(value)) {
+      return value;
+    }
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  return String(value);
 }
-function attachEtag(v) {
-  if (v && typeof v === "object")
-    v[Etag] = v["@odata.etag"];
-  return v;
+function query(queryObj) {
+  const params = new URLSearchParams();
+  if (queryObj.select) params.set("$select", queryObj.select);
+  if (queryObj.expand) params.set("$expand", queryObj.expand);
+  if (queryObj.orderby) params.set("$orderby", queryObj.orderby);
+  if (queryObj.filter) params.set("$filter", queryObj.filter);
+  if (queryObj.top) params.set("$top", queryObj.top.toFixed(0));
+  if (queryObj.apply) params.set("$apply", queryObj.apply);
+  return params.toString();
 }
-function mergeRecords(prevRecords, newRecords) {
-  const prevMap = new Map(prevRecords.map((v) => [v[Etag], v]));
-  return newRecords.map((v) => prevMap.get(v[Etag]) ?? v);
+function fetchXML(xml) {
+  return `fetchXml=${xml.trim().replace(/>\s+</g, "><")}`;
+}
+function select(...values) {
+  return values.map(getName).filter(isNonEmptyString).join(",");
+}
+function orderby(values) {
+  if (Array.isArray(values)) return values.filter(isNonEmptyString).join(",");
+  return Object.entries(values).filter(([, v]) => isNonEmptyString(v)).map(([k, v]) => `${k} ${v}`).join(",");
+}
+class OrderSpec {
+  constructor(fields, direction) {
+    this.fields = fields;
+    this.direction = direction;
+  }
+  toString() {
+    return this.fields.map((f) => `${f} ${this.direction}`).join(",");
+  }
+}
+function asc(...fields) {
+  return new OrderSpec(fields.map(getName), "asc");
+}
+function desc(...fields) {
+  return new OrderSpec(fields.map(getName), "desc");
+}
+function keys(keyValues) {
+  return Object.entries(keyValues).filter(([, v]) => isNonEmptyString(String(v))).map(([k, v]) => `${k}=${wrapString(v)}`).join(",");
+}
+function expand(values) {
+  if (typeof values === "string") return values;
+  return Object.entries(values).map(([name, v]) => {
+    if (typeof v === "string") return v;
+    const expandParts = [];
+    if (v.select)
+      expandParts.push(
+        `$select=${select(...Array.isArray(v.select) ? v.select : [v.select])}`
+      );
+    if (v.filter) expandParts.push(`$filter=${v.filter}`);
+    if (v.orderby) expandParts.push(`$orderby=${orderby(v.orderby)}`);
+    if (v.expand) expandParts.push(`$expand=${expand(v.expand)}`);
+    return `${name}(${expandParts.join(";")})`;
+  }).join(",");
+}
+function and(...conditions) {
+  const valid = conditions.filter(isNonEmptyString);
+  return valid.length === 0 ? "" : `(${valid.join(" and ")})`;
+}
+function or(...conditions) {
+  const valid = conditions.filter(isNonEmptyString);
+  return valid.length === 0 ? "" : `(${valid.join(" or ")})`;
+}
+function not(condition) {
+  return isNonEmptyString(condition) ? `not(${condition})` : "";
+}
+function contains(field, value) {
+  return `contains(${getName(field)},${wrapString(value)})`;
+}
+function startsWith(field, value) {
+  return `startswith(${getName(field)},${wrapString(value)})`;
+}
+function endsWith(field, value) {
+  return `endswith(${getName(field)},${wrapString(value)})`;
+}
+function equals(field, value) {
+  return `(${getName(field)} eq ${wrapString(value)})`;
+}
+function notEquals(field, value) {
+  return `(${getName(field)} ne ${wrapString(value)})`;
+}
+function greaterThan(field, value) {
+  return `(${getName(field)} gt ${wrapString(value)})`;
+}
+function greaterThanOrEqual(field, value) {
+  return `(${getName(field)} ge ${wrapString(value)})`;
+}
+function lessThan(field, value) {
+  return `(${getName(field)} lt ${wrapString(value)})`;
+}
+function lessThanOrEqual(field, value) {
+  return `(${getName(field)} le ${wrapString(value)})`;
+}
+function isActive() {
+  return "statecode eq 0";
+}
+function isInactive() {
+  return "statecode eq 1";
+}
+function isNull(field) {
+  return `${getName(field)} eq null`;
+}
+function isNotNull(field) {
+  return `${getName(field)} ne null`;
+}
+function groupby(values, aggregations) {
+  return `groupby((${values.map(getName).filter(isNonEmptyString).join(",")})${aggregations ? "," + aggregations : ""})`;
+}
+function aggregate(...values) {
+  return `aggregate(${values.filter(isNonEmptyString).join(",")})`;
+}
+function average(field, alias) {
+  const name = getName(field);
+  return `${name} with average as ${alias ?? name}`;
+}
+function sum(field, alias) {
+  const name = getName(field);
+  return `${name} with sum as ${alias ?? name}`;
+}
+function min(field, alias) {
+  const name = getName(field);
+  return `${name} with min as ${alias ?? name}`;
+}
+function max(field, alias) {
+  const name = getName(field);
+  return `${name} with max as ${alias ?? name}`;
+}
+function count(alias = "count") {
+  return `$count as ${alias}`;
+}
+const Above = (field, value) => `Microsoft.Dynamics.CRM.Above(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const AboveOrEqual = (field, value) => `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const Between = (field, value1, value2) => `Microsoft.Dynamics.CRM.Between(PropertyName=${getName(field)},PropertyValues=[${wrapString(value1)},${wrapString(value2)}])`;
+const ContainsValues = (field, values) => `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
+const DoesNotContainValues = (field, values) => `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
+const EqualBusinessId = (field) => `Microsoft.Dynamics.CRM.EqualBusinessId(PropertyName=${getName(field)})`;
+const EqualUserId = (field) => `Microsoft.Dynamics.CRM.EqualUserId(PropertyName=${wrapString(getName(field))})`;
+const EqualUserLanguage = (field) => `Microsoft.Dynamics.CRM.EqualUserLanguage(PropertyName=${getName(field)})`;
+const EqualUserOrUserHierarchy = (field) => `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${getName(field)})`;
+const EqualUserOrUserHierarchyAndTeams = (field) => `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${getName(field)})`;
+const EqualUserOrUserTeams = (field) => `Microsoft.Dynamics.CRM.EqualUserOrUserTeams(PropertyName=${getName(field)})`;
+const In = (field, values) => `Microsoft.Dynamics.CRM.In(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
+const InFiscalPeriod = (field, value) => `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${getName(field)},PropertyValue=${value})`;
+const InFiscalPeriodAndYear = (field, fiscalPeriod, fiscalYear) => `Microsoft.Dynamics.CRM.InFiscalPeriodAndYear(PropertyName=${getName(field)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+const InFiscalYear = (field, value) => `Microsoft.Dynamics.CRM.InFiscalYear(PropertyName=${getName(field)},PropertyValue=${value})`;
+const InOrAfterFiscalPeriodAndYear = (field, fiscalPeriod, fiscalYear) => `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${getName(field)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+const InOrBeforeFiscalPeriodAndYear = (field, fiscalPeriod, fiscalYear) => `Microsoft.Dynamics.CRM.InOrBeforeFiscalPeriodAndYear(PropertyName=${getName(field)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
+const Last7Days = (field) => `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${getName(field)})`;
+const LastFiscalPeriod = (field) => `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${getName(field)})`;
+const LastFiscalYear = (field) => `Microsoft.Dynamics.CRM.LastFiscalYear(PropertyName=${getName(field)})`;
+const LastMonth = (field) => `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${getName(field)})`;
+const LastWeek = (field) => `Microsoft.Dynamics.CRM.LastWeek(PropertyName=${getName(field)})`;
+const LastXDays = (field, value) => `Microsoft.Dynamics.CRM.LastXDays(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastXFiscalPeriods = (field, value) => `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastXFiscalYears = (field, value) => `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastXHours = (field, value) => `Microsoft.Dynamics.CRM.LastXHours(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastXMonths = (field, value) => `Microsoft.Dynamics.CRM.LastXMonths(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastXWeeks = (field, value) => `Microsoft.Dynamics.CRM.LastXWeeks(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastXYears = (field, value) => `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${getName(field)},PropertyValue=${value})`;
+const LastYear = (field) => `Microsoft.Dynamics.CRM.LastYear(PropertyName=${getName(field)})`;
+const Next7Days = (field) => `Microsoft.Dynamics.CRM.Next7Days(PropertyName=${getName(field)})`;
+const NextFiscalPeriod = (field) => `Microsoft.Dynamics.CRM.NextFiscalPeriod(PropertyName=${getName(field)})`;
+const NextFiscalYear = (field) => `Microsoft.Dynamics.CRM.NextFiscalYear(PropertyName=${getName(field)})`;
+const NextMonth = (field) => `Microsoft.Dynamics.CRM.NextMonth(PropertyName=${getName(field)})`;
+const NextWeek = (field) => `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${getName(field)})`;
+const NextXDays = (field, value) => `Microsoft.Dynamics.CRM.NextXDays(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextXFiscalPeriods = (field, value) => `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextXFiscalYears = (field, value) => `Microsoft.Dynamics.CRM.NextXFiscalYears(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextXHours = (field, value) => `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextXMonths = (field, value) => `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextXWeeks = (field, value) => `Microsoft.Dynamics.CRM.NextXWeeks(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextXYears = (field, value) => `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${getName(field)},PropertyValue=${value})`;
+const NextYear = (field) => `Microsoft.Dynamics.CRM.NextYear(PropertyName=${getName(field)})`;
+const NotBetween = (field, value1, value2) => `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${getName(field)},PropertyValues=[${wrapString(value1)},${wrapString(value2)}])`;
+const NotEqualBusinessId = (field) => `Microsoft.Dynamics.CRM.NotEqualBusinessId(PropertyName=${getName(field)})`;
+const NotEqualUserId = (field) => `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${getName(field)})`;
+const NotIn = (field, values) => `Microsoft.Dynamics.CRM.NotIn(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
+const NotUnder = (field, value) => `Microsoft.Dynamics.CRM.NotUnder(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const OlderThanXDays = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXDays(PropertyName=${getName(field)},PropertyValue=${value})`;
+const OlderThanXHours = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXHours(PropertyName=${getName(field)},PropertyValue=${value})`;
+const OlderThanXMinutes = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXMinutes(PropertyName=${getName(field)},PropertyValue=${value})`;
+const OlderThanXMonths = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${getName(field)},PropertyValue=${value})`;
+const OlderThanXWeeks = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXWeeks(PropertyName=${getName(field)},PropertyValue=${value})`;
+const OlderThanXYears = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXYears(PropertyName=${getName(field)},PropertyValue=${value})`;
+const On = (field, value) => `Microsoft.Dynamics.CRM.On(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const OnOrAfter = (field, value) => `Microsoft.Dynamics.CRM.OnOrAfter(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const OnOrBefore = (field, value) => `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const ThisFiscalPeriod = (field) => `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${getName(field)})`;
+const ThisFiscalYear = (field) => `Microsoft.Dynamics.CRM.ThisFiscalYear(PropertyName=${getName(field)})`;
+const ThisMonth = (field) => `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${getName(field)})`;
+const ThisWeek = (field) => `Microsoft.Dynamics.CRM.ThisWeek(PropertyName=${getName(field)})`;
+const ThisYear = (field) => `Microsoft.Dynamics.CRM.ThisYear(PropertyName=${getName(field)})`;
+const Today = (field) => `Microsoft.Dynamics.CRM.Today(PropertyName=${getName(field)})`;
+const Tomorrow = (field) => `Microsoft.Dynamics.CRM.Tomorrow(PropertyName=${getName(field)})`;
+const Under = (field, value) => `Microsoft.Dynamics.CRM.Under(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const UnderOrEqual = (field, value) => `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
+const Yesterday = (field) => `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${getName(field)})`;
+function any(collectionProperty, alias, condition) {
+  return `${getName(collectionProperty)}/any(${alias}: ${condition})`;
+}
+function all(collectionProperty, alias, condition) {
+  return `${getName(collectionProperty)}/all(${alias}: ${condition})`;
+}
+function compare(field, operator, otherField) {
+  return `(${getName(field)} ${operator} ${getName(otherField)})`;
 }
 
-async function RetrieveAadUserRoles(aadId) {
-  return tryFetch(
-    `${globalConfig.url}/RetrieveAadUserRoles(DirectoryObjectId=${aadId})?$select=name`
+const parenthesesRegEx = /\(([^)]+)\)/;
+class DataverseClient {
+  options;
+  /** @param options Connection and authentication options. */
+  constructor(options = {}) {
+    this.options = {
+      url: location.origin,
+      ...options
+    };
+  }
+  /**
+   * Core HTTP fetch method for all Dataverse API calls.
+   * Automatically prepends the API base path, applies auth headers,
+   * handles 204/304 responses, and extracts OData-EntityId from POST headers.
+   *
+   * @example
+   * await client.fetch("accounts?$select=name&$top=5")
+   *
+   * @example
+   * await client.fetch("accounts", {
+   *   method: "POST",
+   *   body: JSON.stringify({ name: "New Account" }),
+   * })
+   */
+  async fetch(resource, options = {}) {
+    if (this._processChangeset(resource, options)) return;
+    if (this._processBatch(resource, options)) return;
+    const url = resource.startsWith("http") ? resource : `${this.options.url}/api/data/v9.2/${resource}`;
+    const { headers, impersonateByAAId, impersonateByUserId, token } = this.options;
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0",
+        Accept: "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "If-None-Match": "null",
+        ...impersonateByUserId ? { MSCRMCallerID: impersonateByUserId } : {},
+        ...impersonateByAAId ? { CallerObjectId: impersonateByAAId } : {},
+        ...token ? { Authorization: `Bearer ${token}` } : {},
+        ...headers,
+        ...options.headers
+      }
+    });
+    if (response.status === 204) {
+      const entityId = response.headers.get("OData-EntityId");
+      if (entityId) return parenthesesRegEx.exec(entityId)?.[1];
+      return;
+    }
+    if (response.status === 304) {
+      return null;
+    }
+    if (response.headers.get("Content-Type")?.includes("application/json")) {
+      const data = await response.json();
+      if (data.error) {
+        if (data.error.code === "0x80060891") return null;
+        throw data.error;
+      }
+      return data;
+    }
+    if (!response.ok) {
+      throw new Error(response.status + "-" + response.statusText);
+    }
+    return await response.text();
+  }
+  //
+  // --- PRIVATE HELPER METHODS ---
+  //
+  async _getNextLink(result) {
+    if (result["@odata.nextLink"]) {
+      const nextResult = await this.fetch(result["@odata.nextLink"]);
+      const recursiveResults = await this._getNextLink(nextResult);
+      return [...result.value, ...recursiveResults];
+    }
+    return result.value;
+  }
+  //
+  // --- PUBLIC API METHODS ---
+  //
+  /**
+   * Retrieves a single record by ID.
+   *
+   * @example
+   * const account = await client.getRecord("accounts", "00000000-0000-0000-0000-000000000001",
+   *   "$select=name,revenue")
+   */
+  async getRecord(entitySetName, id, query = "", etag) {
+    const resource = `${getName(entitySetName)}(${id})?${query}`;
+    if (etag) {
+      return this.fetch(resource, { headers: { "If-None-Match": etag } });
+    }
+    return this.fetch(resource);
+  }
+  /**
+   * Retrieves multiple records, automatically following `@odata.nextLink` pagination.
+   *
+   * @example
+   * const accounts = await client.getRecords("accounts",
+   *   "$select=name,revenue&$filter=revenue gt 10000")
+   */
+  async getRecords(entitySetName, query = "") {
+    const resource = `${entitySetName}?${query}`;
+    return this.fetch(resource).then((r) => this._getNextLink(r));
+  }
+  /**
+   * Creates a record and returns its full representation.
+   *
+   * @example
+   * const newAccount = await client.postRecord("accounts",
+   *   { name: "New Account", revenue: 50000 })
+   */
+  async postRecord(entitySetName, value, query = "") {
+    return this.fetch(`${getName(entitySetName)}?${query}`, {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(value)
+    });
+  }
+  /**
+   * Creates a record and returns only its GUID (no Prefer header).
+   *
+   * @example
+   * const id = await client.postRecordGetId("accounts",
+   *   { name: "New Account" })
+   * // id: "00000000-0000-0000-0000-000000000001"
+   */
+  async postRecordGetId(entitySetName, value) {
+    return this.fetch(getName(entitySetName), {
+      method: "POST",
+      body: JSON.stringify(value)
+    });
+  }
+  /**
+   * Updates an existing record (partial update via PATCH).
+   *
+   * @example
+   * await client.patchRecord("accounts", "00000000-0000-0000-0000-000000000001",
+   *   { name: "Updated Name", revenue: 75000 })
+   */
+  async patchRecord(entitySetName, id, value, query = "", etag) {
+    const extraHeaders = { Prefer: "return=representation" };
+    if (etag) extraHeaders["If-Match"] = etag;
+    return this.fetch(`${getName(entitySetName)}(${id})?${query}`, {
+      method: "PATCH",
+      headers: extraHeaders,
+      body: JSON.stringify(value)
+    });
+  }
+  /**
+   * Deletes a record by ID.
+   *
+   * @example
+   * const deletedId = await client.deleteRecord("accounts",
+   *   "00000000-0000-0000-0000-000000000001")
+   */
+  async deleteRecord(entitySetName, id, etag) {
+    const options = { method: "DELETE" };
+    if (etag) options.headers = { "If-Match": etag };
+    await this.fetch(`${getName(entitySetName)}(${id})`, options);
+    return id;
+  }
+  /**
+   * Updates a single property value via PUT.
+   *
+   * @example
+   * await client.updatePropertyValue("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "name", "New Name")
+   */
+  async updatePropertyValue(entitySetName, id, propertyName, value, etag) {
+    const options = {
+      method: "PUT",
+      body: JSON.stringify({ value })
+    };
+    if (etag) options.headers = { "If-Match": etag };
+    await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options);
+    return id;
+  }
+  /**
+   * Deletes (nulls out) a single property value.
+   *
+   * @example
+   * await client.deletePropertyValue("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "emailaddress1")
+   */
+  async deletePropertyValue(entitySetName, id, propertyName) {
+    await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
+      method: "DELETE"
+    });
+    return id;
+  }
+  /**
+   * Retrieves a single property value.
+   *
+   * @example
+   * const name = await client.getPropertyValue("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "name")
+   */
+  async getPropertyValue(entitySetName, id, propertyName) {
+    return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`).then((r) => r.value);
+  }
+  /**
+   * Retrieves a property's raw value (e.g. file content) via `/$value`.
+   *
+   * @example
+   * const imageData = await client.getPropertyRawValue("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "entityimage")
+   */
+  async getPropertyRawValue(entitySetName, id, propertyName) {
+    return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`);
+  }
+  /**
+   * Returns the URL for a property's raw value.
+   *
+   * @example
+   * const url = client.getPropertyRawValueURL("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "entityimage")
+   */
+  getPropertyRawValueURL(entitySetName, id, propertyName) {
+    return `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`;
+  }
+  /**
+   * Returns the full-size image download URL.
+   *
+   * @example
+   * const url = client.getImageFullSizeURL("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "entityimage")
+   */
+  getImageFullSizeURL(entitySetName, id, propertyName) {
+    return `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})/${getName(propertyName)}/$value?size=full`;
+  }
+  /**
+   * Returns the legacy image download URL.
+   *
+   * @example
+   * const url = client.getImageDownloadURL("accounts",
+   *   "00000000-0000-0000-0000-000000000001", "entityimage")
+   */
+  getImageDownloadURL(entitySetName, id, propertyName) {
+    return `${this.options.url}/Image/download.aspx?Entity=${getName(entitySetName)}&Attribute=${getName(propertyName)}&Id=${id}&Full=true`;
+  }
+  /**
+   * Uploads a file to a file property.
+   *
+   * @example
+   * await client.updateFileProperty("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "myfile", "report.pdf", fileBlob)
+   */
+  async updateFileProperty(entitySetName, id, propertyName, filename, body) {
+    return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "x-ms-file-name": filename
+      },
+      body
+    });
+  }
+  /**
+   * Activates a record (sets statecode to 0).
+   *
+   * @example
+   * await client.activateRecord("accounts",
+   *   "00000000-0000-0000-0000-000000000001")
+   */
+  async activateRecord(entitySetName, id) {
+    return this.updatePropertyValue(entitySetName, id, "statecode", 0);
+  }
+  /**
+   * Deactivates a record (sets statecode to 1).
+   *
+   * @example
+   * await client.deactivateRecord("accounts",
+   *   "00000000-0000-0000-0000-000000000001")
+   */
+  async deactivateRecord(entitySetName, id) {
+    return this.updatePropertyValue(entitySetName, id, "statecode", 1);
+  }
+  /**
+   * Associates two records via a navigation property.
+   *
+   * @example
+   * await client.associateRecord("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "primarycontactid",
+   *   "contacts",
+   *   "00000000-0000-0000-0000-000000000002")
+   */
+  async associateRecord(entitySetName, parentId, propertyName, childEntitySetName, childId) {
+    await this.fetch(`${getName(entitySetName)}(${parentId})/${getName(propertyName)}/$ref`, {
+      method: "PUT",
+      body: JSON.stringify({
+        "@odata.id": `${this.options.url}/api/data/v9.2/${getName(childEntitySetName)}(${childId})`
+      })
+    });
+    return childId;
+  }
+  /**
+   * Dissociates two records. If childId is omitted, all references are removed.
+   *
+   * @example
+   * await client.dissociateRecord("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "primarycontactid",
+   *   "00000000-0000-0000-0000-000000000002")
+   */
+  async dissociateRecord(entitySetName, parentId, propertyName, childId) {
+    const resource = `${getName(entitySetName)}(${parentId})/${getName(propertyName)}${childId ? `(${childId})` : ""}/$ref`;
+    await this.fetch(resource, { method: "DELETE" });
+    return childId ?? parentId;
+  }
+  /**
+   * Retrieves associated records via a collection navigation property.
+   *
+   * @example
+   * const contacts = await client.getAssociatedRecords("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "contact_customer_accounts",
+   *   "$select=fullname,email")
+   */
+  async getAssociatedRecords(entitySetName, id, navigationPropertyName, query = "") {
+    const resource = `${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}?${query}`;
+    return this.fetch(resource).then((r) => r.value);
+  }
+  /**
+   * Retrieves a single associated record via a single-valued navigation property.
+   *
+   * @example
+   * const contact = await client.getAssociatedRecord("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "primarycontactid",
+   *   "$select=fullname,email")
+   */
+  async getAssociatedRecord(entitySetName, id, navigationPropertyName, query = "") {
+    const resource = `${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}?${query}`;
+    return this.fetch(resource);
+  }
+  /**
+   * Synchronizes a list of associated records: adds new ones and removes ones
+   * no longer in the list.
+   *
+   * @example
+   * await client.associateRecordToList("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "contact_customer_accounts",
+   *   "contacts",
+   *   "contactid",
+   *   ["id1", "id2", "id3"])
+   */
+  async associateRecordToList(entitySetName, parentId, propertyName, childEntitySetName, childPrimaryKeyName, childIds) {
+    const currentAssociated = await this.getAssociatedRecords(
+      entitySetName,
+      parentId,
+      propertyName,
+      `$select=${getName(childPrimaryKeyName)}`
+    );
+    const currentIds = currentAssociated.map((r) => r[getName(childPrimaryKeyName)]);
+    const promises = [];
+    for (const id of childIds) {
+      if (!currentIds.includes(id)) {
+        promises.push(this.associateRecord(entitySetName, parentId, propertyName, childEntitySetName, id));
+      }
+    }
+    for (const id of currentIds) {
+      if (!childIds.includes(id)) {
+        promises.push(this.dissociateRecord(entitySetName, parentId, propertyName, id));
+      }
+    }
+    await Promise.all(promises);
+    return childIds;
+  }
+  //
+  // --- ACTIONS (POST - have side effects) ---
+  //
+  /**
+   * Executes an unbound Dataverse action (POST).
+   *
+   * @example
+   * const result = await client.executeAction("WinQuote", {
+   *   QuoteClose: { ... },
+   *   Status: 4,
+   * })
+   */
+  async executeAction(actionName, params) {
+    return this.fetch(actionName, {
+      method: "POST",
+      body: params ? JSON.stringify(params) : void 0
+    });
+  }
+  /**
+   * Executes a bound Dataverse action on a specific record or entity set (POST).
+   *
+   * @example
+   * // Bound to a record
+   * await client.executeBoundAction("accounts",
+   *   "WinQuote", { Status: 4 },
+   *   "00000000-0000-0000-0000-000000000001")
+   *
+   * @example
+   * // Bound to an entity set (no id)
+   * await client.executeBoundAction("accounts", "BulkDelete", { Query: ... })
+   */
+  async executeBoundAction(entitySetName, actionName, params, id) {
+    const path = id ? `${getName(entitySetName)}(${id})/Microsoft.Dynamics.CRM.${actionName}` : `${getName(entitySetName)}/Microsoft.Dynamics.CRM.${actionName}`;
+    return this.fetch(path, {
+      method: "POST",
+      body: params ? JSON.stringify(params) : void 0
+    });
+  }
+  //
+  // --- FUNCTIONS (GET - no side effects) ---
+  //
+  /**
+   * Executes an unbound Dataverse function (GET).
+   *
+   * @example
+   * const result = await client.executeFunction("WhoAmI")
+   *
+   * @example
+   * const result = await client.executeFunction("CalculateTotalTime",
+   *   { Start: "2025-01-01", End: "2025-12-31" })
+   */
+  async executeFunction(functionName, params) {
+    const paramString = params ? `(${Object.entries(params).map(([k, v]) => `${k}=${wrapString(v)}`).join(",")})` : "()";
+    return this.fetch(`${functionName}${paramString}`);
+  }
+  /**
+   * Executes a bound Dataverse function on a specific record (GET).
+   *
+   * @example
+   * const result = await client.executeBoundFunction("accounts",
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "CalculateDepreciation",
+   *   { Year: 2025 })
+   */
+  async executeBoundFunction(entitySetName, id, functionName, params) {
+    const paramString = params ? `(${Object.entries(params).map(([k, v]) => `${k}=${wrapString(v)}`).join(",")})` : "()";
+    return this.fetch(
+      `${getName(entitySetName)}(${id})/Microsoft.Dynamics.CRM.${functionName}${paramString}`
+    );
+  }
+  //
+  // --- BULK OPERATIONS ---
+  //
+  /**
+   * Creates multiple records in a single API call using CreateMultiple.
+   *
+   * @example
+   * await client.createMultiple("accounts", [
+   *   { name: "Account 1" },
+   *   { name: "Account 2" },
+   * ])
+   */
+  async createMultiple(entitySetName, records) {
+    return this.fetch(
+      `${getName(entitySetName)}/Microsoft.Dynamics.CRM.CreateMultiple`,
+      { method: "POST", body: JSON.stringify({ Targets: records }) }
+    );
+  }
+  /**
+   * Updates multiple records in a single API call using UpdateMultiple.
+   *
+   * @example
+   * await client.updateMultiple("accounts", [
+   *   { accountid: "id1", name: "Updated 1" },
+   *   { accountid: "id2", name: "Updated 2" },
+   * ])
+   */
+  async updateMultiple(entitySetName, records) {
+    return this.fetch(
+      `${getName(entitySetName)}/Microsoft.Dynamics.CRM.UpdateMultiple`,
+      { method: "POST", body: JSON.stringify({ Targets: records }) }
+    );
+  }
+  /**
+   * Deletes multiple records in a single API call by their IDs.
+   *
+   * @example
+   * await client.deleteMultiple("accounts", [
+   *   "00000000-0000-0000-0000-000000000001",
+   *   "00000000-0000-0000-0000-000000000002",
+   * ])
+   */
+  async deleteMultiple(entitySetName, ids) {
+    const targets = ids.map((id) => ({
+      "@odata.id": `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})`
+    }));
+    return this.fetch(
+      `${getName(entitySetName)}/Microsoft.Dynamics.CRM.DeleteMultiple`,
+      { method: "POST", body: JSON.stringify({ Targets: targets }) }
+    );
+  }
+  _batchTxs = null;
+  /**
+   * Groups multiple requests into a batch for improved performance.
+   * All fetch() calls inside the callback are collected and sent as a single
+   * HTTP request.
+   *
+   * @example
+   * await client.batch(async () => {
+   *   await client.getRecord("accounts", "id1", "$select=name");
+   *   await client.getRecord("accounts", "id2", "$select=name");
+   * })
+   */
+  async batch(fn) {
+    if (this._batchTxs) throw new Error("Cannot nest batches");
+    let tx = [];
+    this._batchTxs = tx;
+    try {
+      await fn();
+    } finally {
+      tx = this._batchTxs;
+      this._batchTxs = null;
+    }
+    if (!tx) return;
+    const batchId = crypto.randomUUID();
+    const body = [tx.map((v, i) => [`--batch_${batchId}`, v]), `--batch_${batchId}--`].flat(10).join("\n");
+    const result = await this.fetch("$batch", {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/mixed; boundary="batch_${batchId}"`
+      },
+      body
+    });
+    return result;
+  }
+  _processBatch(resource, options) {
+    if (!this._batchTxs) return false;
+    this._batchTxs.push([
+      `${options.method} /api/data/v9.2/${resource} HTTP/1.1`,
+      `Content-Type: ${options.headers?.["Content-Type"]}`,
+      "",
+      options.body?.toString() ?? ""
+    ]);
+    return true;
+  }
+  _changeSetTxs = null;
+  /**
+   * Groups multiple write operations into a change set within a batch.
+   * All changes in a change set are committed atomically.
+   * If not already inside a batch, automatically wraps one.
+   *
+   * @example
+   * await client.changeset(async () => {
+   *   await client.postRecordGetId("accounts", { name: "New" });
+   *   await client.patchRecord("accounts", "id", { name: "Updated" });
+   * })
+   */
+  async changeset(fn) {
+    if (this._changeSetTxs) throw new Error("Cannot nest changesets");
+    if (!this._batchTxs) return this.batch(() => this.changeset(fn));
+    this._changeSetTxs = [];
+    try {
+      await fn();
+    } finally {
+      const id = crypto.randomUUID();
+      this._batchTxs.push([
+        `Content-Type: multipart/mixed; boundary="changeset_${id}"`,
+        "",
+        this._changeSetTxs.map((v, i) => [
+          `--changeset_${id}`,
+          `Content-Type: application/http`,
+          `Content-Transfer-Encoding: binary`,
+          `Content-ID: ${i + 1}`,
+          "",
+          v
+        ]),
+        `--changeset_${id}--`
+      ]);
+      this._changeSetTxs = null;
+    }
+  }
+  _processChangeset(resource, options) {
+    if (!this._batchTxs) return false;
+    if (!this._changeSetTxs) return false;
+    this._changeSetTxs.push([
+      `${options.method} /api/data/v9.2/${resource} HTTP/1.1`,
+      `Content-Type: application/json; type=entry`,
+      "",
+      options.body?.toString() ?? ""
+    ]);
+    return true;
+  }
+}
+
+async function RetrieveAadUserRoles(client, aadId) {
+  return client.fetch(
+    `RetrieveAadUserRoles(DirectoryObjectId=${aadId})?$select=name`
   ).then((d) => new Set(d.value.map((r) => r.name)));
 }
-
-async function RetrieveTotalRecordCount(logicalName) {
-  return tryFetch(
-    `${globalConfig.url}/RetrieveTotalRecordCount(EntityNames=['${logicalName}'])`
+async function RetrieveTotalRecordCount(client, logicalName) {
+  return client.fetch(
+    `RetrieveTotalRecordCount(EntityNames=['${logicalName}'])`
   ).then((d) => d.Values[0]);
 }
-
-async function WhoAmI() {
-  return tryFetch(`${globalConfig.url}/WhoAmI()`).then((r) => ({
+async function WhoAmI(client) {
+  return client.fetch(`WhoAmI()`).then((r) => ({
     BusinessUnitId: r.BusinessUnitId,
     UserId: r.UserId,
     OrganizationId: r.OrganizationId
   }));
 }
-
-async function updatePropertyValue(entitySetName, id, propertyName, value) {
-  await tryFetch(
-    `${globalConfig.url}/${entitySetName}(${id})/${propertyName}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({ value })
-    }
-  );
-  return id;
+async function RetrieveChoices(client, name) {
+  return client.fetch(`GlobalOptionSetDefinitions(Name=${wrapString(name)})`).then(mapChoices);
 }
-
-async function activateRecord(entitySetName, id) {
-  return updatePropertyValue(entitySetName, id, "statecode", 0);
-}
-
-async function associateRecord(entitySetName, parentId, propertyName, childEntitySetName, childId) {
-  await tryFetch(
-    `${globalConfig.url}/${entitySetName}(${parentId})/${propertyName}/$ref`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        "@odata.id": `${globalConfig.url}/${childEntitySetName}(${childId})`
-      })
-    }
-  );
-  return childId;
-}
-
-async function disssociateRecord(entitySetName, parentId, propertyName, childId) {
-  await tryFetch(
-    `${globalConfig.url}/${entitySetName}(${parentId})/${propertyName}${childId ? `(${childId})` : ""}/$ref`,
-    {
-      method: "DELETE"
-    }
-  );
-  return childId ?? parentId;
-}
-
-async function getAssociatedRecords(entitySetName, id, navigationPropertyName, query = "") {
-  return tryFetch(
-    `${globalConfig.url}/${entitySetName}(${id})/${navigationPropertyName}?${query}`
-  ).then((r) => r.value.map(attachEtag));
-}
-
-async function associateRecordToList(entitySetName, parentId, propertyName, childEntitySetName, childPrimaryKeyName, childIds) {
-  const currentIds = (await getAssociatedRecords(
-    entitySetName,
-    parentId,
-    propertyName,
-    `$select=${childPrimaryKeyName}`
-  )).map((r) => r[childPrimaryKeyName]);
-  const promises = [];
-  for (const id of childIds) {
-    if (!currentIds.includes(id))
-      promises.push(
-        associateRecord(
-          entitySetName,
-          parentId,
-          propertyName,
-          childEntitySetName,
-          id
-        )
-      );
-  }
-  for (const id of currentIds) {
-    if (!childIds.includes(id))
-      promises.push(
-        disssociateRecord(entitySetName, parentId, propertyName, id)
-      );
-  }
-  await Promise.all(promises);
-  return childIds;
-}
-
-async function deactivateRecord(entitySetName, id) {
-  return updatePropertyValue(entitySetName, id, "statecode", 1);
-}
-
-async function deletePropertyValue(entitySetName, id, propertyName) {
-  await tryFetch(
-    `${globalConfig.url}/${entitySetName}(${id})/${propertyName}`,
-    {
-      method: "DELETE"
-    }
-  );
-  return id;
-}
-
-async function deleteRecord(entitySetName, id) {
-  await tryFetch(`${globalConfig.url}/${entitySetName}(${id})`, {
-    method: "DELETE"
-  });
-  return id;
-}
-
-async function getAssociatedRecord(entitySetName, id, navigationPropertyName, query) {
-  return tryFetch(
-    `${globalConfig.url}/${entitySetName}(${id})/${navigationPropertyName}?${query}`
-  ).then(attachEtag);
-}
-
-async function getNextLink(result) {
-  if (result["@odata.nextLink"]) {
-    const r = await getNextLink(await tryFetch(result["@odata.nextLink"]));
-    return [...result.value, ...r];
-  }
-  return result.value;
-}
-
-function getPropertyRawValueURL(entitySetName, id, propertyName) {
-  return `${globalConfig.url}/${entitySetName}(${id})/${propertyName}/$value`;
-}
-
-async function getPropertyRawValue(entitySetName, id, propertyName) {
-  return tryFetch(getPropertyRawValueURL(entitySetName, id, propertyName));
-}
-
-async function getPropertyValue(entitySetName, id, propertyName) {
-  return tryFetch(
-    `${globalConfig.url}/${entitySetName}(${id})/${propertyName}`
-  ).then((r) => r.value);
-}
-
-async function getRecord(entitySetName, id, query) {
-  return tryFetch(`${globalConfig.url}/${entitySetName}(${id})?${query}`).then(attachEtag);
-}
-
-async function getRecords(entitySetName, query) {
-  return tryFetch(`${globalConfig.url}/${entitySetName}?${query}`).then(getNextLink).then((v) => v.map(attachEtag));
-}
-
-async function patchRecord(entitySetName, id, value, query = "") {
-  return tryFetch(`${globalConfig.url}/${entitySetName}(${id})?${query}`, {
-    method: "PATCH",
-    headers: {
-      Prefer: "return=representation"
-    },
-    body: JSON.stringify(value)
-  });
-}
-
-async function postRecord(entitySetName, value, query = "") {
-  return tryFetch(`${globalConfig.url}/${entitySetName}?${query}`, {
-    method: "POST",
-    headers: {
-      Prefer: "return=representation"
-    },
-    body: JSON.stringify(value)
-  });
-}
-
-async function postRecordGetId(entitySetName, value) {
-  return tryFetch(`${globalConfig.url}/${entitySetName}`, {
-    method: "POST",
-    body: JSON.stringify(value)
-  });
+function mapChoices(data) {
+  return [...data.Options].map((option) => ({
+    value: Number(option.Value),
+    color: String(option.Color),
+    label: String(option.Label.UserLocalizedLabel.Label),
+    description: String(option.Description.UserLocalizedLabel.Label)
+  }));
 }
 
 function required() {
   return (v) => {
-    if (!v) return "Required";
+    if (v === null || v === void 0) return "Required";
+  };
+}
+function pattern(regex, message) {
+  return (v) => {
+    if (v && !regex.test(v)) {
+      return message || "Invalid format";
+    }
+  };
+}
+function numeric() {
+  return (v) => {
+    if (v !== void 0 && v !== null) {
+      const num = Number(v);
+      if (isNaN(num)) {
+        return "Must be a number";
+      }
+    }
+  };
+}
+function minValue(min) {
+  return (v) => {
+    if (typeof v === "number" && v < min) {
+      return `Must be at least ${min}`;
+    }
+  };
+}
+function minLength(min) {
+  return (v) => {
+    if (v.length < min) return `Length less than ${min}`;
+  };
+}
+function maxValue(max) {
+  return (v) => {
+    if (typeof v === "number" && v > max) {
+      return `Must be no more than ${max}`;
+    }
+  };
+}
+function maxLength(max) {
+  return (v) => {
+    if (v.length > max) return `Length more than ${max}`;
+  };
+}
+function isTypeOrNull(type) {
+  return (v) => {
+    if (v === null) return;
+    if (typeof v !== type) {
+      return "Not of type " + type;
+    }
+  };
+}
+function isType(type) {
+  return (v) => {
+    if (typeof v !== type) {
+      return "Not of type " + type;
+    }
+  };
+}
+function integer() {
+  return (v) => {
+    if (v !== void 0 && v !== null) {
+      const num = Number(v);
+      if (isNaN(num) || !Number.isInteger(num)) {
+        return "Must be an integer";
+      }
+    }
+  };
+}
+function email() {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return (v) => {
+    if (v && !emailRegex.test(v)) {
+      return "Invalid email format";
+    }
   };
 }
 
 class Schema {
   name;
+  toDataverseName;
+  fromDataverseName;
   kind = "schema";
   type = "schema";
-  /**
-   * The default value of the property. This is a private field.
-   */
   #default;
   /**
-   * Creates a new Property instance.
-   *
-   * @param name The name of the property.
-   * @param defaultValue The default value for the property.
+   * @param name The Dataverse logical name of the column/attribute.
+   * @param defaultValue The default value used when no value is provided.
    */
   constructor(name, defaultValue) {
     this.name = name;
+    this.fromDataverseName = name;
+    this.toDataverseName = name;
     this.#default = defaultValue;
   }
   /**
-   * Sets the default value of the property.
+   * Overrides the default value for this property.
    *
-   * @param value The new default value.
-   * @returns The Property instance for chaining.
+   * @example
+   * const field = new StringField("firstname").setDefault("John");
+   * field.getDefault(); // "John"
    */
   setDefault(value) {
     this.#default = value;
     return this;
   }
   /**
-   * Gets the default value of the property.
-   *
-   * @returns The default value.
+   * Returns the default value for this property.
    */
   getDefault() {
     return this.#default;
   }
-  /**
-   * Indicates if the property is read-only. This is a private field.
-   */
   #readOnly = false;
   /**
-   * Sets whether the property is read-only.
+   * Marks this property as read-only. Read-only properties are excluded
+   * when transforming data for Dataverse (e.g. they won't be sent in create/update).
    *
-   * @param [value=true] True if the property should be read-only, false otherwise. Defaults to true.
-   * @returns The Property instance for chaining.
+   * @param value Whether the property should be read-only. Defaults to `true`.
+   *
+   * @example
+   * const field = new StringField("createdby").setReadOnly(true);
+   * field.getReadOnly(); // true
    */
   setReadOnly(value = true) {
     this.#readOnly = value;
     return this;
   }
   /**
-   * Gets whether the property is read-only.
-   *
-   * @returns True if the property is read-only, false otherwise.
+   * Returns whether this property is read-only.
    */
   getReadOnly() {
     return this.#readOnly;
   }
-  /**
-   * An array of validators associated with this property.
-   */
   #validators = [];
   /**
-   * Adds a validator to the property.
+   * Adds a validation function to this property. Validators run during
+   * {@link validate} and {@link parse}. A validator returns `undefined` if valid,
+   * or an error message string if invalid.
    *
-   * @param v The validator function or object to add.
-   * @returns The Property instance for chaining.
+   * @example
+   * const field = new StringField("zip").check((v) =>
+   *   /^\d{5}(-\d{4})?$/.test(v) ? undefined : "Invalid ZIP code"
+   * );
+   * field.parse("12345"); // ok
+   * field.parse("abc");   // throws
    */
   check(v) {
     this.#validators.push(v);
     return this;
   }
   /**
-   * Adds a required validator to the property.
+   * Adds a "required" validator that rejects `null` or `undefined` values.
    *
-   * @returns The Property instance for chaining.
+   * @example
+   * const field = new StringField("email").required();
+   * field.validate(null);  // { issues: [{ message: "Required" }] }
+   * field.validate("a@b"); // { value: "a@b" }
    */
   required() {
     return this.check(required());
   }
   /**
-   * Transforms a value received from Dataverse into the property's type.
-   * By default, it returns the value as is. Subclasses can override this for custom transformations.
+   * Transforms a raw value from Dataverse into the property's TypeScript type.
+   * Override this in subclasses for custom deserialization (e.g. string → Date).
    *
-   * @param value The value received from Dataverse.
-   * @returns The transformed value of type T.
+   * @param value The raw value from the Dataverse API.
+   * @returns The typed value.
+   *
+   * @example
+   * // A custom date-only field
+   * class DateOnlyField extends Schema<Date> {
+   *   transformValueFromDataverse(value: any): Date {
+   *     return new Date(value + "T00:00:00Z");
+   *   }
+   * }
    */
   transformValueFromDataverse(value) {
     return value;
   }
   /**
-   * Transforms the property's value into a format suitable for sending to Dataverse.
-   * By default, it returns the value as is. Subclasses can override this for custom transformations.
+   * Transforms the property's value into a format suitable for Dataverse.
+   * Override this in subclasses for custom serialization (e.g. Date → string).
    *
-   * @param value The property's value.
-   * @returns The transformed value suitable for Dataverse.
+   * @param value The property value to send to Dataverse.
+   * @returns The serialized value.
+   *
+   * @example
+   * class DateOnlyField extends Schema<Date> {
+   *   transformValueToDataverse(value: Date): string {
+   *     return value.toISOString().slice(0, 10);
+   *   }
+   * }
    */
   transformValueToDataverse(value) {
     return value;
@@ -408,21 +1107,43 @@ class Schema {
             path
           });
         }
-      } catch ({ message }) {
+      } catch (e) {
         issues.push({
-          message,
+          message: e?.message ?? String(e),
           path
         });
       }
     });
     return issues;
   }
+  /**
+   * Validates a value against this property's validators. Returns either
+   * `{ value }` on success or `{ issues }` on failure.
+   *
+   * @example
+   * const field = new StringField("email").required();
+   * field.validate("test@example.com"); // { value: "test@example.com" }
+   * field.validate(null);               // { issues: [{ message: "Required", path: [] }] }
+   */
   validate(value, path = []) {
     const issues = this.getIssues(value, path);
     return issues.length > 0 ? { issues } : {
       value
     };
   }
+  /**
+   * Validates a value and returns it if valid, or throws if invalid.
+   * This is a convenience wrapper around {@link validate}.
+   *
+   * @throws {Error} If validation fails, the error message contains the JSON-serialized issues.
+   *
+   * @example
+   * const field = new StringField("age").check((v) =>
+   *   Number(v) >= 0 ? undefined : "Must be non-negative"
+   * );
+   * field.parse("25");  // "25"
+   * field.parse("-1");  // throws Error("[{\"message\":\"Must be non-negative\",\"path\":[]}]")
+   */
   parse(value) {
     const result = this.validate(value);
     if (result.issues) {
@@ -446,47 +1167,775 @@ class Schema {
   }
 }
 
-function isType(type) {
-  return (v) => {
-    if (typeof v !== type) {
-      return "Not of type " + type;
+class Table extends Schema {
+  client;
+  fields;
+  kind = "table";
+  type = "table";
+  /**
+   * @param client An instance of the DataverseClient for all API operations.
+   * @param entitySetName The logical collection name of the Dataverse table (e.g. `"accounts"`).
+   * @param props An object mapping property names to field definitions.
+   */
+  constructor(client, entitySetName, props) {
+    super(entitySetName, null);
+    this.client = client;
+    this.name = entitySetName;
+    this.fields = props;
+  }
+  getIssues(value, path = []) {
+    const issues = super.getIssues(value, path);
+    if (typeof value !== "object" || value === null) value = {};
+    for (const [key, property] of Object.entries(this.fields)) {
+      if (!property.getReadOnly())
+        issues.push(...property.getIssues(value[key], [...path, key]));
     }
-  };
+    return issues;
+  }
+  getDefault(value) {
+    const result = {};
+    for (const [key, property] of Object.entries(this.fields)) {
+      if (value === void 0 || !(key in value)) {
+        result[key] = property.getDefault();
+      } else {
+        result[key] = value[key];
+      }
+    }
+    return result;
+  }
+  /**
+   * Retrieves a single record by its primary key (GUID) or alternate key.
+   * Returns `null` when the record is not found.
+   *
+   * @param id The primary key GUID, alternate key, or string identifier.
+   *
+   * @example
+   * const account = await Account.getRecord("acme-1234-abcd");
+   * if (account) console.log(account.name);
+   */
+  async getRecord(id) {
+    return this.client.getRecord(this.name, id, buildQuery(this)).then((v) => this.transformValueFromDataverse(v));
+  }
+  getAlternateKeys(value) {
+    return Object.entries(value).map((kv) => `${this.fields[kv[0]].name}=${kv[1]}`).join(",");
+  }
+  /**
+   * Retrieves multiple records from the table, with optional filtering, sorting, and paging.
+   *
+   * @param queryOptions Optional query parameters (filter, orderby, top).
+   *
+   * @example
+   * const activeAccounts = await Account.getRecords({
+   *   filter: "statecode eq 0",
+   *   orderby: "name asc",
+   *   top: 10,
+   * });
+   */
+  async getRecords(queryOptions) {
+    return this.client.getRecords(this.name, buildQuery(this, queryOptions)).then((values) => values.map((v) => this.transformValueFromDataverse(v)));
+  }
+  /**
+   * Retrieves the value of a single property for a record by ID.
+   * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
+   *
+   * @example
+   * const age = await Person.getPropertyValue("age", "some-guid");
+   * const address = await Person.getPropertyValue("primaryAddress", "some-guid");
+   */
+  async getPropertyValue(key, id, queryOptions) {
+    const prop = this.fields[key];
+    if (prop.kind === "value" || prop.type === "lookupId") {
+      return this.client.getPropertyValue(this.name, id, prop.name).then((v) => prop.transformValueFromDataverse(v));
+    }
+    if (prop.type === "collection" || prop.type === "collectionIds") {
+      return this.client.getAssociatedRecords(
+        this.name,
+        id,
+        prop.name,
+        buildQuery(prop.table, queryOptions)
+        // Note: buildQuery needs to handle related table schema
+      ).then(
+        (v) => prop.transformValueFromDataverse(v)
+      );
+    }
+    if (prop.type === "lookup") {
+      return this.client.getAssociatedRecord(
+        this.name,
+        id,
+        prop.name,
+        buildQuery(prop.table, queryOptions)
+      ).then(
+        (v) => prop.transformValueFromDataverse(v)
+      );
+    }
+    throw new Error("Invalid Property kind for getPropertyValue");
+  }
+  /**
+   * Updates the value of a single property for a record by ID.
+   * For navigation properties, this associates/dissociates related records.
+   *
+   * @example
+   * await Person.updatePropertyValue("age", "some-guid", 35);
+   */
+  async updatePropertyValue(key, id, value) {
+    const prop = this.fields[key];
+    if (prop.kind === "navigation") {
+      await this.updateNavigationProperty(prop, id, value);
+    } else {
+      await this.client.updatePropertyValue(
+        this.name,
+        id,
+        this.fields[key].name,
+        prop.transformValueToDataverse(value)
+      );
+    }
+    return id;
+  }
+  async updateNavigationProperty(property, id, value) {
+    if (property.type === "collection" || property.type === "collectionIds") {
+      if (Array.isArray(value)) {
+        const ids = property.type === "collection" ? await Promise.all(
+          value.map((v) => property.table.upsertRecord(void 0, v))
+        ) : value;
+        return this.client.associateRecordToList(
+          this.name,
+          id,
+          property.name,
+          property.table.name,
+          property.table.getPrimaryKey().property.name,
+          ids
+        );
+      }
+    }
+    if (property.type === "lookup" || property.type == "lookupId") {
+      const name = property.type === "lookup" ? property.name : property.navigationName;
+      if (value === null) {
+        return this.client.dissociateRecord(this.name, id, name);
+      } else {
+        const childId = property.type === "lookup" ? await property.table.upsertRecord(void 0, value) : value;
+        return this.client.associateRecord(
+          this.name,
+          id,
+          name,
+          property.table.name,
+          childId
+        );
+      }
+    }
+  }
+  /**
+   * Links an existing child record to a parent record through a navigation property.
+   *
+   * @example
+   * await Person.associateRecord("primaryAddress", "person-guid", "address-guid");
+   */
+  async associateRecord(key, id, childId) {
+    const prop = this.fields[key];
+    if (prop.kind === "navigation") {
+      return this.client.associateRecord(
+        this.name,
+        id,
+        prop.name,
+        prop.table.name,
+        childId
+      );
+    } else {
+      throw new Error("Can only associate to navigation properties");
+    }
+  }
+  async dissociateRecord(key, id, childId) {
+    const prop = this.fields[key];
+    if (prop.kind === "navigation") {
+      return this.client.dissociateRecord(this.name, id, prop.name, childId);
+    } else {
+      throw new Error("Can only dissociate navigation properties");
+    }
+  }
+  /**
+   * Creates a new record in Dataverse and returns its generated GUID.
+   *
+   * @param value The record data (partial — primary key is auto-generated).
+   *
+   * @example
+   * const newId = await Person.insertRecord({ name: "John", age: 30 });
+   */
+  async insertRecord(value) {
+    const pkName = this.getPrimaryKey().property.name;
+    const record = await this.client.postRecord(
+      this.name,
+      this.transformValueToDataverse(value),
+      query({ select: pkName })
+    );
+    return record?.[pkName];
+  }
+  /**
+   * Updates an existing record by ID. Supports optimistic concurrency via etag.
+   *
+   * @param id The record's primary key.
+   * @param value The fields to update (partial record data).
+   * @param etag Optional etag for conditional updates (If-Match header).
+   *
+   * @example
+   * await Person.updateRecord("some-guid", { name: "Jane" });
+   * // With etag:
+   * await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
+   */
+  async updateRecord(id, value, etag) {
+    if (!id) throw new Error("No ID provided");
+    await this.client.patchRecord(
+      this.name,
+      id,
+      this.transformValueToDataverse(value),
+      "",
+      etag
+    );
+    return id;
+  }
+  /**
+   * Creates or updates a record. If `id` is provided the record is updated;
+   * otherwise a new record is created. Navigation properties (collections, lookups)
+   * are also synced through nested upserts.
+   *
+   * @param id The GUID of an existing record, or `undefined` to create new.
+   * @param value The record data (partial for updates).
+   * @param etag Optional etag for conditional upsert.
+   *
+   * @example
+   * // Create
+   * const newId = await Person.upsertRecord(undefined, { name: "John" });
+   * // Update
+   * await Person.upsertRecord(existingId, { name: "Jane" });
+   */
+  async upsertRecord(id, value, etag) {
+    const promises = [];
+    const pkName = this.getPrimaryKey().property.name;
+    if (id) {
+      promises.push(
+        this.client.patchRecord(
+          this.name,
+          id,
+          this.transformValueToDataverse(value),
+          query({ select: pkName }),
+          etag
+        )
+      );
+    } else {
+      const record = await this.client.postRecord(
+        this.name,
+        this.transformValueToDataverse(value),
+        query({ select: pkName })
+      );
+      id = record[pkName];
+    }
+    for (const [key, property] of Object.entries(this.fields)) {
+      if (property.getReadOnly() || !(key in value)) continue;
+      if (property.kind === "navigation" && property.type !== "lookupId") {
+        promises.push(
+          this.updateNavigationProperty(
+            property,
+            id,
+            value[key]
+          )
+        );
+      }
+    }
+    await Promise.all(promises);
+    return id;
+  }
+  /**
+   * Deletes a record by its primary key. Supports optimistic concurrency via etag.
+   *
+   * @param id The primary key of the record to delete.
+   * @param etag Optional etag for conditional deletion.
+   *
+   * @example
+   * await Person.deleteRecord("some-guid");
+   */
+  async deleteRecord(id, etag) {
+    return this.client.deleteRecord(this.name, id, etag);
+  }
+  /**
+   * Activates a record by setting its `statecode` to 0.
+   *
+   * @example
+   * await Person.activateRecord("some-guid");
+   */
+  async activateRecord(id) {
+    return this.client.activateRecord(this.name, id);
+  }
+  /**
+   * Deactivates a record by setting its `statecode` to 1.
+   *
+   * @example
+   * await Person.deactivateRecord("some-guid");
+   */
+  async deactivateRecord(id) {
+    return this.client.deactivateRecord(this.name, id);
+  }
+  /**
+   * Deletes (clears) the value of a value property for a record. Cannot be used
+   * on navigation properties.
+   *
+   * @example
+   * await Person.deletePropertyValue("name", "some-guid");
+   */
+  async deletePropertyValue(key, id) {
+    const prop = this.fields[key];
+    if (prop.kind === "value") {
+      return this.client.deletePropertyValue(this.name, id, prop.name);
+    }
+    throw new Error("Cannot delete navigation property values");
+  }
+  //
+  // --- ACTIONS & FUNCTIONS ---
+  //
+  /**
+   * Executes a bound Dataverse action on this entity set or a specific record.
+   * POST /{entitySet}({id})/Microsoft.Dynamics.CRM.{ActionName}
+   *
+   * @param actionName The Dataverse action name (without the CRM namespace prefix, e.g. `"GenerateInvoice"`).
+   * @param params Optional parameters to pass in the request body.
+   * @param id Optional record GUID — if provided, the action is bound to a specific record.
+   *
+   * @example
+   * // Bound to entity set
+   * await Account.executeAction("BulkDetectDuplicates", { ... });
+   * // Bound to a record
+   * await Account.executeAction("CalculatePrice", { discount: 10 }, "record-guid");
+   */
+  async executeAction(actionName, params, id) {
+    if (id) {
+      return this.client.executeBoundAction(this.name, actionName, params, id);
+    }
+    return this.client.executeBoundAction(this.name, actionName, params);
+  }
+  /**
+   * Executes a bound Dataverse function on a record.
+   * GET /{entitySet}({id})/Microsoft.Dynamics.CRM.{FunctionName}(...)
+   *
+   * @param functionName The Dataverse function name (e.g. `"CalculateActualValueOfOpportunity"`).
+   * @param id The record GUID to bind the function to.
+   * @param params Optional function parameters (appended as query parameters).
+   *
+   * @example
+   * const result = await Opportunity.executeFunction(
+   *   "CalculateActualValueOfOpportunity",
+   *   "opportunity-guid",
+   * );
+   */
+  async executeFunction(functionName, id, params) {
+    return this.client.executeBoundFunction(this.name, id, functionName, params);
+  }
+  //
+  // --- BULK OPERATIONS ---
+  //
+  /**
+   * Creates multiple records in a single API call via `CreateMultiple`.
+   *
+   * @param records Array of partial records to create.
+   *
+   * @example
+   * await Account.createMultiple([
+   *   { name: "Acme" },
+   *   { name: "Beta" },
+   * ]);
+   */
+  async createMultiple(records) {
+    return this.client.createMultiple(
+      this.name,
+      records.map((r) => this.transformValueToDataverse(r))
+    );
+  }
+  /**
+   * Updates multiple records in a single API call via `UpdateMultiple`.
+   *
+   * @param records Array of partial records to update (must include primary key).
+   *
+   * @example
+   * await Account.updateMultiple([
+   *   { id: "guid-1", name: "Acme Updated" },
+   *   { id: "guid-2", name: "Beta Updated" },
+   * ]);
+   */
+  async updateMultiple(records) {
+    return this.client.updateMultiple(
+      this.name,
+      records.map((r) => this.transformValueToDataverse(r))
+    );
+  }
+  /**
+   * Deletes multiple records in a single API call via `DeleteMultiple`.
+   *
+   * @param ids Array of record GUIDs to delete.
+   *
+   * @example
+   * await Account.deleteMultiple(["guid-1", "guid-2"]);
+   */
+  async deleteMultiple(ids) {
+    return this.client.deleteMultiple(this.name, ids);
+  }
+  /**
+   * Returns the primary key field definition for this table.
+   *
+   * @example
+   * const pk = Account.getPrimaryKey();
+   * console.log(pk.key);      // "id"
+   * console.log(pk.property.name); // "accountid"
+   */
+  getPrimaryKey() {
+    const result = Object.entries(this.fields).find(
+      (f) => f[1].type === "primaryKey"
+    );
+    if (!result) throw new Error("No Primary Key found in schema");
+    return {
+      key: result[0],
+      property: result[1]
+    };
+  }
+  /**
+   * Extracts the primary key GUID from a record object, or `undefined` if not present.
+   *
+   * @example
+   * const account = await Account.getRecord("some-guid");
+   * const pk = Account.getPrimaryId(account); // GUID | undefined
+   */
+  getPrimaryId(value) {
+    const { key } = this.getPrimaryKey();
+    return value[key];
+  }
+  transformValueFromDataverse(value) {
+    if (value === null) return null;
+    const result = {};
+    for (const [key, property] of Object.entries(this.fields)) {
+      result[key] = property.transformValueFromDataverse(value[property.fromDataverseName]);
+    }
+    result[Etag] = value[Etag];
+    return result;
+  }
+  transformValueToDataverse(value) {
+    if (value === null) return null;
+    const result = {};
+    for (const [key, property] of Object.entries(this.fields)) {
+      if (property.getReadOnly() || !(key in value)) continue;
+      if (property.kind === "value" || property.type === "lookupId") {
+        const v = property.transformValueToDataverse(
+          value[key]
+        );
+        result[property.toDataverseName] = v;
+      }
+    }
+    return result;
+  }
+  /**
+   * Creates a new `Table` with only the specified properties. Useful for
+   * narrowing the type when querying a subset of columns.
+   *
+   * @example
+   * const NameOnly = Account.pickProperties("name", "id");
+   * const records = await NameOnly.getRecords(); // { name: string; id: GUID }[]
+   */
+  pickProperties(...keys) {
+    const properties = Object.fromEntries(
+      Object.entries(this.fields).filter((v) => keys.includes(v[0]))
+    );
+    return new Table(this.client, this.name, properties);
+  }
+  /**
+   * Creates a new `Table` with the specified properties excluded.
+   *
+   * @example
+   * const WithoutSensitive = Person.omitProperties("ssn");
+   */
+  omitProperties(...keys) {
+    const properties = Object.fromEntries(
+      Object.entries(this.fields).filter((v) => !keys.includes(v[0]))
+    );
+    return new Table(this.client, this.name, properties);
+  }
+  /**
+   * Creates a new `Table` with additional properties appended.
+   *
+   * @example
+   * const Extended = Account.appendProperties({
+   *   customField: string("new_stringcolumn"),
+   * });
+   * // Extended has all original fields plus `customField`
+   */
+  appendProperties(properties) {
+    return new Table(this.client, this.name, {
+      ...this.fields,
+      ...properties
+    });
+  }
+  /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
+  T;
+}
+function table(client, name, properties) {
+  return new Table(client, name, properties);
+}
+function buildQuery(table2, q) {
+  return query({
+    top: q?.top,
+    filter: q?.filter,
+    orderby: q?.orderby ? Object.entries(q?.orderby ?? {}).map(([key, value]) => `${table2.fields[key].name} ${value}`).join(",") : void 0,
+    select: buildSelect(table2),
+    expand: buildExpand(table2)
+  });
+}
+function buildSelect(table2) {
+  return Object.values(table2.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file").map((v) => v.fromDataverseName).join(",");
+}
+function buildExpand(table2, depth = 0) {
+  if (depth > 3) return "";
+  return Object.values(table2.fields).filter(
+    (v) => v.kind === "navigation" && v.type !== "lookupId" && v.type !== "collectionIds"
+  ).map((v) => {
+    const navProp = v;
+    const innerSelect = buildSelect(navProp.table);
+    const innerExpand = buildExpand(navProp.table, depth + 1);
+    let expandQuery = `$select=${innerSelect}`;
+    if (innerExpand) {
+      expandQuery += `;$expand=${innerExpand}`;
+    }
+    return `${navProp.name}(${expandQuery})`;
+  }).join(",");
 }
 
-class BooleanProperty extends Schema {
-  /**
-   * The kind of schema element for a boolean property, which is "value".
-   */
+class BooleanField extends Schema {
   kind = "value";
-  /**
-   * The type of the property, which is "boolean".
-   */
   type = "boolean";
-  /**
-   * Creates a new BooleanProperty instance.
-   *
-   * @param name The name of the boolean property.
-   */
   constructor(name) {
     super(name, false);
     this.check(isType("boolean"));
   }
 }
-function boolean(name) {
-  return new BooleanProperty(name);
+class NumberField extends Schema {
+  kind = "value";
+  type = "number";
+  constructor(name) {
+    super(name, 0);
+    this.check(isType("number"));
+  }
+  transformValueFromDataverse(value) {
+    return value ?? 0;
+  }
 }
-
+class NullableNumberField extends Schema {
+  kind = "value";
+  type = "number";
+  constructor(name) {
+    super(name, null);
+    this.check(isTypeOrNull("number"));
+  }
+}
+class StringField extends Schema {
+  kind = "value";
+  type = "string";
+  constructor(name) {
+    super(name, "");
+    this.check(isType("string"));
+  }
+  transformValueFromDataverse(value) {
+    return value ?? "";
+  }
+}
+class NullableStringField extends Schema {
+  kind = "value";
+  type = "string";
+  constructor(name) {
+    super(name, null);
+    this.check(isTypeOrNull("string"));
+  }
+}
+class PrimaryKeyField extends Schema {
+  kind = "value";
+  type = "primaryKey";
+  constructor(name) {
+    super(name, "");
+    this.check(isType("string"));
+  }
+  getDefault() {
+    return crypto.randomUUID();
+  }
+}
+class ListField extends Schema {
+  kind = "value";
+  type = "list";
+  list;
+  constructor(name, list2) {
+    super(name, null);
+    this.list = list2;
+    this.check((v) => {
+      if (v !== null && !list2.includes(v)) {
+        return `${v} not in [${list2}]`;
+      }
+    });
+  }
+}
+class DateTimeField extends Schema {
+  kind = "value";
+  type = "date";
+  constructor(name) {
+    super(name, /* @__PURE__ */ new Date());
+    this.check((v) => v instanceof Date ? void 0 : "value is not Date");
+  }
+  getDefault() {
+    return /* @__PURE__ */ new Date();
+  }
+  transformValueFromDataverse(value) {
+    if (value === null) return /* @__PURE__ */ new Date();
+    return new Date(value);
+  }
+}
+class NullableDateTimeField extends Schema {
+  kind = "value";
+  type = "date";
+  constructor(name) {
+    super(name, null);
+    this.check(
+      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
+    );
+  }
+  transformValueFromDataverse(value) {
+    if (value === null) return null;
+    return new Date(value);
+  }
+}
+class DateField extends Schema {
+  kind = "value";
+  type = "dateOnly";
+  constructor(name) {
+    super(name, parseDateOnly((/* @__PURE__ */ new Date()).toISOString()));
+    this.check(
+      (v) => v instanceof Date ? void 0 : "value is not Date"
+    );
+  }
+  transformValueFromDataverse(value) {
+    if (value === null) return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
+    return parseDateOnly(value);
+  }
+  transformValueToDataverse(value) {
+    return toDateOnly(value);
+  }
+}
+class NullableDateField extends Schema {
+  kind = "value";
+  type = "dateOnly";
+  constructor(name) {
+    super(name, null);
+    this.check(
+      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
+    );
+  }
+  transformValueFromDataverse(value) {
+    if (value === null) return null;
+    return parseDateOnly(value);
+  }
+  transformValueToDataverse(value) {
+    return toDateOnly(value);
+  }
+}
+class FormattedField extends Schema {
+  kind = "value";
+  type = "formatted";
+  constructor(name) {
+    super(name, null);
+    this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
+    this.setReadOnly(true);
+  }
+}
+class ImageField extends Schema {
+  kind = "value";
+  type = "image";
+  constructor(name) {
+    super(name, null);
+    this.check(isTypeOrNull("string"));
+  }
+}
+class FileField extends Schema {
+  type = "file";
+  kind = "file";
+  constructor(name) {
+    super(name, "");
+    this.fromDataverseName = `${name}_name`;
+    this.setReadOnly(true);
+  }
+}
+function boolean(name) {
+  return new BooleanField(name);
+}
+function number(name) {
+  return new NumberField(name);
+}
+function nullableNumber(name) {
+  return new NullableNumberField(name);
+}
+function string(name) {
+  return new StringField(name);
+}
+function nullableString(name) {
+  return new NullableStringField(name);
+}
+function primaryKey(name) {
+  return new PrimaryKeyField(name);
+}
+function list(name, list2) {
+  return new ListField(name, list2);
+}
+function datetime(name) {
+  return new DateTimeField(name);
+}
+function date(name) {
+  return new DateField(name);
+}
+function nullableDate(name) {
+  return new NullableDateField(name);
+}
+function nullableDateTime(name) {
+  return new NullableDateTimeField(name);
+}
+function formatted(name) {
+  return new FormattedField(name);
+}
+function image(name) {
+  return new ImageField(name);
+}
+function file(name) {
+  return new FileField(name);
+}
+class LookupIdProperty extends Schema {
+  kind = "navigation";
+  type = "lookupId";
+  navigationName;
+  #getTable;
+  constructor(name, getTable) {
+    super(name, null);
+    this.navigationName = name;
+    this.#getTable = getTable;
+    this.fromDataverseName = `_${name.toLowerCase()}_value`;
+    this.toDataverseName = `${this.name}@odata.bind`;
+  }
+  #table;
+  get table() {
+    if (!this.#table) {
+      const table = this.#getTable();
+      const { property } = table.getPrimaryKey();
+      this.#table = new Table(table.client, table.name, { id: property });
+    }
+    return this.#table;
+  }
+  transformValueToDataverse(value) {
+    if (value) {
+      return `${this.table.name}(${value})`;
+    } else {
+      return null;
+    }
+  }
+}
 class CollectionProperty extends Schema {
   kind = "navigation";
   type = "collection";
   #getTable;
-  /**
-   * Creates a new CollectionProperty instance.
-   *
-   * @param name The name of the collection property.
-   * @param getTable A function that, when called, returns the Table definition for the related records. This is used to avoid circular dependencies.
-   */
   constructor(name, getTable) {
     super(name, []);
     this.#getTable = getTable;
@@ -498,22 +1947,17 @@ class CollectionProperty extends Schema {
   get table() {
     return this.#table ??= this.#getTable();
   }
-  /**
-   * Transforms an array of values received from Dataverse into an array of transformed related records.
-   * It iterates over the input array and uses the `transformValueFromDataverse` method of the related Table to transform each individual record.
-   *
-   * @param value An array of raw data representing the related records from Dataverse.
-   * @returns An array of transformed related records of type `Infer<TProperties>[]`.
-   */
   transformValueFromDataverse(value) {
-    return Array.from(value).map(
+    return Array.from(value ?? []).map(
       (v) => this.table.transformValueFromDataverse(v)
     );
   }
   getIssues(value, path = []) {
     const issues = super.getIssues(value, path);
     if (Array.isArray(value)) {
-      issues.push(...value.map((v, i) => this.table.getIssues(v, [...path, i])).flat(1));
+      issues.push(
+        ...value.map((v, i) => this.table.getIssues(v, [...path, i])).flat(1)
+      );
     }
     return issues;
   }
@@ -521,115 +1965,49 @@ class CollectionProperty extends Schema {
 function collection(name, getTable) {
   return new CollectionProperty(name, getTable);
 }
-
-class DateProperty extends Schema {
-  /**
-   * The kind of schema element for a date property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "date".
-   */
-  type = "date";
-  /**
-   * Creates a new DateProperty instance.
-   *
-   * @param name The name of the date property.
-   */
-  constructor(name) {
-    super(name, null);
-    this.check(
-      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
-    );
-  }
-  /**
-   * Transforms a value received from Dataverse into a Date object or null.
-   * If the value is null, it returns null. Otherwise, it creates a new Date object from the Dataverse value.
-   *
-   * @param value The value received from Dataverse.
-   * @returns A Date object or null.
-   */
-  transformValueFromDataverse(value) {
-    if (value === null) return null;
-    return new Date(value);
-  }
-}
-function date(name) {
-  return new DateProperty(name);
-}
-
-class DateOnlyProperty extends Schema {
-  /**
-   * The kind of schema element for a date property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "date".
-   */
-  type = "dateOnly";
-  /**
-   * Creates a new DateProperty instance.
-   *
-   * @param name The name of the date property.
-   */
-  constructor(name) {
-    super(name, null);
-    this.check(
-      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
-    );
-  }
-  /**
-   * Transforms a value received from Dataverse into a Date object or null.
-   * If the value is null, it returns null. Otherwise, it creates a new Date object from the Dataverse value.
-   *
-   * @param value The value received from Dataverse.
-   * @returns A Date object or null.
-   */
-  transformValueFromDataverse(value) {
-    if (value === null) return null;
-    return parseDateOnly(value);
-  }
-  transformValueToDataverse(value) {
-    return toDateOnly(value);
-  }
-}
-function dateOnly(name) {
-  return new DateOnlyProperty(name);
-}
-function parseDateOnly(dateString) {
-  const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
-  return new Date(year ?? 0, (month ?? 0) - 1, day);
-}
-function toDateOnly(date) {
-  try {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  } catch (e) {
-    return null;
-  }
-}
-
-class LookupProperty extends Schema {
-  /**
-   * The kind of schema element for an expand property, which is "navigation".
-   */
+class CollectionIdsProperty extends Schema {
   kind = "navigation";
-  /**
-   * The type of the property, which is "expand".
-   */
-  type = "lookup";
-  /**
-   * A function that returns the Table definition for the related record.
-   */
+  type = "collectionIds";
   #getTable;
-  /**
-   * Creates a new ExpandProperty instance.
-   *
-   * @param name The name of the expand property.
-   * @param getTable A function that, when called, returns the Table definition for the related record. This is used to avoid circular dependencies.
-   */
+  constructor(name, getTable) {
+    super(name, []);
+    this.#getTable = getTable;
+    this.check(
+      (v) => !Array.isArray(v) ? "value is not an array" : void 0
+    );
+  }
+  #table;
+  get table() {
+    if (!this.#table) {
+      const table = this.#getTable();
+      const { property } = table.getPrimaryKey();
+      this.#table = new Table(table.client, table.name, { id: property });
+    }
+    return this.#table;
+  }
+  transformValueFromDataverse(value) {
+    return Array.from(value ?? []).map((v) => v[this.table.fields.id.name]);
+  }
+  getIssues(value, path = []) {
+    const issues = super.getIssues(value, path);
+    if (Array.isArray(value)) {
+      issues.push(
+        ...value.map((v, i) => this.table.fields.id.getIssues(v, [...path, i])).flat(1)
+      );
+    }
+    return issues;
+  }
+}
+function collectionIds(name, getTable) {
+  return new CollectionIdsProperty(name, getTable);
+}
+function lookupId(name, getTable) {
+  return new LookupIdProperty(name, getTable);
+}
+class LookupProperty extends Schema {
+  kind = "navigation";
+  type = "lookup";
+  #getTable;
   constructor(name, getTable) {
     super(name, null);
     this.#getTable = getTable;
@@ -638,13 +2016,6 @@ class LookupProperty extends Schema {
   get table() {
     return this.#table ??= this.#getTable();
   }
-  /**
-   * Transforms a value received from Dataverse into a transformed related record or null.
-   * It uses the `transformValueFromDataverse` method of the related Table to transform the data. If the value is null or undefined, it returns null.
-   *
-   * @param value The raw data representing the related record from Dataverse.
-   * @returns The transformed related record of type `Infer<TProperties>` or null.
-   */
   transformValueFromDataverse(value) {
     return value == null ? null : this.table.transformValueFromDataverse(value);
   }
@@ -660,1233 +2031,603 @@ function lookup(name, getTable) {
   return new LookupProperty(name, getTable);
 }
 
-class FormattedProperty extends Schema {
-  /**
-   * The kind of schema element for a string property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "string".
-   */
-  type = "formatted";
-  /**
-   * Creates a new StringProperty instance.
-   *
-   * @param name The name of the string property.
-   */
-  constructor(name) {
-    super(`${name}@OData.Community.Display.V1.FormattedValue`, null);
-    this.setReadOnly(true);
+class ODataQuery {
+  _table;
+  _fields = [];
+  _filters = [];
+  _expands = [];
+  _orderby = [];
+  _top;
+  _includeCount = false;
+  _apply = "";
+  _lambdaAliasIndex = 0;
+  _proxy;
+  constructor(table) {
+    this._table = table;
+    this._proxy = this._buildProxy();
   }
-}
-function formatted(name) {
-  return new FormattedProperty(name);
-}
-
-function isTypeOrNull(type) {
-  return (v) => {
-    if (v === null) return;
-    if (typeof v !== type) {
-      return "Not of type " + type;
-    }
-  };
-}
-
-class ImageProperty extends Schema {
-  /**
-   * The kind of schema element for an image property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "image".
-   */
-  type = "image";
-  /**
-   * Creates a new ImageProperty instance.
-   *
-   * @param name The name of the image property.
-   */
-  constructor(name) {
-    super(name, null);
-    this.check(isTypeOrNull("string"));
+  _buildProxy() {
+    return this._buildProxyForTable(this._table);
   }
-}
-function image(name) {
-  return new ImageProperty(name);
-}
-
-class ListProperty extends Schema {
-  /**
-   * The kind of schema element for a list property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "list".
-   */
-  type = "list";
-  /**
-   * The array of valid values for this list property.
-   */
-  list;
-  /**
-   * Creates a new ListProperty instance.
-   *
-   * @param name The name of the list property.
-   * @param list An array of valid string or number values for this property.
-   */
-  constructor(name, list2) {
-    super(name, null);
-    this.list = list2;
-    this.check((v) => {
-      if (v !== null && !list2.includes(v)) {
-        return `${v} not in [${list2}]`;
+  _buildProxyForTable(table, prefix) {
+    const proxy = {};
+    const fields = table.fields;
+    for (const [key, prop] of Object.entries(fields)) {
+      const dataverseName = prop.fromDataverseName ?? prop.name;
+      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
+        const navProp = prop;
+        const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName;
+        let cached;
+        Object.defineProperty(proxy, key, {
+          get: () => {
+            if (!cached) {
+              const sub = this._buildProxyForTable(navProp.table, currentPrefix);
+              sub.toString = () => dataverseName;
+              const lambdaMap = {};
+              const navFields = navProp.table.fields;
+              for (const [lk, lp] of Object.entries(navFields)) {
+                lambdaMap[lk] = lp.fromDataverseName ?? lp.name;
+              }
+              const buildLambdaProxy = (alias) => {
+                const lp = {};
+                for (const [k, n] of Object.entries(lambdaMap)) lp[k] = `${alias}/${n}`;
+                return lp;
+              };
+              const resolveAliasAndCallback = (a, b) => {
+                if (typeof a === "function") {
+                  const alias = String.fromCharCode(97 + this._lambdaAliasIndex++ % 26);
+                  return { alias, cb: a };
+                }
+                return { alias: a, cb: b };
+              };
+              sub.any = (a, b) => {
+                const { alias, cb } = resolveAliasAndCallback(a, b);
+                return `${getName(sub)}/any(${alias}: ${cb(buildLambdaProxy(alias))})`;
+              };
+              sub.all = (a, b) => {
+                const { alias, cb } = resolveAliasAndCallback(a, b);
+                return `${getName(sub)}/all(${alias}: ${cb(buildLambdaProxy(alias))})`;
+              };
+              cached = sub;
+            }
+            return cached;
+          },
+          enumerable: true,
+          configurable: true
+        });
+      } else {
+        proxy[key] = prefix ? `${prefix}/${dataverseName}` : dataverseName;
       }
+    }
+    return proxy;
+  }
+  /**
+   * Restricts the returned columns to the specified fields.
+   * This narrows the result type to only the selected properties.
+   *
+   * @param keys One or more value-field keys (navigation properties are excluded).
+   *
+   * @example
+   * const q = fetchOdata(Person).select("name", "age");
+   * // TResult → { name: string; age: number }
+   */
+  select(...keys) {
+    this._fields = keys.map((k) => this._proxy[k]);
+    return this;
+  }
+  where(filter) {
+    const str = typeof filter === "string" ? filter : filter(this._proxy);
+    this._filters.push(str);
+    return this;
+  }
+  /**
+   * Adds a `$expand` clause for a navigation property. The callback receives a
+   * nested {@link ODataQuery} scoped to the related table for further `.select()`,
+   * `.where()`, `.expand()`, etc.
+   *
+   * @param key The navigation property key.
+   * @param sub A callback to configure the nested query.
+   *
+   * @example
+   * fetchOdata(Person)
+   *   .select("name")
+   *   .expand("primaryAddress", sub => sub.select("street", "zip"));
+   *
+   * @example
+   * // Nested expand:
+   * fetchOdata(Person)
+   *   .expand("primaryAddress", sub =>
+   *     sub.expand("location", sub2 => sub2.select("name"))
+   *   );
+   */
+  expand(key, sub) {
+    const prop = this._table.fields[key];
+    const child = new ODataQuery(prop.table);
+    const result = sub(child);
+    const q = result ?? child;
+    this._expands.push({ name: prop.name, query: q._build() });
+    return this;
+  }
+  orderby(arg) {
+    if (typeof arg === "function") {
+      const result = arg(this._proxy);
+      if (result instanceof OrderSpec) {
+        this._orderby = result.fields.map((f) => ({ name: f, dir: result.direction }));
+      } else if (Array.isArray(result)) {
+        this._orderby = result.flatMap((s) => s.fields.map((f) => ({ name: f, dir: s.direction })));
+      } else {
+        this._orderby = Object.entries(result).filter(([, v]) => v).map(([k, v]) => ({ name: k, dir: v }));
+      }
+      return this;
+    }
+    this._orderby = Object.entries(arg).filter(([, v]) => v).map(([k, v]) => ({ name: this._proxy[k], dir: v }));
+    return this;
+  }
+  /**
+   * Limits the number of returned records (`$top`).
+   *
+   * @example
+   * fetchOdata(Person).top(10);
+   */
+  top(n) {
+    this._top = n;
+    return this;
+  }
+  /**
+   * Includes the total record count in the response (`$count=true`).
+   *
+   * @example
+   * const q = fetchOdata(Person).includeCount();
+   * // query string: "$count=true"
+   */
+  includeCount() {
+    this._includeCount = true;
+    return this;
+  }
+  /**
+   * Adds a `$apply` expression for server-side aggregation.
+   *
+   * @param expression A raw OData `$apply` expression.
+   *
+   * @example
+   * fetchOdata(Person).apply("groupby((person_age),aggregate(person_age with sum as total))");
+   */
+  apply(expression) {
+    this._apply = expression;
+    return this;
+  }
+  /**
+   * Adds a `$expand` with `/$ref` to retrieve only the related record IDs
+   * instead of full expanded records. The navigation property is removed from
+   * the result type.
+   *
+   * @param key The navigation property key.
+   *
+   * @example
+   * const q = fetchOdata(Person).expandRef("primaryAddress");
+   * // query: "$expand=person_Address/$ref"
+   * // TResult no longer includes primaryAddress
+   */
+  expandRef(key) {
+    const prop = this._table.fields[key];
+    this._expands.push({ name: prop.name, query: "", isRef: true });
+    return this;
+  }
+  _build() {
+    const parts = [];
+    if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
+    if (this._filters.length === 1) {
+      parts.push(`$filter=${this._filters[0]}`);
+    } else if (this._filters.length > 1) {
+      parts.push(`$filter=${this._filters.join(" and ")}`);
+    }
+    if (this._orderby.length) {
+      parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+    }
+    if (this._expands.length) {
+      parts.push(`$expand=${this._expands.map((e) => {
+        if (e.isRef) return `${e.name}/$ref`;
+        return e.query ? `${e.name}(${e.query})` : e.name;
+      }).join(",")}`);
+    }
+    if (this._top !== void 0) parts.push(`$top=${this._top}`);
+    if (this._includeCount) parts.push(`$count=true`);
+    if (this._apply) parts.push(`$apply=${this._apply}`);
+    return parts.join("&");
+  }
+  toString() {
+    return this._build();
+  }
+  async execute() {
+    const qs = this.toString();
+    if (!qs) return this._table.getRecords();
+    const raw = await this._table.client.getRecords(this._table.name, qs);
+    return raw.map((v) => this._table.transformValueFromDataverse(v));
+  }
+}
+function fetchOdata(table) {
+  return new ODataQuery(table);
+}
+
+class EntityQueryBuilder {
+  _aliasCounter = 0;
+  _table;
+  _attributes = [];
+  _links = [];
+  _isDistinct = false;
+  _filters = [];
+  _proxy;
+  _top;
+  _page;
+  _pageSize;
+  _isAggregate = false;
+  _returnTotalRecordCount = false;
+  _useRawOrderBy = false;
+  _lateMaterialize = false;
+  _aggregateLimit;
+  _orders = [];
+  _pagingCookie;
+  _datasource;
+  _options;
+  /** @param table The Table definition to build the query against. */
+  constructor(table) {
+    this._table = table;
+    this._proxy = this._buildProxy();
+  }
+  _buildProxy() {
+    const proxy = {};
+    for (const [key, prop] of Object.entries(this._table.fields)) {
+      proxy[key] = prop.fromDataverseName ?? prop.name;
+    }
+    return proxy;
+  }
+  /**
+   * Selects specific fields to include in the FetchXML query.
+   * The result type is narrowed to only include selected fields.
+   *
+   * @example
+   * fetchXml(contactTable)
+   *   .select(f => ({ name: f.name, email: f.email }))
+   */
+  select(selector) {
+    const fieldsMock = {};
+    for (const key of Object.keys(this._table.fields)) {
+      fieldsMock[key] = key;
+    }
+    const selectedMap = selector(fieldsMock);
+    for (const [alias, propKey] of Object.entries(selectedMap)) {
+      const fieldDef = this._table.fields[propKey];
+      this._attributes.push({ name: fieldDef.name, alias });
+    }
+    return this;
+  }
+  /**
+   * Adds a filter condition to the FetchXML query.
+   * Accepts a raw filter string or a callback that receives a field proxy.
+   * Multiple `where()` calls are combined with AND.
+   *
+   * @example
+   * // With callback
+   * fetchXml(contactTable).where(f => condition(f.status, "eq", 1))
+   *
+   * @example
+   * // Raw filter string
+   * fetchXml(contactTable).where(condition("statuscode", "eq", "1"))
+   */
+  where(filter) {
+    const str = typeof filter === "function" ? filter(this._proxy) : filter;
+    this._filters.push(str);
+    return this;
+  }
+  /**
+   * Adds a link-entity join to another table. The result type merges the
+   * joined entity's selected fields.
+   *
+   * @example
+   * fetchXml(contactTable)
+   *   .select(f => ({ name: f.name }))
+   *   .join("inner", accountTable, a => a.accountid, c => c.parentcustomerid,
+   *     q => q.select(a => ({ accountName: a.name })))
+   */
+  join(linkType, table, from, to, subquery, intersect) {
+    const nestedBuilder = new EntityQueryBuilder(table);
+    subquery(nestedBuilder);
+    const fromFieldName = table.fields[from].name;
+    const toFieldName = this._table.fields[to].name;
+    const autoAlias = `auto_link_${++this._aliasCounter}`;
+    this._links.push({
+      name: table.name,
+      from: fromFieldName,
+      to: toFieldName,
+      alias: autoAlias,
+      linkType,
+      builder: nestedBuilder,
+      intersect
     });
-  }
-}
-function list(name, list2) {
-  return new ListProperty(name, list2);
-}
-
-function groupby(values, aggregations) {
-  return `groupby((${values.filter(isNonEmptyString).join(",")})${aggregations ? "," + aggregations : ""})`;
-}
-function aggregate(...values) {
-  return `aggregate(${values.filter(isNonEmptyString).join(",")})`;
-}
-function average(name, alias = name) {
-  return `${name} with average as ${alias}`;
-}
-function sum(name, alias = name) {
-  return `${name} with sum as ${alias}`;
-}
-function min(name, alias = name) {
-  return `${name} with min as ${alias}`;
-}
-function max(name, alias = name) {
-  return `${name} with max as ${alias}`;
-}
-function count(alias = "count") {
-  return `$count as ${alias}`;
-}
-
-function and(...conditions) {
-  const validConditions = conditions.filter(isNonEmptyString);
-  if (validConditions.length === 0) return "";
-  return `(${validConditions.join(" and ")})`;
-}
-function or(...conditions) {
-  const validConditions = conditions.filter(isNonEmptyString);
-  if (validConditions.length === 0) return "";
-  return `(${validConditions.join(" or ")})`;
-}
-function not(condition) {
-  return isNonEmptyString(condition) ? `not(${condition})` : "";
-}
-function contains(name, value) {
-  return `contains(${name},${wrapString(value)})`;
-}
-function startsWith(name, value) {
-  return `startswith(${name},${wrapString(value)})`;
-}
-function endsWith(name, value) {
-  return `endswith(${name},${wrapString(value)})`;
-}
-function equals(name, value) {
-  return `(${name} eq ${wrapString(value)})`;
-}
-function notEquals(name, value) {
-  return `(${name} ne ${wrapString(value)})`;
-}
-function greaterThan(name, value) {
-  return `(${name} gt ${wrapString(value)})`;
-}
-function greaterThanOrEqual(name, value) {
-  return `(${name} ge ${wrapString(value)})`;
-}
-function lessThan(name, value) {
-  return `(${name} lt ${wrapString(value)})`;
-}
-function lessThanOrEqual(name, value) {
-  return `(${name} le ${wrapString(value)})`;
-}
-function isActive() {
-  return "statecode eq 0";
-}
-function isInactive() {
-  return "statecode eq 1";
-}
-function isNull(name) {
-  return `${name} eq null`;
-}
-function isNotNull(name) {
-  return `${name} ne null`;
-}
-
-function Above(name, value) {
-  return `Microsoft.Dynamics.CRM.Above(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
-}
-
-function AboveOrEqual(name, value) {
-  return `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
-}
-
-function Between(name, value1, value2) {
-  return `Microsoft.Dynamics.CRM.Between(PropertyName=${wrapString(name)},PropertyValues=[${wrapString(value1)},${wrapString(
-    value2
-  )}])`;
-}
-
-function Contains(name, value) {
-  return `Microsoft.Dynamics.CRM.Contains(PropertyName=${wrapString(name)},PropertyValue=${wrapString(value)})`;
-}
-
-function ContainsValues(name, ...values) {
-  return `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-}
-
-function DoesNotContainValues(name, ...values) {
-  return `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-}
-
-function EqualBusinessId(name) {
-  return `Microsoft.Dynamics.CRM.EqualBusinessId(PropertyName=${wrapString(name)})`;
-}
-
-function EqualRoleBusinessId(name) {
-  return `Microsoft.Dynamics.CRM.EqualRoleBusinessId(PropertyName=${wrapString(name)})`;
-}
-
-function EqualUserId(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserId(PropertyName=${wrapString(name)})`;
-}
-
-function EqualUserLanguage(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserLanguage(PropertyName=${wrapString(name)})`;
-}
-
-function EqualUserOrUserHierarchy(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${wrapString(name)})`;
-}
-
-function EqualUserOrUserHierarchyAndTeams(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${wrapString(name)})`;
-}
-
-function EqualUserOrUserTeams(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserOrUserTeams(PropertyName=${wrapString(name)})`;
-}
-
-function EqualUserTeams(name) {
-  return `Microsoft.Dynamics.CRM.EqualUserTeams(PropertyName=${wrapString(name)})`;
-}
-
-function In(name, ...values) {
-  return `Microsoft.Dynamics.CRM.In(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-}
-
-function InFiscalPeriod(name, value) {
-  return `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function InFiscalPeriodAndYear(name, fiscalPeriod, fiscalYear) {
-  return `Microsoft.Dynamics.CRM.InFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
-}
-
-function InFiscalYear(name, value) {
-  return `Microsoft.Dynamics.CRM.InFiscalYear(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function InOrAfterFiscalPeriodAndYear(name, fiscalPeriod, fiscalYear) {
-  return `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
-}
-
-function InOrBeforeFiscalPeriodAndYear(name, fiscalPeriod, fiscalYear) {
-  return `Microsoft.Dynamics.CRM.InOrBeforeFiscalPeriodAndYear(PropertyName=${wrapString(name)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
-}
-
-function Last7Days(name) {
-  return `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${wrapString(name)})`;
-}
-
-function LastFiscalPeriod(name) {
-  return `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${wrapString(name)})`;
-}
-
-function LastFiscalYear(name) {
-  return `Microsoft.Dynamics.CRM.LastFiscalYear(PropertyName=${wrapString(name)})`;
-}
-
-function LastMonth(name) {
-  return `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${wrapString(name)})`;
-}
-
-function LastWeek(name) {
-  return `Microsoft.Dynamics.CRM.LastWeek(PropertyName=${wrapString(name)})`;
-}
-
-function LastXDays(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXDays(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastXFiscalPeriods(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastXFiscalYears(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastXHours(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXHours(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastXMonths(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXMonths(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastXWeeks(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXWeeks(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastXYears(name, value) {
-  return `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function LastYear(name) {
-  return `Microsoft.Dynamics.CRM.LastYear(PropertyName=${wrapString(name)})`;
-}
-
-function Next7Days(name) {
-  return `Microsoft.Dynamics.CRM.Next7Days(PropertyName=${wrapString(name)})`;
-}
-
-function NextFiscalPeriod(name) {
-  return `Microsoft.Dynamics.CRM.NextFiscalPeriod(PropertyName=${wrapString(name)})`;
-}
-
-function NextFiscalYear(name) {
-  return `Microsoft.Dynamics.CRM.NextFiscalYear(PropertyName=${wrapString(name)})`;
-}
-
-function NextMonth(name) {
-  return `Microsoft.Dynamics.CRM.NextMonth(PropertyName=${wrapString(name)})`;
-}
-
-function NextWeek(name) {
-  return `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${wrapString(name)})`;
-}
-
-function NextXDays(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXDays(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextXFiscalPeriods(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextXFiscalYears(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXFiscalYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextXHours(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextXMonths(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextXWeeks(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXWeeks(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextXYears(name, value) {
-  return `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${wrapString(name)},PropertyValue=${value})`;
-}
-
-function NextYear(name) {
-  return `Microsoft.Dynamics.CRM.NextYear(PropertyName=${wrapString(name)})`;
-}
-
-function NotBetween(name, value1, value2) {
-  return `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${wrapString(name)},PropertyValues=[${wrapString(
-    value1
-  )},${wrapString(value2)}])`;
-}
-
-function NotEqualBusinessId(name) {
-  return `Microsoft.Dynamics.CRM.NotEqualBusinessId(PropertyName=${wrapString(name)})`;
-}
-
-function NotEqualUserId(name) {
-  return `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${wrapString(name)})`;
-}
-
-function NotIn(name, ...values) {
-  return `Microsoft.Dynamics.CRM.NotIn(PropertyName=${wrapString(name)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-}
-
-function NotUnder(name, value) {
-  return `Microsoft.Dynamics.CRM.NotUnder(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OlderThanXDays(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXDays(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OlderThanXHours(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXHours(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OlderThanXMinutes(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXMinutes(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OlderThanXMonths(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OlderThanXWeeks(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXWeeks(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OlderThanXYears(name, value) {
-  return `Microsoft.Dynamics.CRM.OlderThanXYears(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function On(name, value) {
-  return `Microsoft.Dynamics.CRM.On(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OnOrAfter(name, value) {
-  return `Microsoft.Dynamics.CRM.OnOrAfter(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function OnOrBefore(name, value) {
-  return `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function ThisFiscalPeriod(name) {
-  return `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${wrapString(name)})`;
-}
-
-function ThisFiscalYear(name) {
-  return `Microsoft.Dynamics.CRM.ThisFiscalYear(PropertyName=${wrapString(name)})`;
-}
-
-function ThisMonth(name) {
-  return `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${wrapString(name)})`;
-}
-
-function ThisWeek(name) {
-  return `Microsoft.Dynamics.CRM.ThisWeek(PropertyName=${wrapString(name)})`;
-}
-
-function ThisYear(name) {
-  return `Microsoft.Dynamics.CRM.ThisYear(PropertyName=${wrapString(name)})`;
-}
-
-function Today(name) {
-  return `Microsoft.Dynamics.CRM.Today(PropertyName=${wrapString(name)})`;
-}
-
-function Tomorrow(name) {
-  return `Microsoft.Dynamics.CRM.Tomorrow(PropertyName=${wrapString(name)})`;
-}
-
-function Under(name, value) {
-  return `Microsoft.Dynamics.CRM.Under(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function UnderOrEqual(name, value) {
-  return `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${wrapString(name)},PropertyValue=${wrapString(
-    value
-  )})`;
-}
-
-function Yesterday(name) {
-  return `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${wrapString(name)})`;
-}
-
-function query(query2) {
-  const params = new URLSearchParams();
-  if (query2?.select) params.set("$select", query2.select);
-  if (query2?.expand) params.set("$expand", query2.expand);
-  if (query2?.orderby) params.set("$orderby", query2.orderby);
-  if (query2?.filter) params.set("$filter", query2.filter);
-  if (query2?.top) params.set("$top", query2.top.toFixed(0));
-  if (query2?.apply) params.set("$apply", query2.apply);
-  return params.toString();
-}
-function keys(keys2) {
-  return Object.entries(keys2).filter((kv) => isNonEmptyString(kv[1])).map(([k, v]) => `${k}=${wrapString(v)}`).join(",");
-}
-function select(...values) {
-  return values.filter(isNonEmptyString).join(",");
-}
-function expand(values) {
-  if (typeof values === "string") return values;
-  return Object.entries(values).map(
-    ([name, v]) => typeof v === "string" ? v : `${name}(${v.select ? `$select=${select(...Array.isArray(v.select) ? v.select : [v.select])};` : ""}${v.expand ? `$expand=${expand(v.expand)}` : ""})`
-  ).join(",");
-}
-function orderby(values) {
-  return Object.entries(values).filter((kv) => isNonEmptyString(kv[1])).map(([k, v]) => `${k} ${v}`).join(",");
-}
-
-class Table extends Schema {
-  properties;
-  kind = "table";
-  type = "table";
-  /**
-   * Creates a new Table instance.
-   *
-   * @param entitySetName The entity set name of the Dataverse table.
-   * @param props An object defining the properties of the table.
-   */
-  constructor(entitySetName, props) {
-    super(entitySetName, null);
-    this.name = entitySetName;
-    this.properties = props;
-  }
-  getIssues(value, path = []) {
-    const issues = super.getIssues(value, path);
-    if (typeof value !== "object") value = {};
-    for (const [key, property] of Object.entries(this.properties)) {
-      if (!property.getReadOnly())
-        issues.push(...property.getIssues(value[key], [...path, key]));
-    }
-    return issues;
+    return this;
   }
   /**
-   * Gets the default values for the table's properties, optionally merged with provided values.
-   *
-   * @param value Optional object containing values to merge with the defaults.
-   * @returns An object containing the default values for the table.
+   * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
    *
    * @example
-   * // Example 1: Get all default values.
-   * const defaultAccount = myAccountTable.getDefault();
-   * // Returns an object with all properties set to their defaults.
-   *
-   * // Example 2: Merge provided values with defaults.
-   * const partialAccount = { name: "Initial Name" };
-   * const mergedAccount = myAccountTable.getDefault(partialAccount);
-   * // Returns an object with defaults, but 'name' is set to "Initial Name".
+   * fetchXml(contactTable)
+   *   .select(f => ({ name: f.name }))
+   *   .innerJoin(accountTable, a => a.accountid, c => c.parentcustomerid,
+   *     q => q.select(a => ({ accountName: a.name })))
    */
-  getDefault(value) {
-    const result = {};
-    for (const [key, property] of Object.entries(this.properties)) {
-      if (value === void 0 || !(key in value)) {
-        result[key] = property.getDefault();
+  innerJoin(table, from, to, subquery, intersect) {
+    return this.join("inner", table, from, to, subquery, intersect);
+  }
+  /** Enables distinct (deduplicated) results. */
+  distinct() {
+    this._isDistinct = true;
+    return this;
+  }
+  /** Limits the number of returned records. */
+  top(n) {
+    this._top = n;
+    return this;
+  }
+  /** Sets the page number for paginated results. */
+  page(n) {
+    this._page = n;
+    return this;
+  }
+  /** Sets the number of records per page. */
+  pageSize(n) {
+    this._pageSize = n;
+    return this;
+  }
+  /** Requests the server to include the total record count. */
+  returnTotalRecordCount() {
+    this._returnTotalRecordCount = true;
+    return this;
+  }
+  /** Instructs the server to use the raw order-by string. */
+  useRawOrderBy() {
+    this._useRawOrderBy = true;
+    return this;
+  }
+  /** Enables late materialization for better performance on large datasets. */
+  lateMaterialize() {
+    this._lateMaterialize = true;
+    return this;
+  }
+  /** Sets the aggregate limit for grouped results. */
+  aggregateLimit(n) {
+    this._aggregateLimit = n;
+    return this;
+  }
+  /** Sets custom query options. */
+  options(value) {
+    this._options = value;
+    return this;
+  }
+  /** Sets an alternate datasource (e.g. for federated queries). */
+  datasource(value) {
+    this._datasource = value;
+    return this;
+  }
+  /** Marks the query as an aggregate (grouped) query. */
+  aggregate() {
+    this._isAggregate = true;
+    return this;
+  }
+  orderby(...args) {
+    if (typeof args[0] === "function") {
+      const result = args[0](this._proxy);
+      if (result instanceof OrderSpec) {
+        for (const attr of result.fields) {
+          this._orders.push({ attribute: attr, descending: result.direction === "desc" });
+        }
+      } else if (Array.isArray(result)) {
+        for (const spec of result) {
+          for (const attr of spec.fields) {
+            this._orders.push({ attribute: attr, descending: spec.direction === "desc" });
+          }
+        }
       } else {
-        result[key] = value[key];
+        for (const [attr, dir] of Object.entries(result)) {
+          this._orders.push({ attribute: attr, descending: dir === "desc" });
+        }
       }
-    }
-    return result;
-  }
-  /**
-   * Retrieves a single record from the table by its ID.
-   *
-   * @param keys The unique identifier of the record to retrieve.
-   * @returns A promise that resolves to the retrieved record, or null if not found.
-   *
-   * @example
-   * const account = await myAccountTable.getRecord("12345678-90ab-cdef-1234-567890abcdef");
-   * if (account) {
-   * console.log(account.name); // Access a property of the record
-   * }
-   */
-  async getRecord(id) {
-    return getRecord(this.name, id, buildQuery(this)).then(
-      (v) => this.transformValueFromDataverse(v)
-    );
-  }
-  getAlternateKeys(value) {
-    return Object.entries(value).map((kv) => `${this.properties[kv[0]].name}=${kv[1]}`).join(",");
-  }
-  /**
-   * Retrieves multiple records from the table, optionally with a query.
-   *
-   * @param query An optional object specifying query parameters such as order, filter, and top.
-   * @returns A promise that resolves to an array of retrieved records.
-   *
-   * @example
-   * // Example 1: Get all accounts
-   * const allAccounts = await myAccountTable.getRecords();
-   *
-   * // Example 2: Get accounts ordered by name, with a limit
-   * const limitedAccounts = await myAccountTable.getRecords({
-   * orderby: { name: "asc" },
-   * top: 10,
-   * });
-   *
-   * // Example 3: Get accounts filtered by a condition
-   * const filteredAccounts = await myAccountTable.getRecords({
-   * filter: equals("accountnumber", "123")
-   * });
-   */
-  async getRecords(query2) {
-    return getRecords(this.name, buildQuery(this, query2)).then(
-      (values) => values.map((v) => this.transformValueFromDataverse(v))
-    );
-  }
-  /**
-   * Retrieves the value of a specific property for a record.
-   *
-   * @param key The key of the property to retrieve.
-   * @param id The unique identifier of the record.
-   * @param query Optional query parameters to apply.
-   * @returns A promise that resolves to the property value.
-   *
-   * @example
-   * //Get a single property
-   * const accountName = await myAccountTable.getPropertyValue("name", "12345678-90ab-cdef-1234-567890abcdef");
-   *
-   * //Get a collection valued property
-   * const contacts = await myAccountTable.getPropertyValue("contact_customer_accounts", "12345678-90ab-cdef-1234-567890abcdef");
-   */
-  async getPropertyValue(key, id, query2) {
-    const prop = this.properties[key];
-    if (prop.kind === "value" || prop.type === "lookupId") {
-      return getPropertyValue(this.name, id, prop.name).then(
-        (v) => prop.transformValueFromDataverse(v)
-      );
-    }
-    if (prop.type === "collection" || prop.type === "collectionIds") {
-      return getAssociatedRecords(
-        this.name,
-        id,
-        prop.name,
-        buildQuery(this, query2)
-      ).then(
-        (v) => prop.transformValueFromDataverse(v)
-      );
-    }
-    if (prop.type === "lookup") {
-      return getAssociatedRecord(
-        this.name,
-        id,
-        prop.name,
-        buildQuery(this, query2)
-      ).then(
-        (v) => prop.transformValueFromDataverse(v)
-      );
-    }
-    throw new Error("Invalid Property");
-  }
-  /**
-   * Updates the value of a specific property for a record.
-   *
-   * @param key The key of the property to update.
-   * @param id The unique identifier of the record to update.
-   * @param value The new value for the property.
-   * @returns A promise that resolves to the ID of the updated record.
-   *
-   * @example
-   * await myAccountTable.updatePropertyValue("name", "12345678-90ab-cdef-1234-567890abcdef", "New Name");
-   */
-  async updatePropertyValue(key, id, value) {
-    const prop = this.properties[key];
-    if (prop.kind === "navigation") {
-      await this.updateNavigationProperty(prop, id, value);
     } else {
-      await updatePropertyValue(
-        this.name,
-        id,
-        this.properties[key].name,
-        prop.transformValueToDataverse(value)
-      );
+      const entityname = args[0];
+      const attribute = args[1];
+      const direction = args[2];
+      this._orders.push({ attribute, entityname, descending: direction === "desc" });
     }
-    return id;
+    return this;
+  }
+  /** Adds a SUM aggregate. Marks the query as aggregate. */
+  sum(field, alias) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, aggregate: "sum" });
+    return this;
+  }
+  /** Adds an AVG aggregate. Marks the query as aggregate. */
+  avg(field, alias) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, aggregate: "avg" });
+    return this;
+  }
+  /** Adds a MIN aggregate. Marks the query as aggregate. */
+  min(field, alias) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, aggregate: "min" });
+    return this;
+  }
+  /** Adds a MAX aggregate. Marks the query as aggregate. */
+  max(field, alias) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, aggregate: "max" });
+    return this;
+  }
+  /** Adds a COUNT aggregate. Marks the query as aggregate. */
+  count(field, alias) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, aggregate: "count" });
+    return this;
+  }
+  /** Adds a COUNTCOLUMN aggregate with optional distinct flag. Marks the query as aggregate. */
+  countColumn(field, alias, distinct) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, aggregate: "countcolumn", distinct });
+    return this;
+  }
+  /** Adds a custom row aggregate. */
+  rowAggregate(field, alias, rowaggregate) {
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, rowaggregate });
+    return this;
+  }
+  /** Adds a GROUP BY on a field. Marks the query as aggregate. */
+  groupBy(field, alias) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, groupby: true });
+    return this;
+  }
+  /** Adds a GROUP BY with date grouping (e.g. "day", "month", "year"). Marks the query as aggregate. */
+  groupByDate(field, alias, dategrouping) {
+    this._isAggregate = true;
+    const fieldDef = this._table.fields[field];
+    this._attributes.push({ name: fieldDef.name, alias, groupby: true, dategrouping });
+    return this;
+  }
+  /** Sets the paging cookie for navigating paginated results. */
+  pagingCookie(cookie) {
+    this._pagingCookie = cookie;
+    return this;
   }
   /**
-   * Handles updating navigation properties (lookups, expands, collections, lookups).
-   * @param property The navigation property to update
-   * @param id The id of the record being updated.
-   * @param value The new value for the navigation property.
+   * Returns the full FetchXML string.
+   *
+   * @example
+   * const xml = fetchXml(contactTable)
+   *   .select(f => ({ name: f.name }))
+   *   .toXml();
+   * // <fetch version="1.0" mapping="logical">
+   * //   <entity name="contact">
+   * //     <attribute name="fullname" alias="name" />
+   * //   </entity>
+   * // </fetch>
    */
-  async updateNavigationProperty(property, id, value) {
-    if (property.type === "collection" || property.type === "collectionIds") {
-      if (Array.isArray(value)) {
-        const ids = property.type === "collection" ? await Promise.all(
-          value.map((v) => property.table.saveRecord(v))
-        ) : value;
-        return associateRecordToList(
-          this.name,
-          id,
-          property.name,
-          property.table.name,
-          property.table.getPrimaryKey().property.name,
-          ids
-        );
+  toXml() {
+    const lines = [];
+    const fetchAttrs = [`version="1.0"`, `mapping="logical"`];
+    if (this._top !== void 0) fetchAttrs.push(`top='${this._top}'`);
+    if (this._isDistinct) fetchAttrs.push(`distinct="true"`);
+    if (this._page !== void 0) fetchAttrs.push(`page='${this._page}'`);
+    if (this._pageSize !== void 0) fetchAttrs.push(`count='${this._pageSize}'`);
+    if (this._isAggregate) fetchAttrs.push(`aggregate="true"`);
+    if (this._returnTotalRecordCount) fetchAttrs.push(`returntotalrecordcount="true"`);
+    if (this._useRawOrderBy) fetchAttrs.push(`useraworderby="true"`);
+    if (this._lateMaterialize) fetchAttrs.push(`latematerialize="true"`);
+    if (this._aggregateLimit !== void 0) fetchAttrs.push(`aggregatelimit='${this._aggregateLimit}'`);
+    if (this._pagingCookie) fetchAttrs.push(`paging-cookie='${this._pagingCookie}'`);
+    if (this._datasource) fetchAttrs.push(`datasource='${this._datasource}'`);
+    if (this._options) fetchAttrs.push(`options='${this._options}'`);
+    lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
+    lines.push(`  <entity name="${this._table.name}">`);
+    for (const attr of this._attributes) {
+      const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
+      if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
+      if (attr.groupby) attrParts.push(`groupby='true'`);
+      if (attr.dategrouping) attrParts.push(`dategrouping='${attr.dategrouping}'`);
+      if (attr.distinct) attrParts.push(`distinct='true'`);
+      if (attr.rowaggregate) attrParts.push(`rowaggregate='${attr.rowaggregate}'`);
+      lines.push(`    <attribute ${attrParts.join(" ")} />`);
+    }
+    for (const order of this._orders) {
+      const parts = [];
+      if (order.entityname) parts.push(`entityname='${order.entityname}'`);
+      parts.push(`attribute='${order.attribute}'`);
+      if (order.descending) parts.push(`descending='true'`);
+      lines.push(`    <order ${parts.join(" ")} />`);
+    }
+    if (this._filters.length > 0) {
+      lines.push(`    <filter type="and">`);
+      for (const c of this._filters) {
+        lines.push(`      ${c}`);
       }
+      lines.push(`    </filter>`);
     }
-    if (property.type === "lookup" || property.type == "lookupId") {
-      const name = property.type === "lookup" ? property.name : property.navigationName;
-      if (value === null) {
-        return disssociateRecord(this.name, id, name);
-      } else {
-        const childId = property.type === "lookup" ? await property.table.saveRecord(value) : value;
-        return associateRecord(
-          this.name,
-          id,
-          name,
-          property.table.name,
-          childId
-        );
+    for (const link of this._links) {
+      const linkAttrs = [
+        `name="${link.name}"`,
+        `from="${link.from}"`,
+        `to="${link.to}"`,
+        `alias="${link.alias}"`,
+        `link-type="${link.linkType}"`
+      ];
+      if (link.intersect) linkAttrs.push(`intersect="true"`);
+      lines.push(`    <link-entity ${linkAttrs.join(" ")}>`);
+      if (link.builder._filters.length > 0) {
+        lines.push(`      <filter type="and">`);
+        for (const c of link.builder._filters) {
+          const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
+          lines.push(`        ${entityScoped}`);
+        }
+        lines.push(`      </filter>`);
       }
-    }
-  }
-  /**
-   * Associates a child record with a parent record through a navigation property.
-   *
-   * @param key The key of the navigation property to use for the association.
-   * @param id The unique identifier of the parent record.
-   * @param childId The unique identifier of the child record to associate.
-   * @returns A promise that resolves to the ID of the parent record.
-   *
-   * @example
-   * const accountId = "a1b2c3d4-e5f6-7890-1234-567890abcdef";
-   * const contactId = "f9e8d7c6-b5a4-3210-fedc-ba9876543210";
-   * await myAccountTable.associateRecord("primarycontactid", accountId, contactId);
-   */
-  async associateRecord(key, id, childId) {
-    const prop = this.properties[key];
-    if (prop.kind === "navigation") {
-      return associateRecord(
-        this.name,
-        id,
-        prop.name,
-        prop.table.name,
-        childId
-      );
-    } else {
-      throw new Error("Can only associate to naigation properties");
-    }
-  }
-  async dissociateRecord(key, id, childId) {
-    const prop = this.properties[key];
-    if (prop.kind === "navigation") {
-      return disssociateRecord(
-        this.name,
-        id,
-        prop.name,
-        prop.type === "collection" || prop.type === "collectionIds" ? childId : void 0
-      );
-    } else {
-      throw new Error("Can only associate to naigation properties");
-    }
-  }
-  /**
-   * Saves a record to the table.  Handles both creating new records and updating existing ones.
-   *
-   * @param value An object containing the data to save.  The object structure should match the table's properties.
-   * @returns A promise that resolves to the GUID of the saved record.
-   *
-   * @example
-   * // Example 1: Creating a new account
-   * const newAccountId = await myAccountTable.saveRecord({
-   * name: "New Account Name",
-   * accountnumber: "NewAccount001",
-   * });
-   *
-   * // Example 2: Updating an existing account
-   * const existingAccountId = "a1b2c3d4-e5f6-7890-1234-567890abcdef";
-   * const updatedAccountId = await myAccountTable.saveRecord({
-   * id: existingAccountId,
-   * name: "Updated Account Name",
-   * });
-   */
-  async saveRecord(value) {
-    const promises = [];
-    const pk = this.getPrimaryKey().property.name;
-    let id = this.getPrimaryId(value);
-    if (id) {
-      promises.push(
-        patchRecord(
-          this.name,
-          id,
-          this.transformValueToDataverse(value),
-          query({ select: pk })
-        )
-      );
-    } else {
-      const record = await postRecord(
-        this.name,
-        this.transformValueToDataverse(value),
-        query({ select: pk })
-      );
-      id = record[pk];
-    }
-    for (const [key, property] of Object.entries(this.properties)) {
-      if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "navigation") {
-        promises.push(this.updateNavigationProperty(property, id, value[key]));
+      for (const nestedAttr of link.builder._attributes) {
+        const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
+        if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
+        if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
+        if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
+        if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
+        if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
+        lines.push(`      <attribute ${attrParts.join(" ")} />`);
       }
+      lines.push(`    </link-entity>`);
     }
-    await Promise.all(promises);
-    return id;
+    lines.push(`  </entity>`);
+    lines.push(`</fetch>`);
+    return lines.join("\n");
   }
   /**
-   * Deletes a record from the table by its ID.
-   *
-   * @param id The unique identifier of the record to delete.
-   * @returns A promise that resolves to the ID of the deleted record.
+   * Returns the URL-encoded query string for use in the Dataverse API.
    *
    * @example
-   * await myAccountTable.deleteRecord("12345678-90ab-cdef-1234-567890abcdef");
+   * fetchXml(contactTable).select(f => ({ name: f.name })).toString()
+   * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
    */
-  async deleteRecord(id) {
-    return deleteRecord(this.name, id);
+  toString() {
+    return `fetchXml=${encodeURIComponent(this.toXml())}`;
   }
   /**
-   * Deletes the value of a specific property for a record.  Only works for value properties.
-   *
-   * @param key The key of the property to delete the value of.
-   * @param id The unique identifier of the record.
-   * @returns A promise that resolves to the ID of the record.
+   * Executes the FetchXML query against Dataverse and returns the parsed results.
    *
    * @example
-   * await myAccountTable.deletePropertyValue("accountnumber", "12345678-90ab-cdef-1234-567890abcdef");
+   * const contacts = await fetchXml(contactTable)
+   *   .select(f => ({ name: f.name, email: f.email }))
+   *   .where(f => condition(f.status, "eq", 1))
+   *   .execute();
+   * // contacts: Array<{ name: string; email: string }>
    */
-  async deletePropertyValue(key, id) {
-    const prop = this.properties[key];
-    if (prop.kind === "value") {
-      return deletePropertyValue(this.name, id, prop.name);
-    }
-    throw new Error("Cannot delete navigation property values");
+  async execute() {
+    const raw = await this._table.client.getRecords(this._table.name, this.toString());
+    return raw.map((v) => this._table.transformValueFromDataverse(v));
   }
-  /**
-   * Gets the primary key property of the table.
-   *
-   * @returns An object containing the key and property definition of the primary key.
-   * @throws Error if no primary key is found.
-   *
-   * @example
-   * const primaryKeyInfo = myAccountTable.getPrimaryKey();
-   * console.log(primaryKeyInfo.key); // "id" (or whatever the primary key property is named)
-   * console.log(primaryKeyInfo.property); // The PrimaryKeyProperty object
-   */
-  getPrimaryKey() {
-    const result = Object.entries(this.properties).find(
-      (f) => f[1].type === "primaryKey"
-    );
-    if (!result) throw new Error("No Primary Key");
-    return {
-      key: result[0],
-      property: result[1]
-    };
-  }
-  /**
-   * Gets the primary key value from a record object.
-   *
-   * @param value An object representing a record, typically of type `Partial<Infer<TProperties>>`.
-   * @returns The GUID of the primary key, or undefined if not found in the provided value.
-   *
-   * @example
-   * const accountData = { id: "a1b2c3d4-e5f6-7890-1234-567890abcdef", name: "My Account" };
-   * const accountId = myAccountTable.getPrimaryId(accountData); // returns "a1b2c3d4-e5f6-7890-1234-567890abcdef"
-   */
-  getPrimaryId(value) {
-    const { key } = this.getPrimaryKey();
-    return value[key];
-  }
-  /**
-   * Transforms a record from Dataverse format to the format expected by the application.
-   * This involves using the `transformValueFromDataverse` method of each property.
-   *
-   * @param value The record data in Dataverse format.
-   * @returns The transformed record data in the application's format.
-   *
-   * @example
-   * // Assuming Dataverse returns: { accountid: "...", name: "Account Name", ... }
-   * const transformedAccount = myAccountTable.transformValueFromDataverse(dataverseAccountData);
-   * // transformedAccount might look like: { id: "...", name: "Account Name", ... }
-   */
-  transformValueFromDataverse(value) {
-    if (value === null) return null;
-    const result = {};
-    for (const [key, property] of Object.entries(this.properties)) {
-      result[key] = property.transformValueFromDataverse(value[property.name]);
-    }
-    result[Etag] = value[Etag];
-    return result;
-  }
-  /**
-   * Transforms a record from the application's format to Dataverse format.
-   * This involves using the `transformValueToDataverse` method of each property.
-   *
-   * @param value The record data in the application's format.
-   * @returns The record data in Dataverse format.
-   *
-   * @example
-   * const appAccountData = { id: "...", name: "Account Name", ... };
-   * const dataverseAccountData = myAccountTable.transformValueToDataverse(appAccountData);
-   * // dataverseAccountData might look like: { accountid: "...", name: "Account Name", ... }
-   */
-  transformValueToDataverse(value) {
-    if (value === null) return null;
-    const result = {};
-    for (const [key, property] of Object.entries(this.properties)) {
-      if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "value") {
-        const v = property.transformValueToDataverse(value[key]);
-        result[property.name] = v;
-      }
-    }
-    return result;
-  }
-  /**
-   * Creates a new Table instance with a subset of the original table's properties.
-   *
-   * @param keys The keys of the properties to include in the new table.
-   * @returns A new Table instance with the specified properties.
-   *
-   * @example
-   * // Create a new table with only 'name' and 'accountnumber' properties.
-   * const nameAndNumberTable = myAccountTable.pickProperties("name", "accountnumber");
-   */
-  pickProperties(...keys) {
-    const properties = Object.fromEntries(
-      Object.entries(this.properties).filter((v) => keys.includes(v[0]))
-    );
-    return new Table(this.name, properties);
-  }
-  /**
-   * Creates a new Table instance with all but the specified properties from the original table.
-   *
-   * @param keys The keys of the properties to exclude from the new table.
-   * @returns A new Table instance with the remaining properties.
-   *
-   * @example
-   * // Create a new table without the 'notes' and 'tasks' properties.
-   * const noNotesAndTasksTable = myAccountTable.omitProperties("notes", "tasks");
-   */
-  omitProperties(...keys) {
-    const properties = Object.fromEntries(
-      Object.entries(this.properties).filter((v) => !keys.includes(v[0]))
-    );
-    return new Table(this.name, properties);
-  }
-  /**
-   * Creates a new Table instance with additional properties added to the original table's properties.
-   *
-   * @param properties An object defining the properties to append.
-   * @returns A new Table instance with the appended properties.
-   *
-   * @example
-   * // Create a new table with an added 'customField' property.
-   * const extendedTable = myAccountTable.appendProperties({
-   * customField: string("custom_field"),
-   * });
-   */
-  appendProperties(properties) {
-    return new Table(this.name, { ...this.properties, ...properties });
-  }
-  /**
-   * Use for typescript only. const x: typeof table.T
-   */
-  T;
 }
-function table(name, properties) {
-  return new Table(name, properties);
+function condition(attribute, operator, value) {
+  return `<condition attribute="${attribute}" operator="${operator}" value="${value}" />`;
 }
-function buildQuery(table2, q) {
-  return query({
-    top: q?.top,
-    filter: q?.filter,
-    orderby: q?.orderby ? Object.entries(q?.orderby ?? {}).map(([key, value]) => `${table2.properties[key].name} ${value}`).join(",") : void 0,
-    select: buildSelect(table2),
-    expand: buildExpand(table2)
-  });
+function filterAnd(...conditions) {
+  return `<filter type="and">${conditions.join("")}</filter>`;
 }
-function buildSelect(table2) {
-  return Object.values(table2.properties).filter((v) => v.kind === "value" || v.type === "lookupId").map((v) => v.name).join(",");
+function filterOr(...conditions) {
+  return `<filter type="or">${conditions.join("")}</filter>`;
 }
-function buildExpand(table2) {
-  return Object.values(table2.properties).filter((v) => v.kind === "navigation" && v.type !== "lookupId").map(
-    (v) => `${v.name}($select=${buildSelect(v.table)};$expand=${buildExpand(
-      v.table
-    )})`
-  ).join(",");
+function fetchXml(table) {
+  return new EntityQueryBuilder(table);
 }
 
-class LookupIdProperty extends Schema {
-  /**
-   * The kind of schema element for a lookup property, which is "navigation".
-   */
-  kind = "navigation";
-  /**
-   * The type of the property, which is "lookup".
-   */
-  type = "lookupId";
-  /**
-   * The logical name of the navigation property in the Dataverse entity.
-   */
-  navigationName;
-  /**
-   * A function that returns the Table definition for the related record.
-   */
-  #getTable;
-  /**
-   * Creates a new LookupProperty instance.
-   * The internal name of the property in Dataverse will be `_${name.toLowerCase()}_value`.
-   *
-   * @param name The logical name of the navigation property.
-   * @param getTable A function that, when called, returns the Table definition for the related entity. This is used to avoid circular dependencies.
-   */
-  constructor(name, getTable) {
-    super(`_${name.toLowerCase()}_value`, null);
-    this.navigationName = name;
-    this.#getTable = getTable;
-  }
-  #table;
-  get table() {
-    if (!this.#table) {
-      const table = this.#getTable();
-      const { property } = table.getPrimaryKey();
-      this.#table = new Table(table.name, { id: property });
-    }
-    return this.#table;
-  }
-  /**
-   * Transforms the property's value (a GUID) into a format suitable for sending to Dataverse for association.
-   * If a value (GUID) is provided, it formats it as `entitySetName(value)`. If the value is null, it returns null.
-   *
-   * @param value The GUID of the related record.
-   * @returns A string in the format `entitySetName(guid)` or null.
-   */
-  transformValueToDataverse(value) {
-    if (value) {
-      return `${this.table.name}(${value})`;
-    } else {
-      return null;
-    }
-  }
-}
-function lookupId(name, getTable) {
-  return new LookupIdProperty(name, getTable);
-}
-
-class CollectionIdsProperty extends Schema {
-  /**
-   * The kind of schema element for a collection of lookups property, which is "navigation".
-   */
-  kind = "navigation";
-  /**
-   * The type of the property, which is "lookups".
-   */
-  type = "collectionIds";
-  /**
-   * A function that returns the Table definition for the related records.
-   */
-  #getTable;
-  /**
-   * Creates a new LookupsProperty instance.
-   *
-   * @param name The name of the collection of lookup properties.
-   * @param getTable A function that, when called, returns the Table definition for the related entity. This is used to avoid circular dependencies.
-   */
-  constructor(name, getTable) {
-    super(name, []);
-    this.#getTable = getTable;
-    this.check(
-      (v) => !Array.isArray(v) ? "value is not an array" : void 0
-    );
-  }
-  #table;
-  get table() {
-    if (!this.#table) {
-      const table = this.#getTable();
-      const { property } = table.getPrimaryKey();
-      this.#table = new Table(table.name, { id: property });
-    }
-    return this.#table;
-  }
-  /**
-   * Transforms an array of values received from Dataverse into an array of GUIDs of the related records.
-   * It iterates over the input array and extracts the value of the primary key property ('id') from each related record.
-   *
-   * @param value An array of raw data representing the related records from Dataverse.
-   * @returns An array of GUIDs of the related records.
-   */
-  transformValueFromDataverse(value) {
-    return Array.from(value).map((v) => v[this.table.properties.id.name]);
-  }
-  getIssues(value, path = []) {
-    const issues = super.getIssues(value, path);
-    if (Array.isArray(value)) {
-      issues.push(
-        ...value.map((v, i) => this.table.getIssues(v, [...path, i])).flat(1)
-      );
-    }
-    return issues;
-  }
-}
-function collectionIds(name, getTable) {
-  return new CollectionIdsProperty(name, getTable);
-}
-
-class NumberProperty extends Schema {
-  /**
-   * The kind of schema element for a number property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "number".
-   */
-  type = "number";
-  /**
-   * Creates a new NumberProperty instance.
-   *
-   * @param name The name of the number property.
-   */
-  constructor(name) {
-    super(name, null);
-    this.check(isTypeOrNull("number"));
-  }
-}
-function number(name) {
-  return new NumberProperty(name);
-}
-
-class PrimaryKeyProperty extends Schema {
-  /**
-   * The kind of schema element for a primary key property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "primaryKey".
-   */
-  type = "primaryKey";
-  /**
-   * Creates a new PrimaryKeyProperty instance.
-   * Sets the property to read-only upon creation.
-   *
-   * @param name The name of the primary key property (typically the logical name of the primary key attribute).
-   */
-  constructor(name) {
-    super(name, "");
-    this.setReadOnly();
-    this.check(isType("string"));
-  }
-}
-function primaryKey(name) {
-  return new PrimaryKeyProperty(name);
-}
-
-class StringProperty extends Schema {
-  /**
-   * The kind of schema element for a string property, which is "value".
-   */
-  kind = "value";
-  /**
-   * The type of the property, which is "string".
-   */
-  type = "string";
-  /**
-   * Creates a new StringProperty instance.
-   *
-   * @param name The name of the string property.
-   */
-  constructor(name) {
-    super(name, null);
-    this.check(isTypeOrNull("string"));
-  }
-}
-function string(name) {
-  return new StringProperty(name);
-}
-
-function email() {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return (v) => {
-    if (v && !emailRegex.test(v)) {
-      return "Invalid email format";
-    }
-  };
-}
-
-function integer() {
-  return (v) => {
-    if (v !== void 0 && v !== null) {
-      const num = Number(v);
-      if (isNaN(num) || !Number.isInteger(num)) {
-        return "Must be an integer";
-      }
-    }
-  };
-}
-
-function maxLength(max) {
-  return (v) => {
-    if (v.length > max) return `Length more than ${max}`;
-  };
-}
-
-function maxValue(max) {
-  return (v) => {
-    if (typeof v === "number" && v > max) {
-      return `Must be no more than ${max}`;
-    }
-  };
-}
-
-function minLength(min) {
-  return (v) => {
-    if (v.length < min) return `Length less than ${min}`;
-  };
-}
-
-function minValue(min) {
-  return (v) => {
-    if (typeof v === "number" && v < min) {
-      return `Must be at least ${min}`;
-    }
-  };
-}
-
-function numeric() {
-  return (v) => {
-    if (v !== void 0 && v !== null) {
-      const num = Number(v);
-      if (isNaN(num)) {
-        return "Must be a number";
-      }
-    }
-  };
-}
-
-function pattern(regex, message) {
-  return (v) => {
-    if (v && !regex.test(v)) {
-      return message || "Invalid format";
-    }
-  };
-}
-
-export { Above, AboveOrEqual, Between, BooleanProperty, CollectionIdsProperty, CollectionProperty, Contains, ContainsValues, DateOnlyProperty, DateProperty, DoesNotContainValues, EqualBusinessId, EqualRoleBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, EqualUserTeams, Etag, FormattedProperty, ImageProperty, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListProperty, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberProperty, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, PrimaryKeyProperty, RetrieveAadUserRoles, RetrieveTotalRecordCount, StringProperty, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, activateRecord, aggregate, and, associateRecord, associateRecordToList, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, contains, count, date, dateOnly, deactivateRecord, deletePropertyValue, deleteRecord, disssociateRecord, email, endsWith, equals, expand, fetchChoices, fetchXml, formatted, getAssociatedRecord, getAssociatedRecords, getImageUrl, getNextLink, getPropertyRawValue, getPropertyRawValueURL, getPropertyValue, getRecord, getRecords, globalConfig, greaterThan, greaterThanOrEqual, groupby, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, number, numeric, or, orderby, patchRecord, pattern, postRecord, postRecordGetId, primaryKey, query, required, select, setConfig, startsWith, string, sum, table, toBase64, tryFetch, updatePropertyValue, wrapString, xml };
+export { Above, AboveOrEqual, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FormattedField, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, aggregate, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, compare, condition, contains, count, date, datetime, desc, email, endsWith, equals, expand, fetchOdata, fetchXML, fetchXml, file, filterAnd, filterOr, formatted, getEtag, getImageUrl, getName, greaterThan, greaterThanOrEqual, groupby, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, query, required, select, startsWith, string, sum, table, toBase64, toDateOnly, wrapString, xml };

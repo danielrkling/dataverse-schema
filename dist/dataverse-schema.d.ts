@@ -1,59 +1,28 @@
-/**
- * Generates a query expression for the "Above" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The value to compare.
- * @returns {string} The query expression for the "Above" operator.
- */
-export declare function Above(name: string, value: string): string;
+import { StandardSchemaV1 } from '@standard-schema/spec';
+
+/** Filters records above a hierarchical position. */
+export declare const Above: (field: Name, value: string) => string;
+
+/** Filters records at or above a hierarchical position. */
+export declare const AboveOrEqual: (field: Name, value: string) => string;
 
 /**
- * Generates a query expression for the "AboveOrEqual" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The value to compare.
- * @returns {string} The query expression for the "AboveOrEqual" operator.
- */
-export declare function AboveOrEqual(name: string, value: string): string;
-
-/**
- * Activates a record in the specified Dataverse entity set by setting its 'statecode' to 0.
- * Note that the actual attribute name for the state code might vary depending on the entity.
- * This function assumes the standard 'statecode' attribute with a value of 0 representing the active state.
- *
- * @param entitySetName - The logical name of the entity set where the record is located (e.g., 'accounts', 'contacts', 'opportunities').
- * @param id - The unique identifier of the record to activate.
- * @returns A promise that resolves to the ID of the activated record upon successful activation.
+ * Creates an `aggregate` clause for the `$apply` query option.
  *
  * @example
- * // Activate the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * activateRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef')
- * .then(activatedAccountId => console.log('Activated Account ID:', activatedAccountId))
- * .catch(error => console.error('Error activating account:', error));
- *
- * @example
- * // Activate the opportunity record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210'.
- * activateRecord('opportunities', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210')
- * .then(activatedOpportunityId => console.log('Activated Opportunity ID:', activatedOpportunityId))
- * .catch(error => console.error('Error activating opportunity:', error));
- */
-export declare function activateRecord(entitySetName: string, id: DataverseKey): Promise<string>;
-
-/**
- * Creates an OData aggregate expression.
- *
- * @param values An array of aggregation expressions (e.g., "price with average as avgPrice"). Empty or null values will be filtered out.
- * @returns An OData aggregate expression string.
- *
- * @example
- * // Aggregate with a single average:
- * aggregate("price with average as avgPrice"); // returns "aggregate(price with average as avgPrice)"
- *
- * // Aggregate with multiple aggregations:
- * aggregate("price with average as avgPrice", "quantity with sum as totalQuantity", "rating with average as avgRating");
- * // returns "aggregate(price with average as avgPrice,quantity with sum as totalQuantity,rating with average as avgRating)"
+ * aggregate(average("revenue"), count())
+ * // "aggregate(revenue with average as revenue,$count as count)"
  */
 export declare function aggregate(...values: string[]): string;
+
+/**
+ * Creates an `all` lambda filter for collection navigation properties.
+ *
+ * @example
+ * all("contact_customer_accounts", "a", greaterThan("a", "revenue", 1000))
+ * // "contact_customer_accounts/all(a: (a/revenue gt 1000))"
+ */
+export declare function all(collectionProperty: Name, alias: string, condition: string): string;
 
 /**
  * Represents an alternate key for a Dataverse entity.  An alternate key is used
@@ -63,86 +32,42 @@ export declare function aggregate(...values: string[]): string;
 export declare type AlternateKey = `${string}=${string}` | `${string}=${string},${string}=${string}`;
 
 /**
- * Combines multiple OData filter conditions with the "and" operator.
- * Filters out any null or undefined conditions.
- *
- * @param conditions An array of OData filter conditions (strings), which can be null or undefined.
- * @returns A string representing the combined conditions, or an empty string if no valid conditions are provided.
+ * Combines filter conditions with logical AND.
  *
  * @example
- * // Example 1: Combining equals and greaterThan
- * and(equals("name", "John"), greaterThan("age", 30));
- * // returns "(name eq 'John' and age gt 30)"
- *
- * // Example 2: Combining with contains
- * and(contains("description", "software"), equals("category", "application"));
- * // returns "(contains(description,'software') and category eq 'application')"
- *
- * // Example 3: Handling null/undefined conditions
- * and("name eq 'John'", null, greaterThan("age", 30));
- * // returns "(name eq 'John' and age gt 30)"
+ * and(equals("statecode", 0), equals("statuscode", 1))
+ * // "((statecode eq 0) and (statuscode eq 1))"
  */
-export declare function and(...conditions: (string | null | undefined)[]): string;
+export declare function and(...conditions: string[]): string;
 
 /**
- * Associates an existing child record with a parent record through a single-valued navigation property in Dataverse.
- *
- * @param entitySetName - The logical name of the parent entity set (e.g., 'accounts').
- * @param parentId - The unique identifier of the parent record.
- * @param propertyName - The name of the single-valued navigation property on the parent entity that points to the child entity (e.g., 'primarycontactid', 'parentaccountid').
- * @param childEntitySetName - The logical name of the child entity set (e.g., 'contacts', 'accounts').
- * @param childId - The unique identifier of the child record to associate.
- * @returns A promise that resolves to the ID of the associated child record upon successful association.
+ * Creates an `any` lambda filter for collection navigation properties.
  *
  * @example
- * // Associate the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210' as the primary contact of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * associateRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'primarycontactid', 'contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210')
- * .then(associatedContactId => console.log('Associated Contact ID:', associatedContactId))
- * .catch(error => console.error('Error associating contact:', error));
- *
- * @example
- * // Associate the account record with ID 'c7b6a5e4-f3d2-1a90-8765-43210fedcba9' as the parent account of the current account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * associateRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'parentaccountid', 'accounts', 'c7b6a5e4-f3d2-1a90-8765-43210fedcba9')
- * .then(associatedAccountId => console.log('Associated Account ID:', associatedAccountId))
- * .catch(error => console.error('Error associating account:', error));
+ * any("contact_customer_accounts", "a", equals("a", "statecode", 0))
+ * // "contact_customer_accounts/any(a: (a/statecode eq 0))"
  */
-export declare function associateRecord(entitySetName: string, parentId: DataverseKey, propertyName: string, childEntitySetName: string, childId: DataverseKey): Promise<DataverseKey>;
+export declare function any(collectionProperty: Name, alias: string, condition: string): string;
 
 /**
- * Associates a list of child records with a parent record through a collection-valued navigation property in Dataverse.
- * This function adds associations for child records that are not currently associated and removes associations for child records that are currently associated but not in the provided list.
- *
- * @param entitySetName - The logical name of the parent entity set (e.g., 'accounts').
- * @param parentId - The unique identifier of the parent record.
- * @param propertyName - The name of the collection-valued navigation property on the parent entity that points to the child entities (e.g., 'contact_customer_accounts').
- * @param childEntitySetName - The logical name of the child entity set (e.g., 'contacts').
- * @param childPrimaryKeyName - The primary key attribute name of the child entity (e.g., 'contactid').
- * @param childIds - An array of unique identifiers of the child records to associate with the parent record.
- * @returns A promise that resolves to the array of child IDs provided in the input.
+ * Creates an ascending order specification.
  *
  * @example
- * // Associate a list of contact records with an account record.
- * const contactIdsToAssociate = ['f9e8d7c6-b5a4-3210-fedc-ba9876543210', '12345678-90ab-cdef-1234-567890abcdef'];
- * associateRecordToList('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'contact_customer_accounts', 'contacts', 'contactid', contactIdsToAssociate)
- * .then(associatedContactIds => console.log('Associated Contact IDs:', associatedContactIds))
- * .catch(error => console.error('Error associating contacts:', error));
+ * asc("name", "createdon")
+ * // OrderSpec { fields: ["name", "createdon"], direction: "asc" }
  */
-export declare function associateRecordToList(entitySetName: string, parentId: DataverseKey, propertyName: string, childEntitySetName: string, childPrimaryKeyName: string, childIds: DataverseKey[]): Promise<DataverseKey[]>;
+export declare function asc(...fields: Name[]): OrderSpec;
 
 export declare function attachEtag<T>(v: T): T;
 
 /**
- * Creates an OData aggregation expression for calculating the average of a property.
- *
- * @param name The name of the property to average.
- * @param alias The alias for the resulting average value (defaults to the property name).
- * @returns An OData aggregation expression string for average.
+ * Creates an `average` aggregation expression for `$apply`.
  *
  * @example
- * average("price");             // returns "price with average as price"
- * average("price", "avgPrice"); // returns "price with average as avgPrice"
+ * average("revenue", "avg_revenue")
+ * // "revenue with average as avg_revenue"
  */
-export declare function average(name: string, alias?: string): string;
+export declare function average(field: Name, alias?: string): string;
 
 /**
  * Creates a data URL from a base64 encoded image string.
@@ -158,194 +83,467 @@ export declare function average(name: string, alias?: string): string;
  */
 export declare function base64ImageToURL(base64: string): string;
 
-/**
- * Generates a query expression for the "Between" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value1 - The first value to compare.
- * @param {string} value2 - The second value to compare.
- * @returns {string} The query expression for the "Between" operator.
- */
-export declare function Between(name: string, value1: string, value2: string): string;
+/** Filters between two values. */
+export declare const Between: (field: Name, value1: string | number, value2: string | number) => string;
 
 /**
- * A factory function to create a new BooleanProperty instance.
+ * Creates a boolean-typed Dataverse column definition.
  *
- * @param name The name of the boolean property.
- * @returns A new BooleanProperty instance.
+ * @param name The Dataverse logical name of the column (e.g. `"is_active"`).
+ *
+ * @example
+ * const table = defineTable({
+ *   isActive: boolean("is_active"),
+ * });
+ * // Infer<typeof table>["isActive"] → boolean
  */
-export declare function boolean(name: string): BooleanProperty;
+export declare function boolean(name: string): BooleanField;
 
-/**
- * Represents a boolean property within a dataverse schema.
- * Extends the base Property class with a boolean type and a default value of false.
- */
-export declare class BooleanProperty extends Schema<boolean> {
-    /**
-     * The kind of schema element for a boolean property, which is "value".
-     */
+export declare class BooleanField extends Schema<boolean> {
     kind: "value";
-    /**
-     * The type of the property, which is "boolean".
-     */
     type: "boolean";
-    /**
-     * Creates a new BooleanProperty instance.
-     *
-     * @param name The name of the boolean property.
-     */
     constructor(name: string);
 }
 
 /**
- * A factory function to create a new CollectionProperty instance.
+ * Creates a one-to-many (collection) navigation property definition. The related records
+ * can be expanded via OData `$expand` or fetched through the table API.
  *
- * @template TProperties An object defining the properties of the related records in the collection.
- * @param name The name of the collection property.
- * @param getTable A function that, when called, returns the Table definition for the related records.
- * @returns A new CollectionProperty instance.
+ * @param name The Dataverse logical name of the collection navigation property.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), street: string("street"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   addresses: collection("person_addresses", () => Address),
+ * });
+ * // Infer<typeof Person>["addresses"] → { id: GUID; street: string }[]
  */
 export declare function collection<TProperties extends GenericProperties>(name: string, getTable: GetTable<Table<TProperties>>): CollectionProperty<TProperties>;
 
 /**
- * A factory function to create a new LookupsProperty instance.
+ * Creates a collection-of-IDs navigation property definition. Unlike a full collection,
+ * this only stores the related record IDs (GUIDs), not the full records.
  *
- * @param name The name of the collection of lookup properties.
- * @param getTable A function that, when called, returns the Table definition for the related entity.
- * @returns A new LookupsProperty instance.
+ * @param name The Dataverse logical name of the navigation property.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   addressIds: collectionIds("person_addresses", () => Address),
+ * });
+ * // Infer<typeof Person>["addressIds"] → `${string}-${string}-${string}-${string}-${string}`[]
  */
 export declare function collectionIds(name: string, getTable: GetTable): CollectionIdsProperty;
 
-/**
- * Represents a collection of lookup (many-to-many navigation) properties within a dataverse schema.
- * Extends the base Property class to handle arrays of references to other records by their GUIDs.
- */
 export declare class CollectionIdsProperty extends Schema<GUID[]> {
     #private;
-    /**
-     * The kind of schema element for a collection of lookups property, which is "navigation".
-     */
     kind: "navigation";
-    /**
-     * The type of the property, which is "lookups".
-     */
     type: "collectionIds";
-    /**
-     * Creates a new LookupsProperty instance.
-     *
-     * @param name The name of the collection of lookup properties.
-     * @param getTable A function that, when called, returns the Table definition for the related entity. This is used to avoid circular dependencies.
-     */
     constructor(name: string, getTable: GetTable);
     get table(): Table<{
-        id: PrimaryKeyProperty;
+        id: PrimaryKeyField;
     }>;
-    /**
-     * Transforms an array of values received from Dataverse into an array of GUIDs of the related records.
-     * It iterates over the input array and extracts the value of the primary key property ('id') from each related record.
-     *
-     * @param value An array of raw data representing the related records from Dataverse.
-     * @returns An array of GUIDs of the related records.
-     */
     transformValueFromDataverse(value: any): GUID[];
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-/**
- * Represents a collection-valued navigation property within a dataverse schema.
- * Extends the base Property class to handle arrays of related records.
- *
- * @template TProperties An object defining the properties of the related records in the collection.
- */
 export declare class CollectionProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties>[]> {
     #private;
     kind: "navigation";
     type: "collection";
-    /**
-     * Creates a new CollectionProperty instance.
-     *
-     * @param name The name of the collection property.
-     * @param getTable A function that, when called, returns the Table definition for the related records. This is used to avoid circular dependencies.
-     */
     constructor(name: string, getTable: GetTable<Table<TProperties>>);
     get table(): Table<TProperties>;
-    /**
-     * Transforms an array of values received from Dataverse into an array of transformed related records.
-     * It iterates over the input array and uses the `transformValueFromDataverse` method of the related Table to transform each individual record.
-     *
-     * @param value An array of raw data representing the related records from Dataverse.
-     * @returns An array of transformed related records of type `Infer<TProperties>[]`.
-     */
     transformValueFromDataverse(value: any): Infer<TProperties>[];
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-export declare type Config = {
-    url?: string;
-    headers: {
-        "OData-MaxVersion"?: string;
-        "OData-Version"?: string;
-        "Content-Type"?: string;
-        "If-None-Match"?: string;
-        Accept?: string;
-        Prefer?: string;
-        MSCRMCallerID?: string;
-        CallerObjectId?: string;
-    };
-};
-
 /**
- * Generates a query expression for the "Contains" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The value to check if it contains.
- * @returns {string} The query expression for the "Contains" operator.
- */
-export declare function Contains(name: string, value: string): string;
-
-/**
- * Creates an OData filter condition using the "contains" operator.
- * Checks if a string property contains a specified substring.
- *
- * @param name The name of the string property to check.
- * @param value The substring to search for.
- * @returns A string representing the "contains" filter condition.
+ * Compares two fields directly using the specified operator (column comparison).
  *
  * @example
- * contains("description", "software");
- * // returns "contains(description,'software')"
- *
- * // Example: Combining with equals
- * and(contains("description", "software"), equals("category", "application"));
- * // returns "contains(description,'software') and (category eq 'application')"
+ * compare("modifiedon", "gt", "createdon")
+ * // "(modifiedon gt createdon)"
  */
-export declare function contains(name: string, value: Primitive): string;
+export declare function compare(field: Name, operator: string, otherField: Name): string;
 
 /**
- * Generates a query expression for the "ContainsValues" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {...string[]} values - The list of values to check if they are contained.
- * @returns {string} The query expression for the "ContainsValues" operator.
- */
-export declare function ContainsValues(name: string, ...values: string[]): string;
-
-/**
- * Creates an OData aggregation expression for counting the number of records.
- *
- * @param alias The alias for the resulting count value (defaults to "count").
- * @returns An OData aggregation expression string for count.
+ * Creates a FetchXML condition element string.
  *
  * @example
- * count();             // returns "$count as count"
- * count("recordCount"); // returns "$count as recordCount"
+ * condition("statuscode", "eq", 1)
+ * // '<condition attribute="statuscode" operator="eq" value="1" />'
+ */
+export declare function condition(attribute: string, operator: string, value: unknown): string;
+
+/**
+ * Creates a `contains` filter for substring matching.
+ *
+ * @example
+ * contains("fullname", "John")
+ * // "contains(fullname,'John')"
+ */
+export declare function contains(field: Name, value: string): string;
+
+/** Filters records containing specified values (multi-select). */
+export declare const ContainsValues: (field: Name, values: (string | number)[]) => string;
+
+/**
+ * Creates a `$count` aggregation expression for `$apply`.
+ *
+ * @example
+ * count("record_count")
+ * // "$count as record_count"
  */
 export declare function count(alias?: string): string;
 
 /**
+ * Low-level HTTP client for the Dataverse Web API (v9.2).
+ * Provides CRUD, batch, action, function, and bulk operation methods.
+ *
+ * @example
+ * const client = new DataverseClient({
+ *   url: "https://org.crm.dynamics.com",
+ *   token: "eyJ...",
+ * });
+ *
+ * @example
+ * // With impersonation
+ * const client = new DataverseClient({
+ *   url: "https://org.crm.dynamics.com",
+ *   impersonateByUserId: "00000000-0000-0000-0000-000000000001",
+ * });
+ */
+export declare class DataverseClient {
+    options: DataverseClientOptions;
+    /** @param options Connection and authentication options. */
+    constructor(options?: DataverseClientOptions);
+    /**
+     * Core HTTP fetch method for all Dataverse API calls.
+     * Automatically prepends the API base path, applies auth headers,
+     * handles 204/304 responses, and extracts OData-EntityId from POST headers.
+     *
+     * @example
+     * await client.fetch("accounts?$select=name&$top=5")
+     *
+     * @example
+     * await client.fetch("accounts", {
+     *   method: "POST",
+     *   body: JSON.stringify({ name: "New Account" }),
+     * })
+     */
+    fetch(resource: string, options?: RequestInit): Promise<any>;
+    private _getNextLink;
+    /**
+     * Retrieves a single record by ID.
+     *
+     * @example
+     * const account = await client.getRecord("accounts", "00000000-0000-0000-0000-000000000001",
+     *   "$select=name,revenue")
+     */
+    getRecord(entitySetName: Name, id: DataverseKey, query?: string, etag?: string): Promise<any>;
+    /**
+     * Retrieves multiple records, automatically following `@odata.nextLink` pagination.
+     *
+     * @example
+     * const accounts = await client.getRecords("accounts",
+     *   "$select=name,revenue&$filter=revenue gt 10000")
+     */
+    getRecords(entitySetName: Name, query?: string): Promise<any[]>;
+    /**
+     * Creates a record and returns its full representation.
+     *
+     * @example
+     * const newAccount = await client.postRecord("accounts",
+     *   { name: "New Account", revenue: 50000 })
+     */
+    postRecord(entitySetName: Name, value: object, query?: string): Promise<any>;
+    /**
+     * Creates a record and returns only its GUID (no Prefer header).
+     *
+     * @example
+     * const id = await client.postRecordGetId("accounts",
+     *   { name: "New Account" })
+     * // id: "00000000-0000-0000-0000-000000000001"
+     */
+    postRecordGetId(entitySetName: Name, value: object): Promise<GUID>;
+    /**
+     * Updates an existing record (partial update via PATCH).
+     *
+     * @example
+     * await client.patchRecord("accounts", "00000000-0000-0000-0000-000000000001",
+     *   { name: "Updated Name", revenue: 75000 })
+     */
+    patchRecord(entitySetName: Name, id: string, value: object, query?: string, etag?: string): Promise<any>;
+    /**
+     * Deletes a record by ID.
+     *
+     * @example
+     * const deletedId = await client.deleteRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001")
+     */
+    deleteRecord(entitySetName: Name, id: string, etag?: string): Promise<GUID>;
+    /**
+     * Updates a single property value via PUT.
+     *
+     * @example
+     * await client.updatePropertyValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "name", "New Name")
+     */
+    updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, etag?: string): Promise<GUID>;
+    /**
+     * Deletes (nulls out) a single property value.
+     *
+     * @example
+     * await client.deletePropertyValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "emailaddress1")
+     */
+    deletePropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<GUID>;
+    /**
+     * Retrieves a single property value.
+     *
+     * @example
+     * const name = await client.getPropertyValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "name")
+     */
+    getPropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<any>;
+    /**
+     * Retrieves a property's raw value (e.g. file content) via `/$value`.
+     *
+     * @example
+     * const imageData = await client.getPropertyRawValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
+    getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name): Promise<any>;
+    /**
+     * Returns the URL for a property's raw value.
+     *
+     * @example
+     * const url = client.getPropertyRawValueURL("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
+    getPropertyRawValueURL(entitySetName: Name, id: string, propertyName: Name): string;
+    /**
+     * Returns the full-size image download URL.
+     *
+     * @example
+     * const url = client.getImageFullSizeURL("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
+    getImageFullSizeURL(entitySetName: Name, id: string, propertyName: Name): string;
+    /**
+     * Returns the legacy image download URL.
+     *
+     * @example
+     * const url = client.getImageDownloadURL("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
+    getImageDownloadURL(entitySetName: Name, id: string, propertyName: Name): string;
+    /**
+     * Uploads a file to a file property.
+     *
+     * @example
+     * await client.updateFileProperty("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "myfile", "report.pdf", fileBlob)
+     */
+    updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource): Promise<any>;
+    /**
+     * Activates a record (sets statecode to 0).
+     *
+     * @example
+     * await client.activateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001")
+     */
+    activateRecord(entitySetName: Name, id: string): Promise<GUID>;
+    /**
+     * Deactivates a record (sets statecode to 1).
+     *
+     * @example
+     * await client.deactivateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001")
+     */
+    deactivateRecord(entitySetName: Name, id: string): Promise<GUID>;
+    /**
+     * Associates two records via a navigation property.
+     *
+     * @example
+     * await client.associateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "primarycontactid",
+     *   "contacts",
+     *   "00000000-0000-0000-0000-000000000002")
+     */
+    associateRecord(entitySetName: Name, parentId: string, propertyName: Name, childEntitySetName: Name, childId: string): Promise<GUID>;
+    /**
+     * Dissociates two records. If childId is omitted, all references are removed.
+     *
+     * @example
+     * await client.dissociateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "primarycontactid",
+     *   "00000000-0000-0000-0000-000000000002")
+     */
+    dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string): Promise<GUID>;
+    /**
+     * Retrieves associated records via a collection navigation property.
+     *
+     * @example
+     * const contacts = await client.getAssociatedRecords("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "contact_customer_accounts",
+     *   "$select=fullname,email")
+     */
+    getAssociatedRecords(entitySetName: Name, id: string, navigationPropertyName: Name, query?: string): Promise<any[]>;
+    /**
+     * Retrieves a single associated record via a single-valued navigation property.
+     *
+     * @example
+     * const contact = await client.getAssociatedRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "primarycontactid",
+     *   "$select=fullname,email")
+     */
+    getAssociatedRecord(entitySetName: Name, id: string, navigationPropertyName: Name, query?: string): Promise<any>;
+    /**
+     * Synchronizes a list of associated records: adds new ones and removes ones
+     * no longer in the list.
+     *
+     * @example
+     * await client.associateRecordToList("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "contact_customer_accounts",
+     *   "contacts",
+     *   "contactid",
+     *   ["id1", "id2", "id3"])
+     */
+    associateRecordToList(entitySetName: Name, parentId: string, propertyName: Name, childEntitySetName: Name, childPrimaryKeyName: Name, childIds: string[]): Promise<GUID[]>;
+    /**
+     * Executes an unbound Dataverse action (POST).
+     *
+     * @example
+     * const result = await client.executeAction("WinQuote", {
+     *   QuoteClose: { ... },
+     *   Status: 4,
+     * })
+     */
+    executeAction(actionName: string, params?: Record<string, any>): Promise<any>;
+    /**
+     * Executes a bound Dataverse action on a specific record or entity set (POST).
+     *
+     * @example
+     * // Bound to a record
+     * await client.executeBoundAction("accounts",
+     *   "WinQuote", { Status: 4 },
+     *   "00000000-0000-0000-0000-000000000001")
+     *
+     * @example
+     * // Bound to an entity set (no id)
+     * await client.executeBoundAction("accounts", "BulkDelete", { Query: ... })
+     */
+    executeBoundAction(entitySetName: Name, actionName: string, params?: Record<string, any>, id?: string): Promise<any>;
+    /**
+     * Executes an unbound Dataverse function (GET).
+     *
+     * @example
+     * const result = await client.executeFunction("WhoAmI")
+     *
+     * @example
+     * const result = await client.executeFunction("CalculateTotalTime",
+     *   { Start: "2025-01-01", End: "2025-12-31" })
+     */
+    executeFunction(functionName: string, params?: Record<string, any>): Promise<any>;
+    /**
+     * Executes a bound Dataverse function on a specific record (GET).
+     *
+     * @example
+     * const result = await client.executeBoundFunction("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "CalculateDepreciation",
+     *   { Year: 2025 })
+     */
+    executeBoundFunction(entitySetName: Name, id: string, functionName: string, params?: Record<string, any>): Promise<any>;
+    /**
+     * Creates multiple records in a single API call using CreateMultiple.
+     *
+     * @example
+     * await client.createMultiple("accounts", [
+     *   { name: "Account 1" },
+     *   { name: "Account 2" },
+     * ])
+     */
+    createMultiple(entitySetName: Name, records: Record<string, any>[]): Promise<any>;
+    /**
+     * Updates multiple records in a single API call using UpdateMultiple.
+     *
+     * @example
+     * await client.updateMultiple("accounts", [
+     *   { accountid: "id1", name: "Updated 1" },
+     *   { accountid: "id2", name: "Updated 2" },
+     * ])
+     */
+    updateMultiple(entitySetName: Name, records: Record<string, any>[]): Promise<any>;
+    /**
+     * Deletes multiple records in a single API call by their IDs.
+     *
+     * @example
+     * await client.deleteMultiple("accounts", [
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "00000000-0000-0000-0000-000000000002",
+     * ])
+     */
+    deleteMultiple(entitySetName: Name, ids: string[]): Promise<any>;
+    _batchTxs: NestedStringArray | null;
+    /**
+     * Groups multiple requests into a batch for improved performance.
+     * All fetch() calls inside the callback are collected and sent as a single
+     * HTTP request.
+     *
+     * @example
+     * await client.batch(async () => {
+     *   await client.getRecord("accounts", "id1", "$select=name");
+     *   await client.getRecord("accounts", "id2", "$select=name");
+     * })
+     */
+    batch(fn: () => Promise<void>): Promise<any>;
+    _processBatch(resource: string, options: RequestInit): boolean;
+    _changeSetTxs: NestedStringArray | null;
+    /**
+     * Groups multiple write operations into a change set within a batch.
+     * All changes in a change set are committed atomically.
+     * If not already inside a batch, automatically wraps one.
+     *
+     * @example
+     * await client.changeset(async () => {
+     *   await client.postRecordGetId("accounts", { name: "New" });
+     *   await client.patchRecord("accounts", "id", { name: "Updated" });
+     * })
+     */
+    changeset(fn: () => Promise<void>): Promise<void>;
+    _processChangeset(resource: string, options: RequestInit): boolean;
+}
+
+/** Options for configuring a DataverseClient instance. */
+export declare type DataverseClientOptions = {
+    /** Base URL of the Dataverse environment (defaults to `location.origin`). */
+    url?: string;
+    /** Bearer token for authentication. */
+    token?: string;
+    /** Azure AD object ID to impersonate (sets CallerObjectId header). */
+    impersonateByAAId?: string;
+    /** Dataverse user ID to impersonate (sets MSCRMCallerID header). */
+    impersonateByUserId?: string;
+    /** Additional headers to include on every request. */
+    headers?: Record<string, string>;
+};
+
+/**
  * Represents a Dataverse key, which can be either a GUID (primary key) or an AlternateKey.
  */
-export declare type DataverseKey = GUID | AlternateKey;
+export declare type DataverseKey = GUID | AlternateKey | string;
 
 /**
  * Represents a Dataverse record, which is essentially a JavaScript object
@@ -356,178 +554,58 @@ export declare type DataverseKey = GUID | AlternateKey;
 export declare type DataverseRecord = Record<string, Primitive>;
 
 /**
- * A factory function to create a new DateProperty instance.
+ * Creates a date-only column definition (maps to JavaScript `Date`, time portion is zeroed).
  *
- * @param name The name of the date property.
- * @returns A new DateProperty instance.
- */
-export declare function date(name: string): DateProperty;
-
-/**
- * A factory function to create a new DateProperty instance.
+ * @param name The Dataverse logical name of the column.
  *
- * @param name The name of the date property.
- * @returns A new DateProperty instance.
+ * @example
+ * const table = defineTable({
+ *   birthDate: date("birthdate"),
+ * });
+ * // Infer<typeof table>["birthDate"] → Date
  */
-export declare function dateOnly(name: string): DateOnlyProperty;
+export declare function date(name: string): DateField;
 
-/**
- * Represents a date property within a dataverse schema.
- * Extends the base Property class with a Date or null type and a default value of null.
- */
-export declare class DateOnlyProperty extends Schema<Date | null> {
-    /**
-     * The kind of schema element for a date property, which is "value".
-     */
+export declare class DateField extends Schema<Date> {
     kind: "value";
-    /**
-     * The type of the property, which is "date".
-     */
     type: "dateOnly";
-    /**
-     * Creates a new DateProperty instance.
-     *
-     * @param name The name of the date property.
-     */
     constructor(name: string);
-    /**
-     * Transforms a value received from Dataverse into a Date object or null.
-     * If the value is null, it returns null. Otherwise, it creates a new Date object from the Dataverse value.
-     *
-     * @param value The value received from Dataverse.
-     * @returns A Date object or null.
-     */
-    transformValueFromDataverse(value: any): Date | null;
+    transformValueFromDataverse(value: any): Date;
     transformValueToDataverse(value: any): string | null;
 }
 
 /**
- * Represents a date property within a dataverse schema.
- * Extends the base Property class with a Date or null type and a default value of null.
+ * Creates a date-time column definition (maps to JavaScript `Date`).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   createdAt: datetime("createdon"),
+ * });
+ * // Infer<typeof table>["createdAt"] → Date
  */
-export declare class DateProperty extends Schema<Date | null> {
-    /**
-     * The kind of schema element for a date property, which is "value".
-     */
+export declare function datetime(name: string): DateTimeField;
+
+export declare class DateTimeField extends Schema<Date> {
     kind: "value";
-    /**
-     * The type of the property, which is "date".
-     */
     type: "date";
-    /**
-     * Creates a new DateProperty instance.
-     *
-     * @param name The name of the date property.
-     */
     constructor(name: string);
-    /**
-     * Transforms a value received from Dataverse into a Date object or null.
-     * If the value is null, it returns null. Otherwise, it creates a new Date object from the Dataverse value.
-     *
-     * @param value The value received from Dataverse.
-     * @returns A Date object or null.
-     */
-    transformValueFromDataverse(value: any): Date | null;
+    getDefault(): Date;
+    transformValueFromDataverse(value: any): Date;
 }
 
 /**
- * Deactivates a record in the specified Dataverse entity set by setting its 'statecode' to 1.
- * Note that the actual attribute name for the state code and the value for the inactive state might vary depending on the entity.
- * This function assumes the standard 'statecode' attribute with a value of 1 representing the inactive state.
- *
- * @param entitySetName - The logical name of the entity set where the record is located (e.g., 'accounts', 'contacts', 'opportunities').
- * @param id - The unique identifier of the record to deactivate.
- * @returns A promise that resolves to the ID of the deactivated record upon successful deactivation.
+ * Creates a descending order specification.
  *
  * @example
- * // Deactivate the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * deactivateRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef')
- * .then(deactivatedAccountId => console.log('Deactivated Account ID:', deactivatedAccountId))
- * .catch(error => console.error('Error deactivating account:', error));
- *
- * @example
- * // Deactivate the opportunity record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210'.
- * deactivateRecord('opportunities', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210')
- * .then(deactivatedOpportunityId => console.log('Deactivated Opportunity ID:', deactivatedOpportunityId))
- * .catch(error => console.error('Error deactivating opportunity:', error));
+ * desc("createdon")
+ * // OrderSpec { fields: ["createdon"], direction: "desc" }
  */
-export declare function deactivateRecord(entitySetName: string, id: DataverseKey): Promise<string>;
+export declare function desc(...fields: Name[]): OrderSpec;
 
-/**
- * Deletes the value of a single-valued property of an existing Dataverse record, setting it to null.
- * This operation is only applicable to properties that support null values.
- *
- * @param entitySetName - The logical name of the entity set where the record is located (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record to update.
- * @param propertyName - The name of the single-valued property to delete (e.g., 'description', 'address1_fax').
- * @returns A promise that resolves to the ID of the updated record upon successful deletion of the property value.
- *
- * @example
- * // Delete the value of the 'description' property of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * deletePropertyValue('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'description')
- * .then(updatedAccountId => console.log('Updated Account ID:', updatedAccountId))
- * .catch(error => console.error('Error deleting account description:', error));
- *
- * @example
- * // Delete the value of the 'address1_fax' property of the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210'.
- * deletePropertyValue('contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210', 'address1_fax')
- * .then(updatedContactId => console.log('Updated Contact ID:', updatedContactId))
- * .catch(error => console.error('Error deleting contact fax:', error));
- */
-export declare function deletePropertyValue(entitySetName: string, id: DataverseKey, propertyName: string): Promise<DataverseKey>;
-
-/**
- * Deletes a record from the specified Dataverse entity set.
- *
- * @param entitySetName - The logical name of the entity set where the record will be deleted (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record to delete.
- * @returns A promise that resolves to the ID of the deleted record upon successful deletion.
- *
- * @example
- * // Delete the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * deleteRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef')
- * .then(deletedAccountId => console.log('Deleted Account ID:', deletedAccountId))
- * .catch(error => console.error('Error deleting account:', error));
- *
- * @example
- * // Delete the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210'.
- * deleteRecord('contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210')
- * .then(deletedContactId => console.log('Deleted Contact ID:', deletedContactId))
- * .catch(error => console.error('Error deleting contact:', error));
- */
-export declare function deleteRecord(entitySetName: string, id: DataverseKey): Promise<DataverseKey>;
-
-/**
- * Dissociates (removes the association between) a child record from a parent record through a single-valued or collection-valued navigation property in Dataverse.
- *
- * @param entitySetName - The logical name of the parent entity set (e.g., 'accounts', 'opportunities').
- * @param parentId - The unique identifier of the parent record.
- * @param propertyName - The name of the navigation property on the parent entity that points to the child record(s) (e.g., 'primarycontactid', 'contact_customer_accounts').
- * @param [childId] - The unique identifier of the child record to dissociate. This is required for collection-valued navigation properties and optional (or should be omitted) for single-valued navigation properties to clear the reference.
- * @returns A promise that resolves to the ID of the dissociated child record (if provided) or the parent record ID if dissociating a single-valued property.
- *
- * @example
- * // Dissociate the primary contact from the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef' (single-valued navigation property).
- * disssociateRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'primarycontactid')
- * .then(parentId => console.log('Dissociated from Account ID:', parentId))
- * .catch(error => console.error('Error dissociating primary contact:', error));
- *
- * @example
- * // Dissociate the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210' from the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef' (collection-valued navigation property).
- * disssociateRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'contact_customer_accounts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210')
- * .then(childId => console.log('Dissociated Contact ID:', childId))
- * .catch(error => console.error('Error dissociating contact:', error));
- */
-export declare function disssociateRecord(entitySetName: string, parentId: DataverseKey, propertyName: string, childId?: DataverseKey): Promise<DataverseKey>;
-
-/**
- * Generates a query expression for the "DoesNotContainValues" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {...string[]} values - The list of values to check if they are not contained.
- * @returns {string} The query expression for the "DoesNotContainValues" operator.
- */
-export declare function DoesNotContainValues(name: string, ...values: string[]): string;
+/** Filters records NOT containing specified values (multi-select). */
+export declare const DoesNotContainValues: (field: Name, values: (string | number)[]) => string;
 
 /**
  * Creates a validator function that checks if a string is a valid email address.
@@ -547,169 +625,344 @@ export declare function DoesNotContainValues(name: string, ...values: string[]):
 export declare function email(): Validator<string>;
 
 /**
- * Creates an OData filter condition using the "endswith" operator.
- * Checks if a string property ends with a specified substring.
- *
- * @param name The name of the string property to check.
- * @param value The substring to search for at the end of the property's value.
- * @returns A string representing the "endswith" filter condition.
+ * Creates an `endswith` filter.
  *
  * @example
- * endsWith("filename", ".txt"); // returns "endswith(filename,'.txt')"
- *
- * // Example: Combining with or
- * or(endsWith("filename", ".txt"), endsWith("filename", ".pdf"));
- * // returns "endswith(filename,'.txt') or endswith(filename,'.pdf')"
+ * endsWith("email", "@example.com")
+ * // "endswith(email,'@example.com')"
  */
-export declare function endsWith(name: string, value: Primitive): string;
+export declare function endsWith(field: Name, value: string): string;
 
 /**
- * Generates a query expression for the "EqualBusinessId" operator in Microsoft Dynamics CRM.
+ * Builds a FetchXML query for Dataverse with full type support.
  *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualBusinessId" operator.
- */
-export declare function EqualBusinessId(name: string): string;
-
-/**
- * Generates a query expression for the "EqualRoleBusinessId" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualRoleBusinessId" operator.
- */
-export declare function EqualRoleBusinessId(name: string): string;
-
-/**
- * Creates an OData filter condition using the "eq" (equals) operator.
- * Checks if a property is equal to a specified value.
- *
- * @param name The name of the property to compare.
- * @param value The value to compare the property against.
- * @returns A string representing the "equals" filter condition.
+ * Use `fetchXml(table)` to create a builder, then chain methods to construct
+ * the query. Call `execute()` to run it or `toXml()` to get the raw XML.
  *
  * @example
- * equals("age", 30);       // returns "(age eq 30)"
- * equals("name", "John"); // returns "(name eq 'John')"
+ * const q = fetchXml(contactTable)
+ *   .select(f => ({ name: f.name, email: f.email }))
+ *   .where(f => condition(f.status, "eq", 1))
+ *   .orderby(f => desc(f.name))
+ *   .top(10);
  *
- * // Example: Combining with and
- * and(equals("age", 30), equals("name", "John"));
- * // returns "(age eq 30) and (name eq 'John')"
+ * const xml = q.toXml();
+ * const results = await q.execute();
  */
-export declare function equals(name: string, value: Primitive): string;
+export declare class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
+    private _aliasCounter;
+    private _table;
+    private _attributes;
+    private _links;
+    private _isDistinct;
+    private _filters;
+    private _proxy;
+    private _top?;
+    private _page?;
+    private _pageSize?;
+    private _isAggregate;
+    private _returnTotalRecordCount;
+    private _useRawOrderBy;
+    private _lateMaterialize;
+    private _aggregateLimit?;
+    private _orders;
+    private _pagingCookie?;
+    private _datasource?;
+    private _options?;
+    /** @param table The Table definition to build the query against. */
+    constructor(table: Table<TProps>);
+    private _buildProxy;
+    /**
+     * Selects specific fields to include in the FetchXML query.
+     * The result type is narrowed to only include selected fields.
+     *
+     * @example
+     * fetchXml(contactTable)
+     *   .select(f => ({ name: f.name, email: f.email }))
+     */
+    select<TSelect extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => TSelect): EntityQueryBuilder<TProps, Simplify<TResult & {
+        [K in keyof TSelect]: Infer<TProps[TSelect[K]]>;
+    }>>;
+    /**
+     * Adds a filter condition to the FetchXML query.
+     * Accepts a raw filter string or a callback that receives a field proxy.
+     * Multiple `where()` calls are combined with AND.
+     *
+     * @example
+     * // With callback
+     * fetchXml(contactTable).where(f => condition(f.status, "eq", 1))
+     *
+     * @example
+     * // Raw filter string
+     * fetchXml(contactTable).where(condition("statuscode", "eq", "1"))
+     */
+    where(filter: string | ((f: FieldProxy<TProps>) => string)): this;
+    /**
+     * Adds a link-entity join to another table. The result type merges the
+     * joined entity's selected fields.
+     *
+     * @example
+     * fetchXml(contactTable)
+     *   .select(f => ({ name: f.name }))
+     *   .join("inner", accountTable, a => a.accountid, c => c.parentcustomerid,
+     *     q => q.select(a => ({ accountName: a.name })))
+     */
+    join<TTable extends Table<any>, TFrom extends keyof TTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, table: TTable, from: TFrom, to: TTo, subquery: (q: EntityQueryBuilder<TTable["fields"], {}>) => EntityQueryBuilder<TTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
+    /**
+     * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
+     *
+     * @example
+     * fetchXml(contactTable)
+     *   .select(f => ({ name: f.name }))
+     *   .innerJoin(accountTable, a => a.accountid, c => c.parentcustomerid,
+     *     q => q.select(a => ({ accountName: a.name })))
+     */
+    innerJoin<TTable extends Table<any>, TFrom extends keyof TTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(table: TTable, from: TFrom, to: TTo, subquery: (q: EntityQueryBuilder<TTable["fields"], {}>) => EntityQueryBuilder<TTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, TResult & TJoinResult extends infer T ? { [Key in keyof T]: (TResult & TJoinResult)[Key]; } : never>;
+    /** Enables distinct (deduplicated) results. */
+    distinct(): this;
+    /** Limits the number of returned records. */
+    top(n: number): this;
+    /** Sets the page number for paginated results. */
+    page(n: number): this;
+    /** Sets the number of records per page. */
+    pageSize(n: number): this;
+    /** Requests the server to include the total record count. */
+    returnTotalRecordCount(): this;
+    /** Instructs the server to use the raw order-by string. */
+    useRawOrderBy(): this;
+    /** Enables late materialization for better performance on large datasets. */
+    lateMaterialize(): this;
+    /** Sets the aggregate limit for grouped results. */
+    aggregateLimit(n: number): this;
+    /** Sets custom query options. */
+    options(value: string): this;
+    /** Sets an alternate datasource (e.g. for federated queries). */
+    datasource(value: string): this;
+    /** Marks the query as an aggregate (grouped) query. */
+    aggregate(): this;
+    /**
+     * Adds ordering to the FetchXML query.
+     *
+     * @example
+     * // With asc/desc helpers
+     * fetchXml(contactTable).orderby(f => desc(f.name))
+     *
+     * @example
+     * // With record syntax
+     * fetchXml(contactTable).orderby(f => ({ name: 'asc', createdon: 'desc' }))
+     *
+     * @example
+     * // With explicit entity name
+     * fetchXml(contactTable).orderby("contact", "createdon", "desc")
+     */
+    orderby(spec: ((f: FieldProxy<TProps>) => OrderSpec | OrderSpec[] | Record<string, 'asc' | 'desc'>)): this;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
+    /** Adds a SUM aggregate. Marks the query as aggregate. */
+    sum(field: keyof TProps, alias: string): this;
+    /** Adds an AVG aggregate. Marks the query as aggregate. */
+    avg(field: keyof TProps, alias: string): this;
+    /** Adds a MIN aggregate. Marks the query as aggregate. */
+    min(field: keyof TProps, alias: string): this;
+    /** Adds a MAX aggregate. Marks the query as aggregate. */
+    max(field: keyof TProps, alias: string): this;
+    /** Adds a COUNT aggregate. Marks the query as aggregate. */
+    count(field: keyof TProps, alias: string): this;
+    /** Adds a COUNTCOLUMN aggregate with optional distinct flag. Marks the query as aggregate. */
+    countColumn(field: keyof TProps, alias: string, distinct?: boolean): this;
+    /** Adds a custom row aggregate. */
+    rowAggregate(field: keyof TProps, alias: string, rowaggregate: string): this;
+    /** Adds a GROUP BY on a field. Marks the query as aggregate. */
+    groupBy(field: keyof TProps, alias: string): this;
+    /** Adds a GROUP BY with date grouping (e.g. "day", "month", "year"). Marks the query as aggregate. */
+    groupByDate(field: keyof TProps, alias: string, dategrouping: string): this;
+    /** Sets the paging cookie for navigating paginated results. */
+    pagingCookie(cookie: string): this;
+    /**
+     * Returns the full FetchXML string.
+     *
+     * @example
+     * const xml = fetchXml(contactTable)
+     *   .select(f => ({ name: f.name }))
+     *   .toXml();
+     * // <fetch version="1.0" mapping="logical">
+     * //   <entity name="contact">
+     * //     <attribute name="fullname" alias="name" />
+     * //   </entity>
+     * // </fetch>
+     */
+    toXml(): string;
+    /**
+     * Returns the URL-encoded query string for use in the Dataverse API.
+     *
+     * @example
+     * fetchXml(contactTable).select(f => ({ name: f.name })).toString()
+     * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
+     */
+    toString(): string;
+    /**
+     * Executes the FetchXML query against Dataverse and returns the parsed results.
+     *
+     * @example
+     * const contacts = await fetchXml(contactTable)
+     *   .select(f => ({ name: f.name, email: f.email }))
+     *   .where(f => condition(f.status, "eq", 1))
+     *   .execute();
+     * // contacts: Array<{ name: string; email: string }>
+     */
+    execute(): Promise<TResult[]>;
+}
+
+/** Filters records matching the current user's business unit. */
+export declare const EqualBusinessId: (field: Name) => string;
 
 /**
- * Generates a query expression for the "EqualUserId" operator in Microsoft Dynamics CRM.
+ * Creates an `eq` (equals) filter.
  *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualUserId" operator.
+ * @example
+ * equals("statecode", 0)
+ * // "(statecode eq 0)"
+ *
+ * equals("email", null)
+ * // "(email eq null)"
  */
-export declare function EqualUserId(name: string): string;
+export declare function equals(field: Name, value: string | number | boolean | null): string;
 
-/**
- * Generates a query expression for the "EqualUserLanguage" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualUserLanguage" operator.
- */
-export declare function EqualUserLanguage(name: string): string;
+/** Filters records owned by the current user. */
+export declare const EqualUserId: (field: Name) => string;
 
-/**
- * Generates a query expression for the "EqualUserOrUserHierarchy" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualUserOrUserHierarchy" operator.
- */
-export declare function EqualUserOrUserHierarchy(name: string): string;
+/** Filters records matching the current user's language. */
+export declare const EqualUserLanguage: (field: Name) => string;
 
-/**
- * Generates a query expression for the "EqualUserOrUserHierarchyAndTeams" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualUserOrUserHierarchyAndTeams" operator.
- */
-export declare function EqualUserOrUserHierarchyAndTeams(name: string): string;
+/** Filters records owned by the user or their hierarchy. */
+export declare const EqualUserOrUserHierarchy: (field: Name) => string;
 
-/**
- * Generates a query expression for the "EqualUserOrUserTeams" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualUserOrUserTeams" operator.
- */
-export declare function EqualUserOrUserTeams(name: string): string;
+/** Filters records owned by the user, their hierarchy, or their teams. */
+export declare const EqualUserOrUserHierarchyAndTeams: (field: Name) => string;
 
-/**
- * Generates a query expression for the "EqualUserTeams" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "EqualUserTeams" operator.
- */
-export declare function EqualUserTeams(name: string): string;
+/** Filters records owned by the user or their teams. */
+export declare const EqualUserOrUserTeams: (field: Name) => string;
 
 export declare const Etag: unique symbol;
 
 /**
- * Creates an OData $expand expression.
- *
- * @param values A string or a record representing the properties to expand.
- * If it is a string, it represents the navigation property name.
- * If it is a record, the key is the navigation property name, and the value is a NestedQuery.
- * @returns An OData $expand expression string.
+ * Formats a `$expand` query, including nested selects, filters, and expands.
  *
  * @example
- * // Expand a single navigation property:
- * $expand("orders");
- * // returns "orders"
+ * expand({
+ *   primarycontactid: { select: ["fullname", "email"] },
+ *   parentcustomerid: {
+ *     select: ["name"],
+ *     expand: { createdby: { select: ["fullname"] } },
+ *   },
+ * })
+ * // "primarycontactid($select=fullname,email),parentcustomerid($select=name;$expand=createdby($select=fullname))"
  *
- * // Expand a navigation property with nested select:
- * $expand({ orders: { select: ["id", "orderDate"] } });
- * // returns "orders($select=id,orderDate)"
+ * @example
+ * expand("primarycontactid") // simple string passthrough
+ */
+export declare function expand(values: string | ExpandObject): string;
+
+export declare interface ExpandObject {
+    [key: string]: ExpandValue;
+}
+
+declare type ExpandResult<T, K extends keyof T, R> = T[K] extends CollectionProperty<any> ? R[] : (R | null);
+
+export declare type ExpandValue = string | {
+    select?: (Name)[];
+    expand?: ExpandObject;
+    filter?: string;
+    orderby?: {
+        [key: string]: "asc" | "desc";
+    };
+};
+
+export declare type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in";
+
+export declare function fetchOdata<T extends GenericProperties>(table: Table<T>): ODataQuery<T, Infer<T>>;
+
+/**
+ * Wraps a raw FetchXML string into the format expected by the Dataverse API.
+ * Trims whitespace and compresses tag gaps.
  *
- * // Expand a navigation property with nested expand:
- * $expand({
- * customer: {
- * select: ["id", "name"],
- * expand: { address: { select: ["city", "street"] } }
- * }
+ * @example
+ * fetchXML("<fetch version='1.0'><entity name='contact'>...</entity></fetch>")
+ * // "fetchXml=<fetch version='1.0'><entity name='contact'>...</entity></fetch>"
+ */
+export declare function fetchXML(xml: string): string;
+
+/**
+ * Creates a new FetchXML query builder for the given table.
+ * Returns an `EntityQueryBuilder` that starts with all table fields selected
+ * and narrows the result type as you chain methods.
+ *
+ * @example
+ * const results = await fetchXml(contactTable)
+ *   .select(f => ({ name: f.name }))
+ *   .where(f => condition(f.statecode, "eq", 0))
+ *   .execute();
+ */
+export declare function fetchXml<TProps extends GenericProperties>(table: Table<TProps>): EntityQueryBuilder<TProps, Infer<TProps>>;
+
+export declare type FieldProxy<T extends GenericProperties> = {
+    [K in keyof T]: string;
+};
+
+declare type FieldSelector<TProps extends GenericProperties> = {
+    [K in keyof TProps]: K;
+};
+
+/**
+ * Creates a file column definition. File columns are read-only and store the file name.
+ *
+ * @param name The Dataverse logical name of the file column.
+ */
+export declare function file(name: string): FileField;
+
+export declare class FileField extends Schema<string> {
+    type: "file";
+    kind: "file";
+    constructor(name: string);
+}
+
+/**
+ * Combines conditions with a logical AND.
+ *
+ * @example
+ * filterAnd(
+ *   condition("statecode", "eq", 0),
+ *   condition("statuscode", "eq", 1),
+ * )
+ */
+export declare function filterAnd(...conditions: string[]): string;
+
+/**
+ * Combines conditions with a logical OR.
+ *
+ * @example
+ * filterOr(
+ *   condition("statecode", "eq", 0),
+ *   condition("statecode", "eq", 1),
+ * )
+ */
+export declare function filterOr(...conditions: string[]): string;
+
+/**
+ * Creates a formatted-value column definition for retrieving user-localized display values
+ * (e.g. for option-set labels). These are read-only.
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   statusLabel: formatted("statuscode"),
  * });
- * // returns "customer($select=id,name;$expand=address($select=city,street))"
  */
-export declare function expand(values: string | Record<string, NestedQuery>): string;
+export declare function formatted(name: string): FormattedField;
 
-export declare function fetchChoices(name: string): Promise<{
-    value: number;
-    color: string;
-    label: string;
-    description: string;
-}[]>;
-
-export declare function fetchXml(entitySetName: string, xml: string): Promise<Record<string, Primitive>[]>;
-
-/**
- * A factory function to create a new StringProperty instance.
- *
- * @param name The name of the string property.
- * @returns A new StringProperty instance.
- */
-export declare function formatted(name: string): FormattedProperty;
-
-/**
- * Represents a string property within a dataverse schema.
- * Extends the base Property class with a string or null type and a default value of null.
- */
-export declare class FormattedProperty extends Schema<string | null> {
-    /**
-     * The kind of schema element for a string property, which is "value".
-     */
+export declare class FormattedField extends Schema<string | null> {
     kind: "value";
-    /**
-     * The type of the property, which is "string".
-     */
     type: "formatted";
-    /**
-     * Creates a new StringProperty instance.
-     *
-     * @param name The name of the string property.
-     */
     constructor(name: string);
 }
 
@@ -736,56 +989,9 @@ export declare type GenericProperty = GenericNavigationProperty | GenericValuePr
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-export declare type GenericValueProperty = PrimaryKeyProperty | StringProperty | NumberProperty | BooleanProperty | DateProperty | DateOnlyProperty | ImageProperty | ListProperty<string | number>;
+export declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField;
 
-/**
- * Retrieves a single associated record from a navigation property of a Dataverse record.
- *
- * @param entitySetName - The logical name of the primary entity set (e.g., 'accounts').
- * @param id - The unique identifier of the primary record.
- * @param navigationPropertyName - The name of the navigation property to the related record (e.g., 'primarycontactid', 'parentaccountid').
- * @param [query] - An optional OData query string to select fields or expand further related entities of the associated record (e.g., '$select=fullname,emailaddress1').
- * @returns A promise that resolves to the retrieved associated Dataverse record object.
- *
- * @example
- * // Retrieve the primary contact of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef',
- * // selecting their full name and email address.
- * getAssociatedRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'primarycontactid', '$select=fullname,emailaddress1')
- * .then(contact => console.log('Primary Contact:', contact))
- * .catch(error => console.error('Error retrieving primary contact:', error));
- *
- * @example
- * // Retrieve the parent account of the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210',
- * // selecting only the account name.
- * getAssociatedRecord('contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210', 'parentaccountid', '$select=name')
- * .then(parentAccount => console.log('Parent Account:', parentAccount))
- * .catch(error => console.error('Error retrieving parent account:', error));
- */
-export declare function getAssociatedRecord(entitySetName: string, id: DataverseKey, navigationPropertyName: string, query?: string): Promise<DataverseRecord | null>;
-
-/**
- * Retrieves multiple associated records from a navigation property of a Dataverse record.
- *
- * @param entitySetName - The logical name of the primary entity set (e.g., 'accounts').
- * @param id - The unique identifier of the primary record.
- * @param navigationPropertyName - The name of the collection-valued navigation property to the related records (e.g., 'contact_customer_accounts', 'opportunity_customer_contacts').
- * @param [query=""] - An optional OData query string to filter, sort, select fields, and expand further related entities of the associated records (e.g., '$filter=startswith(fullname, \'B\')&$select=fullname,emailaddress1').
- * @returns A promise that resolves to an array of associated Dataverse record objects.
- *
- * @example
- * // Retrieve all contacts associated with the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * getAssociatedRecords('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'contact_customer_accounts')
- * .then(contacts => console.log('Associated Contacts:', contacts))
- * .catch(error => console.error('Error retrieving associated contacts:', error));
- *
- * @example
- * // Retrieve the full name and email address of all active contacts associated with the account record
- * // with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef', ordered by full name.
- * getAssociatedRecords('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'contact_customer_accounts', '$filter=statecode eq 0&$select=fullname,emailaddress1&$orderby=fullname')
- * .then(activeContacts => console.log('Active Associated Contacts:', activeContacts))
- * .catch(error => console.error('Error retrieving active associated contacts:', error));
- */
-export declare function getAssociatedRecords(entitySetName: string, id: DataverseKey, navigationPropertyName: string, query?: string): Promise<DataverseRecord[]>;
+export declare function getEtag(v: any): string | undefined;
 
 /**
  * Constructs a URL to retrieve an image from Dataverse.
@@ -802,206 +1008,37 @@ export declare function getAssociatedRecords(entitySetName: string, id: Datavers
  */
 export declare function getImageUrl(entity: string, name: string, id: string): string;
 
-/**
- * Recursively retrieves all records from a paginated Dataverse response using the `@odata.nextLink`.
- *
- * @param result - An object containing the current page of Dataverse records and an optional `@odata.nextLink` property for the next page.
- * @param result.value - An array of Dataverse record objects from the current page.
- * @param [result["@odata.nextLink"]] - An optional URL to the next page of records.
- * @returns A promise that resolves to a single array containing all retrieved Dataverse record objects across all pages.
- *
- * @example
- * // Assuming 'initialRecords' is the result of an initial call to getRecords.
- * getNextLink(initialRecords)
- * .then(allRecords => console.log('All Records:', allRecords))
- * .catch(error => console.error('Error retrieving all records:', error));
- */
-export declare function getNextLink(result: {
-    "@odata.nextLink"?: string;
-    value: DataverseRecord[];
-}): Promise<DataverseRecord[]>;
-
-/**
- * Retrieves the raw value of a single property of a Dataverse record.
- * This is particularly useful for retrieving binary or other non-JSON formatted data.
- *
- * @param entitySetName - The logical name of the entity set (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record.
- * @param propertyName - The name of the property to retrieve the raw value of (e.g., 'entityimage', 'documentbody').
- * @returns A promise that resolves to the raw value of the property as a string.
- *
- * @example
- * // Retrieve the raw value (as a string) of the 'entityimage' property
- * // of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * getPropertyRawValue('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'entityimage')
- * .then(imageData => {
- * console.log('Raw Image Data (String):', imageData);
- * // You might need to further process this string depending on the actual data type.
- * })
- * .catch(error => console.error('Error retrieving raw image:', error));
- *
- * @example
- * // Retrieve the raw value (as a string) of the 'documentbody' property
- * // of a custom entity record named 'mydocument' with ID 'fedcba98-7654-3210-0fed-cba987654321'.
- * getPropertyRawValue('mydocument', 'fedcba98-7654-3210-0fed-cba987654321', 'documentbody')
- * .then(documentData => {
- * console.log('Raw Document Data (String):', documentData);
- * // You might need to decode this string (e.g., from Base64) to get the actual document content.
- * })
- * .catch(error => console.error('Error retrieving raw document:', error));
- */
-export declare function getPropertyRawValue(entitySetName: string, id: DataverseKey, propertyName: string): Promise<string>;
-
-/**
- * Constructs the URL to retrieve the raw value of a single property of a Dataverse record.
- * This is particularly useful for retrieving binary or other non-JSON formatted data.
- *
- * @param entitySetName - The logical name of the entity set (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record.
- * @param propertyName - The name of the property to retrieve the raw value of (e.g., 'entityimage', 'documentbody').
- * @returns The URL that can be used to fetch the raw property value.
- *
- * @example
- * // Get the URL to retrieve the raw value of the 'entityimage' property
- * // of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'.
- * const imageUrl = getPropertyRawValueURL('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'entityimage');
- * console.log('Image URL:', imageUrl);
- * // You can then use this URL with a fetch request to get the image data.
- *
- * @example
- * // Get the URL to retrieve the raw value of the 'documentbody' property
- * // of a custom entity record named 'mydocument' with ID 'fedcba98-7654-3210-0fed-cba987654321'.
- * const documentUrl = getPropertyRawValueURL('mydocument', 'fedcba98-7654-3210-0fed-cba987654321', 'documentbody');
- * console.log('Document URL:', documentUrl);
- */
-export declare function getPropertyRawValueURL(entitySetName: string, id: DataverseKey, propertyName: string): string;
-
-/**
- * Retrieves the value of a single property of a Dataverse record.
- *
- * @param entitySetName - The logical name of the entity set (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record.
- * @param propertyName - The name of the property to retrieve (e.g., 'name', 'emailaddress1').
- * @returns  A promise that resolves to the primitive value of the requested property (e.g., string, number, boolean).
- * @example
- * // Retrieve the 'name' property of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'
- * getPropertyValue('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'name')
- * .then(accountName => console.log('Account Name:', accountName))
- * .catch(error => console.error('Error retrieving account name:', error));
- *
- * @example
- * // Retrieve the 'emailaddress1' property of the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210'
- * getPropertyValue('contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210', 'emailaddress1')
- * .then(email => console.log('Contact Email:', email))
- * .catch(error => console.error('Error retrieving contact email:', error));
- */
-export declare function getPropertyValue(entitySetName: string, id: DataverseKey, propertyName: string): Promise<Primitive>;
-
-/**
- * Retrieves a single record from a Dataverse entity set.
- *
- * @param entitySetName - The logical name of the entity set (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record to retrieve. This could be a string GUID.
- * @param query An optional OData query string to filter or expand related entities (e.g., '$select=name,address1_city&$expand=primarycontactid($select=fullname)').
- * @returns A promise that resolves to the retrieved Dataverse record object.
- *
- * @example
- * // Retrieve the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'
- * getRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef')
- * .then(account => console.log(account))
- * .catch(error => console.error('Error retrieving account:', error));
- *
- * @example
- * // Retrieve the name and city of the account record with the specified ID,
- * // and also expand the primary contact's full name.
- * getRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', '$select=name,address1_city&$expand=primarycontactid($select=fullname)')
- * .then(account => console.log(account))
- * .catch(error => console.error('Error retrieving account with query:', error));
- */
-export declare function getRecord(entitySetName: string, id: DataverseKey, query?: string): Promise<DataverseRecord | null>;
-
-/**
- * Retrieves multiple records from a Dataverse entity set.
- *
- * @param entitySetName - The logical name of the entity set (e.g., 'accounts', 'contacts').
- * @param [query] - An optional OData query string to filter, sort, select fields, and expand related entities (e.g., '$filter=startswith(name, \'A\')&$orderby=name desc&$select=name,address1_city&$expand=primarycontactid($select=fullname)').
- * @returns A promise that resolves to an array of Dataverse record objects.
- *
- * @example
- * // Retrieve all account records.
- * getRecords('accounts')
- * .then(accounts => console.log('Accounts:', accounts))
- * .catch(error => console.error('Error retrieving accounts:', error));
- *
- * @example
- * // Retrieve the name and city of all active account records, ordered by name.
- * getRecords('accounts', '$filter=statecode eq 0&$select=name,address1_city&$orderby=name')
- * .then(activeAccounts => console.log('Active Accounts:', activeAccounts))
- * .catch(error => console.error('Error retrieving active accounts:', error));
- */
-export declare function getRecords(entitySetName: string, query?: string): Promise<DataverseRecord[]>;
+/** Extracts the string name from a FieldName type. */
+export declare function getName(name: Name): string;
 
 export declare type GetTable<T = any> = () => T;
 
-export declare const globalConfig: Config;
-
 /**
- * Creates an OData filter condition using the "gt" (greater than) operator.
- * Checks if a property is greater than a specified value.
- *
- * @param name The name of the property to compare.
- * @param value The value to compare the property against.
- * @returns A string representing the "greater than" filter condition.
+ * Creates a `gt` (greater than) filter.
  *
  * @example
- * greaterThan("price", 10.50); // returns "(price gt 10.50)"
- *
- * // Example: Combining with and
- * and(greaterThan("price", 10), lessThan("price", 20));
- * // returns "(price gt 10 and price lt 20)"
+ * greaterThan("revenue", 10000)
+ * // "(revenue gt 10000)"
  */
-export declare function greaterThan(name: string, value: Primitive): string;
+export declare function greaterThan(field: Name, value: string | number): string;
 
 /**
- * Creates an OData filter condition using the "ge" (greater than or equal) operator.
- * Checks if a property is greater than or equal to a specified value.
- *
- * @param name The name of the property to compare.
- * @param value The value to compare the property against.
- * @returns A string representing the "greater than or equal" filter condition.
+ * Creates a `ge` (greater than or equal) filter.
  *
  * @example
- * greaterThanOrEqual("quantity", 10); // returns "(quantity ge 10)"
- *
- * // Example: Combining with or
- * or(greaterThanOrEqual("quantity", 10), equals("quantity", 5));
- * // returns "(quantity ge 10) or (quantity eq 5)"
+ * greaterThanOrEqual("revenue", 10000)
+ * // "(revenue ge 10000)"
  */
-export declare function greaterThanOrEqual(name: string, value: Primitive): string;
+export declare function greaterThanOrEqual(field: Name, value: string | number): string;
 
 /**
- * Creates an OData groupby expression.
- *
- * @param values An array of property names to group by.  Empty or null values will be filtered out.
- * @param aggregations Optional aggregation expressions to apply to the grouped data.
- * @returns An OData groupby expression string.
+ * Creates a `groupby` clause for the `$apply` query option.
  *
  * @example
- * // Group by a single property:
- * groupby(["category"]); // returns "groupby((category))"
- *
- * // Group by multiple properties:
- * groupby(["category", "region", "year"]); // returns "groupby((category,region,year))"
- *
- * // Group by a single property with aggregation:
- * groupby(["category"], "aggregate(price with average as avgPrice)");
- * // returns "groupby((category),aggregate(price with average as avgPrice))"
- *
- * // Group by multiple properties with multiple aggregations:
- * groupby(["category", "region"], aggregate(price with average as avgPrice, quantity with sum as totalQuantity));
- * // returns "groupby((category,region),aggregate(price with average as avgPrice, quantity with sum as totalQuantity))"
+ * groupby(["statuscode"], average("revenue"))
+ * // "groupby((statuscode),revenue with average as revenue)"
  */
-export declare function groupby(values: string[], aggregations?: string): string;
+export declare function groupby(values: Name[], aggregations?: string): string;
 
 /**
  * Represents a GUID (Globally Unique Identifier) string, a standard identifier
@@ -1011,42 +1048,20 @@ export declare function groupby(values: string[], aggregations?: string): string
 export declare type GUID = `${string}-${string}-${string}-${string}-${string}`;
 
 /**
- * A factory function to create a new ImageProperty instance.
+ * Creates an image column definition.
  *
- * @param name The name of the image property.
- * @returns A new ImageProperty instance.
+ * @param name The Dataverse logical name of the image column.
  */
-export declare function image(name: string): ImageProperty;
+export declare function image(name: string): ImageField;
 
-/**
- * Represents an image property within a dataverse schema.
- * Extends the base Property class with a string or null type to store the image data (e.g., as a base64 encoded string) and a default value of null.
- */
-export declare class ImageProperty extends Schema<string | null> {
-    /**
-     * The kind of schema element for an image property, which is "value".
-     */
+export declare class ImageField extends Schema<string | null> {
     kind: "value";
-    /**
-     * The type of the property, which is "image".
-     */
     type: "image";
-    /**
-     * Creates a new ImageProperty instance.
-     *
-     * @param name The name of the image property.
-     */
     constructor(name: string);
 }
 
-/**
- * Generates a query expression for the "In" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {...string[]} values - The list of values to check if they are in the set.
- * @returns {string} The query expression for the "In" operator.
- */
-export declare function In(name: string, ...values: string[]): string;
+/** Filters records matching any of the specified values (IN clause). */
+export declare const In: (field: Name, values: (string | number)[]) => string;
 
 /**
  * Infers the TypeScript type from a Dataverse schema definition.  This is a recursive
@@ -1059,53 +1074,20 @@ export declare type Infer<T> = T extends Table<infer U> ? Infer<U> : T extends G
     [K in keyof T]: Infer<T[K]>;
 } : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends Schema<infer U> ? U : never;
 
-/**
- * Generates a query expression for the "InFiscalPeriod" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The fiscal period value.
- * @returns {string} The query expression for the "InFiscalPeriod" operator.
- */
-export declare function InFiscalPeriod(name: string, value: number): string;
+/** Filters records in a specific fiscal period. */
+export declare const InFiscalPeriod: (field: Name, value: number) => string;
 
-/**
- * Generates a query expression for the "InFiscalPeriodAndYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} fiscalPeriod - The fiscal period value.
- * @param {number} fiscalYear - The fiscal year value.
- * @returns {string} The query expression for the "InFiscalPeriodAndYear" operator.
- */
-export declare function InFiscalPeriodAndYear(name: string, fiscalPeriod: number, fiscalYear: number): string;
+/** Filters records in a specific fiscal period and year. */
+export declare const InFiscalPeriodAndYear: (field: Name, fiscalPeriod: number, fiscalYear: number) => string;
 
-/**
- * Generates a query expression for the "InFiscalYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The fiscal year value.
- * @returns {string} The query expression for the "InFiscalYear" operator.
- */
-export declare function InFiscalYear(name: string, value: number): string;
+/** Filters records in a specific fiscal year. */
+export declare const InFiscalYear: (field: Name, value: number) => string;
 
-/**
- * Generates a query expression for the "InOrAfterFiscalPeriodAndYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} fiscalPeriod - The fiscal period value.
- * @param {number} fiscalYear - The fiscal year value.
- * @returns {string} The query expression for the "InOrAfterFiscalPeriodAndYear" operator.
- */
-export declare function InOrAfterFiscalPeriodAndYear(name: string, fiscalPeriod: number, fiscalYear: number): string;
+/** Filters records in or after a specific fiscal period and year. */
+export declare const InOrAfterFiscalPeriodAndYear: (field: Name, fiscalPeriod: number, fiscalYear: number) => string;
 
-/**
- * Generates a query expression for the "InOrBeforeFiscalPeriodAndYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} fiscalPeriod - The fiscal period value.
- * @param {number} fiscalYear - The fiscal year value.
- * @returns {string} The query expression for the "InOrBeforeFiscalPeriodAndYear" operator.
- */
-export declare function InOrBeforeFiscalPeriodAndYear(name: string, fiscalPeriod: number, fiscalYear: number): string;
+/** Filters records in or before a specific fiscal period and year. */
+export declare const InOrBeforeFiscalPeriodAndYear: (field: Name, fiscalPeriod: number, fiscalYear: number) => string;
 
 /**
  * Creates a validator function that checks if a value is an integer.  It can validate both numbers and strings.
@@ -1127,344 +1109,193 @@ export declare function InOrBeforeFiscalPeriodAndYear(name: string, fiscalPeriod
  */
 export declare function integer(): Validator<number | string>;
 
+/**
+ * Filter for active records (statecode eq 0).
+ *
+ * @example
+ * isActive()
+ * // "statecode eq 0"
+ */
 export declare function isActive(): string;
 
+/**
+ * Filter for inactive records (statecode eq 1).
+ *
+ * @example
+ * isInactive()
+ * // "statecode eq 1"
+ */
 export declare function isInactive(): string;
 
+export declare function isNonEmptyString(value: unknown): value is string;
+
 /**
- * Checks if a value is a non-empty string.
- *
- * @param value The value to check.
- * @returns `true` if the value is a string with a length greater than zero, otherwise `false`.
+ * Filter for non-null field values.
  *
  * @example
- * isNonEmptyString("hello"); // returns true
- * isNonEmptyString("");      // returns false
- * isNonEmptyString(123);     // returns false
- * isNonEmptyString(null);    // returns false
+ * isNotNull("emailaddress1")
+ * // "emailaddress1 ne null"
  */
-export declare function isNonEmptyString(value: any): boolean;
-
-export declare function isNotNull(name: string): string;
-
-export declare function isNull(name: string): string;
+export declare function isNotNull(field: Name): string;
 
 /**
- * Creates an OData key string from a record of key-value pairs.
- * Used for identifying entities by alternate keys.
- *
- * @param keys A record of key-value pairs representing the alternate key.
- * @returns An OData key string.
+ * Filter for null field values.
  *
  * @example
- * // Create key string for a single key:
- * keys({ email: "test@example.com" });
- * // returns "email='test@example.com'"
- *
- * // Create key string for multiple keys:
- * keys({ region: "US", code: 123 });
- * // returns "region='US',code=123"
+ * isNull("emailaddress1")
+ * // "emailaddress1 eq null"
  */
-export declare function keys(keys: Record<string, Primitive>): AlternateKey;
+export declare function isNull(field: Name): string;
+
+export declare function isType(type: Types): Validator<any>;
+
+export declare function isTypeOrNull(type: Types): Validator<any>;
 
 /**
- * Generates a query expression for the "Last7Days" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "Last7Days" operator.
- */
-export declare function Last7Days(name: string): string;
-
-/**
- * Generates a query expression for the "LastFiscalPeriod" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "LastFiscalPeriod" operator.
- */
-export declare function LastFiscalPeriod(name: string): string;
-
-/**
- * Generates a query expression for the "LastFiscalYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "LastFiscalYear" operator.
- */
-export declare function LastFiscalYear(name: string): string;
-
-/**
- * Generates a query expression for the "LastMonth" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "LastMonth" operator.
- */
-export declare function LastMonth(name: string): string;
-
-/**
- * Generates a query expression for the "LastWeek" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "LastWeek" operator.
- */
-export declare function LastWeek(name: string): string;
-
-/**
- * Generates a query expression for the "LastXDays" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last days.
- * @returns {string} The query expression for the "LastXDays" operator.
- */
-export declare function LastXDays(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastXFiscalPeriods" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last fiscal periods.
- * @returns {string} The query expression for the "LastXFiscalPeriods" operator.
- */
-export declare function LastXFiscalPeriods(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastXFiscalYears" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last fiscal years.
- * @returns {string} The query expression for the "LastXFiscalYears" operator.
- */
-export declare function LastXFiscalYears(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastXHours" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last hours.
- * @returns {string} The query expression for the "LastXHours" operator.
- */
-export declare function LastXHours(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastXMonths" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last months.
- * @returns {string} The query expression for the "LastXMonths" operator.
- */
-export declare function LastXMonths(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastXWeeks" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last weeks.
- * @returns {string} The query expression for the "LastXWeeks" operator.
- */
-export declare function LastXWeeks(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastXYears" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of last years.
- * @returns {string} The query expression for the "LastXYears" operator.
- */
-export declare function LastXYears(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "LastYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "LastYear" operator.
- */
-export declare function LastYear(name: string): string;
-
-/**
- * Creates an OData filter condition using the "lt" (less than) operator.
- * Checks if a property is less than a specified value.
- *
- * @param name The name of the property to compare.
- * @param value The value to compare the property against.
- * @returns A string representing the "less than" filter condition.
+ * Formats an object of key-value pairs for alternate key lookups.
  *
  * @example
- * lessThan("temperature", 0); // returns "(temperature lt 0)"
- *
- * // Example: Combining with and
- * and(lessThan("temperature", 0), greaterThan("temperature", -10));
- * // returns "(temperature lt 0 and temperature gt -10)"
+ * keys({ name: "John", email: "john@example.com" })
+ * // "name='John',email='john@example.com'"
  */
-export declare function lessThan(name: string, value: Primitive): string;
+export declare function keys(keyValues: {
+    [key: string]: string | number;
+}): string;
+
+/** Filters records from the last 7 days. */
+export declare const Last7Days: (field: Name) => string;
+
+/** Filters records from the last fiscal period. */
+export declare const LastFiscalPeriod: (field: Name) => string;
+
+/** Filters records from the last fiscal year. */
+export declare const LastFiscalYear: (field: Name) => string;
+
+/** Filters records from last month. */
+export declare const LastMonth: (field: Name) => string;
+
+/** Filters records from last week. */
+export declare const LastWeek: (field: Name) => string;
+
+/** Filters records from the last X days. */
+export declare const LastXDays: (field: Name, value: number) => string;
+
+/** Filters records from the last X fiscal periods. */
+export declare const LastXFiscalPeriods: (field: Name, value: number) => string;
+
+/** Filters records from the last X fiscal years. */
+export declare const LastXFiscalYears: (field: Name, value: number) => string;
+
+/** Filters records from the last X hours. */
+export declare const LastXHours: (field: Name, value: number) => string;
+
+/** Filters records from the last X months. */
+export declare const LastXMonths: (field: Name, value: number) => string;
+
+/** Filters records from the last X weeks. */
+export declare const LastXWeeks: (field: Name, value: number) => string;
+
+/** Filters records from the last X years. */
+export declare const LastXYears: (field: Name, value: number) => string;
+
+/** Filters records from last year. */
+export declare const LastYear: (field: Name) => string;
 
 /**
- * Creates an OData filter condition using the "le" (less than or equal) operator.
- * Checks if a property is less than or equal to a specified value.
- *
- * @param name The name of the property to compare.
- * @param value The value to compare the property against.
- * @returns A string representing the "less than or equal" filter condition.
+ * Creates a `lt` (less than) filter.
  *
  * @example
- * lessThanOrEqual("rating", 5); // returns "(rating le 5)"
- *
- * // Example: Combining with or
- * or(lessThanOrEqual("rating", 5), equals("rating", 1));
- * // returns "(rating le 5) or (rating eq 1)"
+ * lessThan("revenue", 10000)
+ * // "(revenue lt 10000)"
  */
-export declare function lessThanOrEqual(name: string, value: Primitive): string;
+export declare function lessThan(field: Name, value: string | number): string;
 
 /**
- * A factory function to create a new ListProperty instance.
+ * Creates a `le` (less than or equal) filter.
  *
- * @template T The type of the values in the list (either string or number).
- * @param name The name of the list property.
- * @param list An array of valid string or number values for this property.
- * @returns A new ListProperty instance.
+ * @example
+ * lessThanOrEqual("revenue", 10000)
+ * // "(revenue le 10000)"
  */
-export declare function list<T extends string | number>(name: string, list: Array<T>): ListProperty<T>;
+export declare function lessThanOrEqual(field: Name, value: string | number): string;
 
 /**
- * Represents a list (picklist or dropdown) property within a dataverse schema.
- * Extends the base Property class to enforce that the value is either null or one of the values in the provided list.
+ * Creates a choice/option-set column definition with a fixed set of allowed values.
  *
- * @template T The type of the values in the list (either string or number).
+ * @param name The Dataverse logical name of the column.
+ * @param list The array of allowed string or numeric values.
+ *
+ * @example
+ * const table = defineTable({
+ *   gender: list("gendercode", [1, 2]),
+ * });
+ * // Infer<typeof table>["gender"] → 1 | 2 | null
  */
-export declare class ListProperty<T extends string | number> extends Schema<T | null> {
-    /**
-     * The kind of schema element for a list property, which is "value".
-     */
+export declare function list<T extends string | number>(name: string, list: Array<T>): ListField<T>;
+
+export declare class ListField<T extends string | number> extends Schema<T | null> {
     kind: "value";
-    /**
-     * The type of the property, which is "list".
-     */
     type: "list";
-    /**
-     * The array of valid values for this list property.
-     */
     list: Array<T>;
-    /**
-     * Creates a new ListProperty instance.
-     *
-     * @param name The name of the list property.
-     * @param list An array of valid string or number values for this property.
-     */
     constructor(name: string, list: Array<T>);
 }
 
 /**
- * A factory function to create a new ExpandProperty instance.
+ * Creates a many-to-one (lookup) navigation property definition. The related record
+ * can be expanded via OData `$expand` or fetched through the table API.
  *
- * @template TProperties An object defining the properties of the related record.
- * @param name The name of the expand property.
- * @param getTable A function that, when called, returns the Table definition for the related record.
- * @returns A new ExpandProperty instance.
+ * @param name The Dataverse logical name of the lookup column.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   primaryAddress: lookup("primaryaddressid", () => Address),
+ * });
+ * // Infer<typeof Person>["primaryAddress"] → { id: GUID; ... } | null
  */
 export declare function lookup<TProperties extends GenericProperties>(name: string, getTable: GetTable<Table<TProperties>>): LookupProperty<TProperties>;
 
 /**
- * A factory function to create a new LookupProperty instance.
+ * Creates a lookup-ID navigation property definition. This stores only the foreign-key
+ * GUID of the related record (not the full expanded record).
  *
- * @param name The logical name of the navigation property.
- * @param getTable A function that, when called, returns the Table definition for the related entity.
- * @returns A new LookupProperty instance.
+ * @param name The Dataverse logical name of the lookup column.
+ * @param getTable A thunk that returns the related table definition.
+ *
+ * @example
+ * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
+ * const Person = table(client, "people", {
+ *   id: primaryKey("personid"),
+ *   primaryAddressId: lookupId("primaryaddressid", () => Address),
+ * });
+ * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
  */
 export declare function lookupId(name: string, getTable: GetTable): LookupIdProperty;
 
-/**
- * Represents a lookup (single-valued navigation) property within a dataverse schema.
- * Extends the base Property class to handle references to other records by their GUID.
- */
 export declare class LookupIdProperty extends Schema<GUID | null> {
     #private;
-    /**
-     * The kind of schema element for a lookup property, which is "navigation".
-     */
     kind: "navigation";
-    /**
-     * The type of the property, which is "lookup".
-     */
     type: "lookupId";
-    /**
-     * The logical name of the navigation property in the Dataverse entity.
-     */
     navigationName: string;
-    /**
-     * Creates a new LookupProperty instance.
-     * The internal name of the property in Dataverse will be `_${name.toLowerCase()}_value`.
-     *
-     * @param name The logical name of the navigation property.
-     * @param getTable A function that, when called, returns the Table definition for the related entity. This is used to avoid circular dependencies.
-     */
     constructor(name: string, getTable: GetTable);
     get table(): Table<{
-        id: PrimaryKeyProperty;
+        id: PrimaryKeyField;
     }>;
-    /**
-     * Transforms the property's value (a GUID) into a format suitable for sending to Dataverse for association.
-     * If a value (GUID) is provided, it formats it as `entitySetName(value)`. If the value is null, it returns null.
-     *
-     * @param value The GUID of the related record.
-     * @returns A string in the format `entitySetName(guid)` or null.
-     */
     transformValueToDataverse(value: any): string | null;
 }
 
-/**
- * Represents an expand navigation property within a dataverse schema.
- * Extends the base Property class to handle a single related record that is typically fetched using the `$expand` OData query option.
- *
- * @template TProperties An object defining the properties of the related record.
- */
 export declare class LookupProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties> | null> {
     #private;
-    /**
-     * The kind of schema element for an expand property, which is "navigation".
-     */
     kind: "navigation";
-    /**
-     * The type of the property, which is "expand".
-     */
     type: "lookup";
-    /**
-     * Creates a new ExpandProperty instance.
-     *
-     * @param name The name of the expand property.
-     * @param getTable A function that, when called, returns the Table definition for the related record. This is used to avoid circular dependencies.
-     */
     constructor(name: string, getTable: GetTable<Table<TProperties>>);
     get table(): Table<TProperties>;
-    /**
-     * Transforms a value received from Dataverse into a transformed related record or null.
-     * It uses the `transformValueFromDataverse` method of the related Table to transform the data. If the value is null or undefined, it returns null.
-     *
-     * @param value The raw data representing the related record from Dataverse.
-     * @returns The transformed related record of type `Infer<TProperties>` or null.
-     */
     transformValueFromDataverse(value: any): Infer<TProperties> | null;
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-/**
- * Maps choice/picklist data from a Dataverse option set into a more usable format.
- *
- * @param data The raw choice/picklist data from Dataverse.
- * @returns An array of objects, where each object represents a choice option
- * and contains the properties: value, color, label, and description.
- *
- * @example
- * // Map choice data:
- * const rawData = {
- * Options: [
- * { Value: 1, Color: "red", Label: { UserLocalizedLabel: { Label: "Red" } }, Description: { UserLocalizedLabel: { Label: "The color red" } } },
- * { Value: 2, Color: "blue", Label: { UserLocalizedLabel: { Label: "Blue" } }, Description: { UserLocalizedLabel: { Label: "The color blue" } } },
- * ]
- * };
- * const mappedChoices = mapChoices(rawData);
- * // returns
- * // [
- * //   { value: 1, color: "red", label: "Red", description: "The color red" },
- * //   { value: 2, color: "blue", label: "Blue", description: "The color blue" }
- * // ]
- */
 export declare function mapChoices(data: any): {
     value: number;
     color: string;
@@ -1473,17 +1304,13 @@ export declare function mapChoices(data: any): {
 }[];
 
 /**
- * Creates an OData aggregation expression for finding the maximum value of a property.
- *
- * @param name The name of the property to find the maximum of.
- * @param alias The alias for the resulting maximum value (defaults to the property name).
- * @returns An OData aggregation expression string for max.
+ * Creates a `max` aggregation expression for `$apply`.
  *
  * @example
- * max("price");           // returns "price with max as price"
- * max("price", "maxPrice"); // returns "price with max as maxPrice"
+ * max("createdon")
+ * // "createdon with max as createdon"
  */
-export declare function max(name: string, alias?: string): string;
+export declare function max(field: Name, alias?: string): string;
 
 /**
  * Creates a validator function that checks if the length of a value is less than or equal to a maximum length.
@@ -1533,17 +1360,13 @@ export declare function maxValue(max: number): Validator<number>;
 export declare function mergeRecords<T>(prevRecords: T[], newRecords: T[]): T[];
 
 /**
- * Creates an OData aggregation expression for finding the minimum value of a property.
- *
- * @param name The name of the property to find the minimum of.
- * @param alias The alias for the resulting minimum value (defaults to the property name).
- * @returns An OData aggregation expression string for min.
+ * Creates a `min` aggregation expression for `$apply`.
  *
  * @example
- * min("price");           // returns "price with min as price"
- * min("price", "minPrice"); // returns "price with min as minPrice"
+ * min("createdon")
+ * // "createdon with min as createdon"
  */
-export declare function min(name: string, alias?: string): string;
+export declare function min(field: Name, alias?: string): string;
 
 /**
  * Creates a validator function that checks if the length of a value is greater than or equal to a minimum length.
@@ -1583,6 +1406,13 @@ export declare function minLength(min: number): (v: {
  */
 export declare function minValue(min: number): Validator<number>;
 
+/** A field name can be a string or an object with a name or toString method. */
+export declare type Name = string | {
+    name: string;
+} | {
+    toString(): string;
+};
+
 /**
  * Utility type to narrow down the keys of an object `T`
  * to only those keys whose values are of type `V`.
@@ -1604,231 +1434,169 @@ export declare type NarrowKeysByValue<T extends object, V> = {
     [K in keyof T]: T[K] extends V ? K : never;
 }[keyof T];
 
-export declare type NestedQuery = string | {
-    select?: string | string[];
-    expand?: string | Record<string, NestedQuery>;
-};
+declare type NavKeys<T> = {
+    [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? K : never;
+}[keyof T];
+
+declare type NestedStringArray = Array<string | NestedStringArray>;
+
+/** Filters records from the next 7 days. */
+export declare const Next7Days: (field: Name) => string;
+
+/** Filters records from the next fiscal period. */
+export declare const NextFiscalPeriod: (field: Name) => string;
+
+/** Filters records from the next fiscal year. */
+export declare const NextFiscalYear: (field: Name) => string;
+
+/** Filters records from next month. */
+export declare const NextMonth: (field: Name) => string;
+
+/** Filters records from next week. */
+export declare const NextWeek: (field: Name) => string;
+
+/** Filters records from the next X days. */
+export declare const NextXDays: (field: Name, value: number) => string;
+
+/** Filters records from the next X fiscal periods. */
+export declare const NextXFiscalPeriods: (field: Name, value: number) => string;
+
+/** Filters records from the next X fiscal years. */
+export declare const NextXFiscalYears: (field: Name, value: number) => string;
+
+/** Filters records from the next X hours. */
+export declare const NextXHours: (field: Name, value: number) => string;
+
+/** Filters records from the next X months. */
+export declare const NextXMonths: (field: Name, value: number) => string;
+
+/** Filters records from the next X weeks. */
+export declare const NextXWeeks: (field: Name, value: number) => string;
+
+/** Filters records from the next X years. */
+export declare const NextXYears: (field: Name, value: number) => string;
+
+/** Filters records from next year. */
+export declare const NextYear: (field: Name) => string;
 
 /**
- * Generates a query expression for the "Next7Days" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "Next7Days" operator.
- */
-export declare function Next7Days(name: string): string;
-
-/**
- * Generates a query expression for the "NextFiscalPeriod" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NextFiscalPeriod" operator.
- */
-export declare function NextFiscalPeriod(name: string): string;
-
-/**
- * Generates a query expression for the "NextFiscalYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NextFiscalYear" operator.
- */
-export declare function NextFiscalYear(name: string): string;
-
-/**
- * Generates a query expression for the "NextMonth" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NextMonth" operator.
- */
-export declare function NextMonth(name: string): string;
-
-/**
- * Generates a query expression for the "NextWeek" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NextWeek" operator.
- */
-export declare function NextWeek(name: string): string;
-
-/**
- * Generates a query expression for the "NextXDays" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next days.
- * @returns {string} The query expression for the "NextXDays" operator.
- */
-export declare function NextXDays(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextXFiscalPeriods" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next fiscal periods.
- * @returns {string} The query expression for the "NextXFiscalPeriods" operator.
- */
-export declare function NextXFiscalPeriods(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextXFiscalYears" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next fiscal years.
- * @returns {string} The query expression for the "NextXFiscalYears" operator.
- */
-export declare function NextXFiscalYears(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextXHours" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next hours.
- * @returns {string} The query expression for the "NextXHours" operator.
- */
-export declare function NextXHours(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextXMonths" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next months.
- * @returns {string} The query expression for the "NextXMonths" operator.
- */
-export declare function NextXMonths(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextXWeeks" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next weeks.
- * @returns {string} The query expression for the "NextXWeeks" operator.
- */
-export declare function NextXWeeks(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextXYears" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of next years.
- * @returns {string} The query expression for the "NextXYears" operator.
- */
-export declare function NextXYears(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "NextYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NextYear" operator.
- */
-export declare function NextYear(name: string): string;
-
-/**
- * Negates an OData filter condition using the "not" operator.
- * Returns an empty string if the provided condition is null, undefined, or an empty string.
- *
- * @param condition The OData filter condition to negate.
- * @returns A string representing the negated condition, or an empty string if the condition is invalid.
+ * Negates a filter condition.
  *
  * @example
- * // Example 1: Negating an equals condition
- * not(equals("name", "John")); // returns "not(name eq 'John')"
- *
- * // Example 2: Negating a combined condition
- * not(and(equals("age", 30), equals("city", "New York")));
- * // returns "not((age eq 30 and city eq 'New York'))"
- *
- * // Example 3: Handling empty condition
- * not("");            // returns ""
+ * not(equals("statecode", 0))
+ * // "not((statecode eq 0))"
  */
 export declare function not(condition: string): string;
 
-/**
- * Generates a query expression for the "NotBetween" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value1 - The first value to compare.
- * @param {string} value2 - The second value to compare.
- * @returns {string} The query expression for the "NotBetween" operator.
- */
-export declare function NotBetween(name: string, value1: string, value2: string): string;
+/** Filters records NOT between two values. */
+export declare const NotBetween: (field: Name, value1: string | number, value2: string | number) => string;
+
+/** Filters records NOT matching the current user's business unit. */
+export declare const NotEqualBusinessId: (field: Name) => string;
 
 /**
- * Generates a query expression for the "NotEqualBusinessId" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NotEqualBusinessId" operator.
- */
-export declare function NotEqualBusinessId(name: string): string;
-
-/**
- * Creates an OData filter condition using the "ne" (not equals) operator.
- * Checks if a property is not equal to a specified value.
- *
- * @param name The name of the property to compare.
- * @param value The value to compare the property against.
- * @returns A string representing the "not equals" filter condition.
+ * Creates a `ne` (not equals) filter.
  *
  * @example
- * notEquals("age", 30);       // returns "(age ne 30)"
- * notEquals("name", "John"); // returns "(name ne 'John')"
- *
- * // Example: Combining with or and not
- * or(notEquals("status", "completed"), not(equals("priority", "low")));
- * // returns "(status ne 'completed') or not(priority eq 'low')"
+ * notEquals("statecode", 1)
+ * // "(statecode ne 1)"
  */
-export declare function notEquals(name: string, value: Primitive): string;
+export declare function notEquals(field: Name, value: string | number | boolean | null): string;
+
+/** Filters records NOT owned by the current user. */
+export declare const NotEqualUserId: (field: Name) => string;
+
+/** Filters records NOT in the specified values (NOT IN clause). */
+export declare const NotIn: (field: Name, values: (string | number)[]) => string;
+
+/** Filters records NOT under a specific hierarchical node. */
+export declare const NotUnder: (field: Name, value: string) => string;
 
 /**
- * Generates a query expression for the "NotEqualUserId" operator in Microsoft Dynamics CRM.
+ * Creates a nullable date-only column definition (allows `null`).
  *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "NotEqualUserId" operator.
+ * @param name The Dataverse logical name of the column.
  */
-export declare function NotEqualUserId(name: string): string;
+export declare function nullableDate(name: string): NullableDateField;
 
-/**
- * Generates a query expression for the "NotIn" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {...string[]} values - The list of values to check if they are not in the set.
- * @returns {string} The query expression for the "NotIn" operator.
- */
-export declare function NotIn(name: string, ...values: string[]): string;
-
-/**
- * Generates a query expression for the "NotUnder" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The value to compare.
- * @returns {string} The query expression for the "NotUnder" operator.
- */
-export declare function NotUnder(name: string, value: string): string;
-
-/**
- * A factory function to create a new NumberProperty instance.
- *
- * @param name The name of the number property.
- * @returns A new NumberProperty instance.
- */
-export declare function number(name: string): NumberProperty;
-
-/**
- * Represents a number property within a dataverse schema.
- * Extends the base Property class with a number or null type and a default value of null.
- */
-export declare class NumberProperty extends Schema<number | null> {
-    /**
-     * The kind of schema element for a number property, which is "value".
-     */
+export declare class NullableDateField extends Schema<Date | null> {
     kind: "value";
-    /**
-     * The type of the property, which is "number".
-     */
-    type: "number";
-    /**
-     * Creates a new NumberProperty instance.
-     *
-     * @param name The name of the number property.
-     */
+    type: "dateOnly";
     constructor(name: string);
+    transformValueFromDataverse(value: any): Date | null;
+    transformValueToDataverse(value: any): string | null;
+}
+
+/**
+ * Creates a nullable date-time column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ */
+export declare function nullableDateTime(name: string): NullableDateTimeField;
+
+export declare class NullableDateTimeField extends Schema<Date | null> {
+    kind: "value";
+    type: "date";
+    constructor(name: string);
+    transformValueFromDataverse(value: any): Date | null;
+}
+
+/**
+ * Creates a nullable number column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   age: nullableNumber("person_age"),
+ * });
+ * // Infer<typeof table>["age"] → number | null
+ */
+export declare function nullableNumber(name: string): NullableNumberField;
+
+export declare class NullableNumberField extends Schema<number | null> {
+    kind: "value";
+    type: "number";
+    constructor(name: string);
+}
+
+/**
+ * Creates a nullable string column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ *
+ * @example
+ * const table = defineTable({
+ *   middleName: nullableString("middlename"),
+ * });
+ * // Infer<typeof table>["middleName"] → string | null
+ */
+export declare function nullableString(name: string): NullableStringField;
+
+export declare class NullableStringField extends Schema<string | null> {
+    kind: "value";
+    type: "string";
+    constructor(name: string);
+}
+
+/**
+ * Creates a number-typed Dataverse column definition.
+ *
+ * @param name The Dataverse logical name of the column (e.g. `"person_age"`).
+ *
+ * @example
+ * const table = defineTable({
+ *   age: number("person_age"),
+ * });
+ * // Infer<typeof table>["age"] → number
+ */
+export declare function number(name: string): NumberField;
+
+export declare class NumberField extends Schema<number> {
+    kind: "value";
+    type: "number";
+    constructor(name: string);
+    transformValueFromDataverse(value: any): number;
 }
 
 /**
@@ -1851,304 +1619,300 @@ export declare class NumberProperty extends Schema<number | null> {
  */
 export declare function numeric(): Validator<number | string>;
 
-/**
- * Generates a query expression for the "OlderThanXDays" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of days.
- * @returns {string} The query expression for the "OlderThanXDays" operator.
- */
-export declare function OlderThanXDays(name: string, value: number): string;
+declare type ODataFieldProxy<T extends GenericProperties> = {
+    [K in keyof T]: T[K] extends LookupProperty<infer P> ? ODataNavProxyValue<P> : T[K] extends CollectionProperty<infer P> ? ODataNavProxyValue<P> : string;
+};
+
+declare type ODataLambdaProxy<P extends GenericProperties> = {
+    [K in keyof P]: string;
+};
+
+declare type ODataNavProxyValue<P extends GenericProperties> = {
+    toString(): string;
+    any(cb: (proxy: ODataLambdaProxy<P>) => string): string;
+    any(alias: string, cb: (proxy: ODataLambdaProxy<P>) => string): string;
+    all(cb: (proxy: ODataLambdaProxy<P>) => string): string;
+    all(alias: string, cb: (proxy: ODataLambdaProxy<P>) => string): string;
+} & ODataFieldProxy<P>;
 
 /**
- * Generates a query expression for the "OlderThanXHours" operator in Microsoft Dynamics CRM.
+ * A type-safe OData query builder for Dataverse. Construct OData query strings
+ * with `$select`, `$filter`, `$expand`, `$orderby`, `$top`, `$count`, `$apply`,
+ * and `$ref` using auto-completing field proxies.
  *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of hours.
- * @returns {string} The query expression for the "OlderThanXHours" operator.
- */
-export declare function OlderThanXHours(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "OlderThanXMinutes" operator in Microsoft Dynamics CRM.
+ * Create one via {@link fetchOdata} — never instantiate directly.
  *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of minutes.
- * @returns {string} The query expression for the "OlderThanXMinutes" operator.
- */
-export declare function OlderThanXMinutes(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "OlderThanXMonths" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of months.
- * @returns {string} The query expression for the "OlderThanXMonths" operator.
- */
-export declare function OlderThanXMonths(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "OlderThanXWeeks" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of weeks.
- * @returns {string} The query expression for the "OlderThanXWeeks" operator.
- */
-export declare function OlderThanXWeeks(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "OlderThanXYears" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {number} value - The number of years.
- * @returns {string} The query expression for the "OlderThanXYears" operator.
- */
-export declare function OlderThanXYears(name: string, value: number): string;
-
-/**
- * Generates a query expression for the "On" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The date value.
- * @returns {string} The query expression for the "On" operator.
- */
-export declare function On(name: string, value: string): string;
-
-/**
- * Generates a query expression for the "OnOrAfter" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The date value.
- * @returns {string} The query expression for the "OnOrAfter" operator.
- */
-export declare function OnOrAfter(name: string, value: string): string;
-
-/**
- * Generates a query expression for the "OnOrBefore" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The date value.
- * @returns {string} The query expression for the "OnOrBefore" operator.
- */
-export declare function OnOrBefore(name: string, value: string): string;
-
-/**
- * Combines multiple OData filter conditions with the "or" operator.
- * Filters out any null or undefined conditions.
- *
- * @param conditions An array of OData filter conditions (strings), which can be null or undefined.
- * @returns A string representing the combined conditions, or an empty string if no valid conditions are provided.
+ * @template T The table's property definitions.
+ * @template TResult The result row shape (narrowed by `.select()`, `.expand()`, etc.).
  *
  * @example
- * // Example 1: Combining equals conditions
- * or(equals("name", "John"), equals("name", "Jane"));
- * // returns "(name eq 'John' or name eq 'Jane')"
+ * const q = fetchOdata(Person)
+ *   .select("name", "age")
+ *   .where(f => equals(f.name, "John"))
+ *   .orderby({ name: "asc" })
+ *   .top(10);
  *
- * // Example 2: Combining with not
- * or(not(equals("status", "completed")), equals("priority", "high"));
- * // returns "(not(status eq 'completed') or priority eq 'high')"
- *
- * // Example 3: Handling null/undefined conditions
- * or("name eq 'John'", null, "name eq 'Jane'");
- * // returns "(name eq 'John' or name eq 'Jane')"
+ * const results = await q.execute();
+ * // results: { name: string; age: number }[]
  */
-export declare function or(...conditions: (string | null | undefined)[]): string;
+export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
+    private _table;
+    private _fields;
+    private _filters;
+    private _expands;
+    private _orderby;
+    private _top?;
+    private _includeCount;
+    private _apply;
+    private _lambdaAliasIndex;
+    private _proxy;
+    constructor(table: Table<T>);
+    private _buildProxy;
+    private _buildProxyForTable;
+    /**
+     * Restricts the returned columns to the specified fields.
+     * This narrows the result type to only the selected properties.
+     *
+     * @param keys One or more value-field keys (navigation properties are excluded).
+     *
+     * @example
+     * const q = fetchOdata(Person).select("name", "age");
+     * // TResult → { name: string; age: number }
+     */
+    select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, {
+        [P in K]: Infer<T[P]>;
+    }>;
+    /**
+     * Adds a `$filter` clause. Can be a raw OData filter string or a callback
+     * that receives a typed field proxy. Multiple `.where()` calls are combined
+     * with `and`.
+     *
+     * @overload@overload
+     * @param filter A raw OData filter string.
+     *
+     * @overload@overload
+     * @param filter A callback receiving a field proxy for type-safe filter construction.
+     *
+     * @example
+     * // String overload:
+     * fetchOdata(Person).where("fullname eq 'John'");
+     *
+     * @example
+     * // Callback with field proxy and filter helpers:
+     * fetchOdata(Person)
+     *   .where(f => and(equals(f.name, "John"), greaterThan(f.age, 20)));
+     *
+     * @example
+     * // Multiple where calls stack additively:
+     * fetchOdata(Person)
+     *   .where(f => equals(f.name, "John"))
+     *   .where(f => greaterThan(f.age, 20));
+     * // $filter=(fullname eq 'John') and (person_age gt 20)
+     */
+    where(filter: string): this;
+    where(filter: (f: ODataFieldProxy<T>) => string): this;
+    /**
+     * Adds a `$expand` clause for a navigation property. The callback receives a
+     * nested {@link ODataQuery} scoped to the related table for further `.select()`,
+     * `.where()`, `.expand()`, etc.
+     *
+     * @param key The navigation property key.
+     * @param sub A callback to configure the nested query.
+     *
+     * @example
+     * fetchOdata(Person)
+     *   .select("name")
+     *   .expand("primaryAddress", sub => sub.select("street", "zip"));
+     *
+     * @example
+     * // Nested expand:
+     * fetchOdata(Person)
+     *   .expand("primaryAddress", sub =>
+     *     sub.expand("location", sub2 => sub2.select("name"))
+     *   );
+     */
+    expand<K extends string & NavKeys<T>, R>(key: K, sub: (q: ODataQuery<RelatedProps<T, K>>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+        [P in K]: ExpandResult<T, P, R>;
+    }>;
+    /**
+     * Adds a `$orderby` clause. Supports function callback with auto-completing
+     * field proxy, `asc`/`desc` helpers, or a simple direction map.
+     *
+     * @overload@overload
+     * @param spec Callback that receives a field proxy and returns an ordering spec.
+     *
+     * @overload@overload
+     * @param keys An object mapping field names to `"asc"` or `"desc"`.
+     *
+     * @example
+     * // Function overload with asc/desc helpers:
+     * fetchOdata(Person).orderby(f => asc(f.name, f.age));
+     * fetchOdata(Person).orderby(f => desc(f.age));
+     *
+     * @example
+     * // Record overload:
+     * fetchOdata(Person).orderby({ name: "asc", age: "desc" });
+     */
+    orderby(spec: (f: ODataFieldProxy<T>) => OrderSpec | OrderSpec[] | Record<string, "asc" | "desc">): this;
+    orderby(keys: {
+        [K in keyof T]?: "asc" | "desc";
+    }): this;
+    /**
+     * Limits the number of returned records (`$top`).
+     *
+     * @example
+     * fetchOdata(Person).top(10);
+     */
+    top(n: number): this;
+    /**
+     * Includes the total record count in the response (`$count=true`).
+     *
+     * @example
+     * const q = fetchOdata(Person).includeCount();
+     * // query string: "$count=true"
+     */
+    includeCount(): this;
+    /**
+     * Adds a `$apply` expression for server-side aggregation.
+     *
+     * @param expression A raw OData `$apply` expression.
+     *
+     * @example
+     * fetchOdata(Person).apply("groupby((person_age),aggregate(person_age with sum as total))");
+     */
+    apply(expression: string): this;
+    /**
+     * Adds a `$expand` with `/$ref` to retrieve only the related record IDs
+     * instead of full expanded records. The navigation property is removed from
+     * the result type.
+     *
+     * @param key The navigation property key.
+     *
+     * @example
+     * const q = fetchOdata(Person).expandRef("primaryAddress");
+     * // query: "$expand=person_Address/$ref"
+     * // TResult no longer includes primaryAddress
+     */
+    expandRef<K extends string & NavKeys<T>>(key: K): ODataQuery<T, Omit<TResult, K & keyof TResult>>;
+    private _build;
+    toString(): string;
+    execute(): Promise<TResult[]>;
+}
+
+/** Filters records older than X days. */
+export declare const OlderThanXDays: (field: Name, value: number) => string;
+
+/** Filters records older than X hours. */
+export declare const OlderThanXHours: (field: Name, value: number) => string;
+
+/** Filters records older than X minutes. */
+export declare const OlderThanXMinutes: (field: Name, value: number) => string;
+
+/** Filters records older than X months. */
+export declare const OlderThanXMonths: (field: Name, value: number) => string;
+
+/** Filters records older than X weeks. */
+export declare const OlderThanXWeeks: (field: Name, value: number) => string;
+
+/** Filters records older than X years. */
+export declare const OlderThanXYears: (field: Name, value: number) => string;
+
+/** Filters records on a specific date. */
+export declare const On: (field: Name, value: string) => string;
+
+/** Filters records on or after a specific date. */
+export declare const OnOrAfter: (field: Name, value: string) => string;
+
+/** Filters records on or before a specific date. */
+export declare const OnOrBefore: (field: Name, value: string) => string;
 
 /**
- * Creates an OData $orderby expression.
- *
- * @param values A record where the key is the property name and the value is "asc" or "desc".
- * @returns An OData $orderby expression string.
+ * Combines filter conditions with logical OR.
  *
  * @example
- * // Order by a single property ascending:
- * $orderby({ name: "asc" });
- * // returns "name asc"
- *
- * // Order by multiple properties:
- * $orderby({ name: "asc", age: "desc" });
- * // returns "name asc,age desc"
+ * or(equals("statecode", 0), equals("statecode", 1))
+ * // "((statecode eq 0) or (statecode eq 1))"
  */
-export declare function orderby(values: Record<string, "asc" | "desc">): string;
+export declare function or(...conditions: string[]): string;
 
 /**
- * Updates an existing record in the specified Dataverse entity set and returns the updated record with all its properties.
- *
- * @param entitySetName - The logical name of the entity set where the record will be updated (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record to update.
- * @param value - An object representing the data to update for the record. The keys of this object should correspond to the schema names of the entity's attributes that need to be modified.
- * @param [query=""] - An optional OData query string to include additional information in the returned updated record (e.g., '$expand=primarycontactid($select=fullname)').
- * @returns A promise that resolves to the updated Dataverse record object, including all its properties as requested by the `Prefer` header.
+ * Formats a comma-separated list of fields for a `$orderby` query.
  *
  * @example
- * // Update the 'name' and 'address1_city' of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef'
- * const updatedAccountData = { name: 'Updated Contoso Ltd.', address1_city: 'Redmond' };
- * patchRecord('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', updatedAccountData)
- * .then(updatedAccount => console.log('Updated Account:', updatedAccount))
- * .catch(error => console.error('Error updating account:', error));
+ * orderby({ name: "asc", createdon: "desc" })
+ * // "name asc,createdon desc"
  *
  * @example
- * // Update the 'jobtitle' of the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210' and expand their parent account's name.
- * const updatedContactData = { jobtitle: 'Marketing Manager' };
- * patchRecord('contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210', updatedContactData, '$expand=parentcustomerid($select=name)')
- * .then(updatedContact => console.log('Updated Contact:', updatedContact))
- * .catch(error => console.error('Error updating contact:', error));
+ * orderby(["name asc", "createdon desc"])
+ * // "name asc,createdon desc"
  */
-export declare function patchRecord(entitySetName: string, id: DataverseKey, value: DataverseRecord, query?: string): Promise<DataverseRecord>;
+export declare function orderby(values: {
+    [key: string]: "asc" | "desc";
+} | string[]): string;
 
 /**
- * Creates a validator function that checks if a string matches a regular expression.
- *
- * @param regex The regular expression to test against.
- * @param message An optional custom error message.  Defaults to "Invalid format".
- * @returns A validator function that returns an error message if the string does not match the regex, otherwise undefined.
- *
- * @example
- * // Create a pattern validator for US phone numbers:
- * const phonePattern = pattern(/^\d{3}-\d{3}-\d{4}$/, "Invalid phone number format (e.g., 123-456-7890)");
- *
- * // Validate a phone number:
- * phonePattern("123-456-7890"); // returns undefined (valid)
- * phonePattern("1234567890");   // returns "Invalid phone number format (e.g., 123-456-7890)" (invalid)
- * phonePattern("abc-def-ghij");   // returns "Invalid phone number format (e.g., 123-456-7890)" (invalid)
+ * Represents an ordered list of fields in a given direction.
+ * Created by the `asc()` and `desc()` helpers.
  */
+export declare class OrderSpec {
+    readonly fields: string[];
+    readonly direction: "asc" | "desc";
+    constructor(fields: string[], direction: "asc" | "desc");
+    toString(): string;
+}
+
+export declare function parseDateOnly(dateString: string): Date;
+
 export declare function pattern(regex: RegExp, message?: string): Validator<string>;
 
 /**
- * Creates a new record in the specified Dataverse entity set and returns the newly created record with all its properties.
+ * Creates a primary key (GUID) column definition for a Dataverse table.
  *
- * @param entitySetName - The logical name of the entity set where the record will be created (e.g., 'accounts', 'contacts').
- * @param value - An object representing the data for the new record. The keys of this object should correspond to the schema names of the entity's attributes.
- * @param [query=""] - An optional OData query string to include additional information in the returned record (e.g., '$expand=primarycontactid($select=fullname)').
- * @returns A promise that resolves to the newly created Dataverse record object, including all its properties as requested by the `Prefer` header.
+ * @param name The Dataverse logical name of the primary key column (e.g. `"contactid"`).
  *
  * @example
- * // Create a new account record with the name 'Fabrikam Inc.' and retrieve the complete record.
- * const newAccount = { name: 'Fabrikam Inc.' };
- * postRecord('accounts', newAccount)
- * .then(createdAccount => console.log('Created Account:', createdAccount))
- * .catch(error => console.error('Error creating account:', error));
- *
- * @example
- * // Create a new opportunity record with a topic and potential customer, and expand the potential customer's name in the returned record.
- * const newOpportunity = { topic: 'New Software License Sale', customerid_account: 'c7b6a5e4-f3d2-1a90-8765-43210fedcba9' };
- * postRecord('opportunities', newOpportunity, '$expand=customerid_account($select=name)')
- * .then(createdOpportunity => console.log('Created Opportunity:', createdOpportunity))
- * .catch(error => console.error('Error creating opportunity:', error));
+ * const table = defineTable({
+ *   id: primaryKey("contactid"),
+ * });
+ * // Infer<typeof table>["id"] → `${string}-${string}-${string}-${string}-${string}`
  */
-export declare function postRecord(entitySetName: string, value: DataverseRecord, query?: string): Promise<DataverseRecord>;
+export declare function primaryKey(name: string): PrimaryKeyField;
 
-/**
- * Creates a new record in the specified Dataverse entity set and returns the ID of the newly created record.
- *
- * @param entitySetName - The logical name of the entity set where the record will be created (e.g., 'accounts', 'contacts').
- * @param value - An object representing the data for the new record. The keys of this object should correspond to the schema names of the entity's attributes.
- * @returns A promise that resolves to the GUID (string) of the newly created record.
- *
- * @example
- * // Create a new account record with the name 'Contoso Ltd.'
- * const newAccount = { name: 'Contoso Ltd.' };
- * postRecordGetId('accounts', newAccount)
- * .then(accountId => console.log('New Account ID:', accountId))
- * .catch(error => console.error('Error creating account:', error));
- *
- * @example
- * // Create a new contact record with a first name, last name, and email address.
- * const newContact = { firstname: 'John', lastname: 'Doe', emailaddress1: 'john.doe@example.com' };
- * postRecordGetId('contacts', newContact)
- * .then(contactId => console.log('New Contact ID:', contactId))
- * .catch(error => console.error('Error creating contact:', error));
- */
-export declare function postRecordGetId(entitySetName: string, value: DataverseRecord): Promise<GUID>;
-
-/**
- * A factory function to create a new PrimaryKeyProperty instance.
- *
- * @param name The name of the primary key property.
- * @returns A new PrimaryKeyProperty instance.
- */
-export declare function primaryKey(name: string): PrimaryKeyProperty;
-
-/**
- * Represents the primary key property within a dataverse schema.
- * Extends the base Property class with a GUID type and is set to read-only by default.
- */
-export declare class PrimaryKeyProperty extends Schema<GUID> {
-    /**
-     * The kind of schema element for a primary key property, which is "value".
-     */
+export declare class PrimaryKeyField extends Schema<GUID> {
     kind: "value";
-    /**
-     * The type of the property, which is "primaryKey".
-     */
     type: "primaryKey";
-    /**
-     * Creates a new PrimaryKeyProperty instance.
-     * Sets the property to read-only upon creation.
-     *
-     * @param name The name of the primary key property (typically the logical name of the primary key attribute).
-     */
     constructor(name: string);
+    getDefault(): GUID;
 }
 
 export declare type Primitive = string | number | boolean | null;
 
-export declare type Query = {
+/**
+ * Constructs a full OData query string from a structured object.
+ *
+ * @example
+ * query({ select: ['name'], filter: equals('statecode', 0) })
+ * // "$select=name&$filter=(statecode%20eq%200)"
+ */
+export declare function query(queryObj: QueryParams): string;
+
+export declare type QueryForTable<T> = {
+    orderby?: Partial<Record<keyof T, "asc" | "desc">> | string;
+    filter?: string;
+    top?: number;
+};
+
+export declare interface QueryParams {
     select?: string;
     expand?: string;
     orderby?: string;
     filter?: string;
     top?: number;
     apply?: string;
-};
+}
 
-/**
- * Constructs an OData query string from a query object.
- *
- * @param query An object containing OData query parameters.
- * @returns An OData query string.
- *
- * @example
- * // Simple query with select and filter:
- * query({
- * select: "id,name,email",
- * filter: "age gt 20"
- * });
- * // returns "$select=id,name,email&$filter=age gt 20"
- *
- * // Query with expand and orderby:
- * query({
- * expand: "orders($select=id,orderDate)",
- * orderby: "name asc"
- * });
- * // returns "$expand=orders($select=id,orderDate)&$orderby=name asc"
- *
- * // Query with top:
- * query({ top: 10 });
- * // returns "$top=10"
- */
-export declare function query(query?: Query): string;
+declare type RelatedProps<T, K extends keyof T> = T[K] extends LookupProperty<infer P> ? P : T[K] extends CollectionProperty<infer P> ? P : never;
 
-export declare type QueryForTable<T> = {
-    orderby?: Partial<Record<keyof T, "asc" | "desc">>;
-    filter?: string;
-    top?: number;
-};
-
-/**
- * Creates a validator function that checks if a value is required (not null or undefined).
- *
- * @returns A validator function that returns "Required" if the value is null or undefined, otherwise undefined.
- *
- * @example
- * // Create a required validator:
- * const isRequired = required();
- *
- * // Validate a value:
- * isRequired("hello"); // returns undefined (valid)
- * isRequired(null);    // returns "Required" (invalid)
- * isRequired(undefined); // returns "Required" (invalid)
- */
 export declare function required(): (v: any) => "Required" | undefined;
 
 /**
@@ -2157,7 +1921,14 @@ export declare function required(): (v: any) => "Required" | undefined;
  * @param aadId - The AAD Directory Object ID of the user whose roles need to be fetched.
  * @returns  A promise that resolves to a Set of role names associated with the user.
  */
-export declare function RetrieveAadUserRoles(aadId: string): Promise<Set<string>>;
+export declare function RetrieveAadUserRoles(client: DataverseClient, aadId: string): Promise<Set<string>>;
+
+export declare function RetrieveChoices(client: DataverseClient, name: string): Promise<{
+    value: number;
+    color: string;
+    label: string;
+    description: string;
+}[]>;
 
 /**
  * Retrieves the total record count for a specific entity in the system.
@@ -2165,83 +1936,139 @@ export declare function RetrieveAadUserRoles(aadId: string): Promise<Set<string>
  * @param  logicalName - The logical name of the entity whose total record count is to be fetched.
  * @returns  A promise that resolves to the total record count for the specified entity.
  */
-export declare function RetrieveTotalRecordCount(logicalName: string): Promise<number>;
+export declare function RetrieveTotalRecordCount(client: DataverseClient, logicalName: string): Promise<number>;
 
 /**
- * Represents a generic property within a dataverse schema.
- * Implements the StandardSchemaV1 interface.
+ * Base class for all Dataverse schema properties. Implements the StandardSchemaV1 interface
+ * for validation and transformation.
  *
- * @template T The type of the property's value.
+ * @template T The TypeScript type of the property's value (e.g. `string`, `number`, `Date`).
+ *
+ * @example
+ * // Custom string property with a regex validator
+ * class SSNField extends Schema<string> {
+ *   constructor(name: string) {
+ *     super(name, "");
+ *     this.check((v) => /^\d{3}-\d{2}-\d{4}$/.test(v) ? undefined : "Invalid SSN");
+ *   }
+ * }
  */
-declare class Schema<T> implements StandardSchemaV1<T> {
+export declare class Schema<T> implements StandardSchemaV1<T> {
     #private;
     name: string;
+    toDataverseName: string;
+    fromDataverseName: string;
     kind: string;
     type: string;
     /**
-     * Creates a new Property instance.
-     *
-     * @param name The name of the property.
-     * @param defaultValue The default value for the property.
+     * @param name The Dataverse logical name of the column/attribute.
+     * @param defaultValue The default value used when no value is provided.
      */
     constructor(name: string, defaultValue: T);
     /**
-     * Sets the default value of the property.
+     * Overrides the default value for this property.
      *
-     * @param value The new default value.
-     * @returns The Property instance for chaining.
+     * @example
+     * const field = new StringField("firstname").setDefault("John");
+     * field.getDefault(); // "John"
      */
     setDefault(value: T): this;
     /**
-     * Gets the default value of the property.
-     *
-     * @returns The default value.
+     * Returns the default value for this property.
      */
     getDefault(): T;
     /**
-     * Sets whether the property is read-only.
+     * Marks this property as read-only. Read-only properties are excluded
+     * when transforming data for Dataverse (e.g. they won't be sent in create/update).
      *
-     * @param [value=true] True if the property should be read-only, false otherwise. Defaults to true.
-     * @returns The Property instance for chaining.
+     * @param value Whether the property should be read-only. Defaults to `true`.
+     *
+     * @example
+     * const field = new StringField("createdby").setReadOnly(true);
+     * field.getReadOnly(); // true
      */
     setReadOnly(value?: boolean): this;
     /**
-     * Gets whether the property is read-only.
-     *
-     * @returns True if the property is read-only, false otherwise.
+     * Returns whether this property is read-only.
      */
     getReadOnly(): boolean;
     /**
-     * Adds a validator to the property.
+     * Adds a validation function to this property. Validators run during
+     * {@link validate} and {@link parse}. A validator returns `undefined` if valid,
+     * or an error message string if invalid.
      *
-     * @param v The validator function or object to add.
-     * @returns The Property instance for chaining.
+     * @example
+     * const field = new StringField("zip").check((v) =>
+     *   /^\d{5}(-\d{4})?$/.test(v) ? undefined : "Invalid ZIP code"
+     * );
+     * field.parse("12345"); // ok
+     * field.parse("abc");   // throws
      */
     check(v: Validator<T>): this;
     /**
-     * Adds a required validator to the property.
+     * Adds a "required" validator that rejects `null` or `undefined` values.
      *
-     * @returns The Property instance for chaining.
+     * @example
+     * const field = new StringField("email").required();
+     * field.validate(null);  // { issues: [{ message: "Required" }] }
+     * field.validate("a@b"); // { value: "a@b" }
      */
     required(): this;
     /**
-     * Transforms a value received from Dataverse into the property's type.
-     * By default, it returns the value as is. Subclasses can override this for custom transformations.
+     * Transforms a raw value from Dataverse into the property's TypeScript type.
+     * Override this in subclasses for custom deserialization (e.g. string → Date).
      *
-     * @param value The value received from Dataverse.
-     * @returns The transformed value of type T.
+     * @param value The raw value from the Dataverse API.
+     * @returns The typed value.
+     *
+     * @example
+     * // A custom date-only field
+     * class DateOnlyField extends Schema<Date> {
+     *   transformValueFromDataverse(value: any): Date {
+     *     return new Date(value + "T00:00:00Z");
+     *   }
+     * }
      */
     transformValueFromDataverse(value: any): T;
     /**
-     * Transforms the property's value into a format suitable for sending to Dataverse.
-     * By default, it returns the value as is. Subclasses can override this for custom transformations.
+     * Transforms the property's value into a format suitable for Dataverse.
+     * Override this in subclasses for custom serialization (e.g. Date → string).
      *
-     * @param value The property's value.
-     * @returns The transformed value suitable for Dataverse.
+     * @param value The property value to send to Dataverse.
+     * @returns The serialized value.
+     *
+     * @example
+     * class DateOnlyField extends Schema<Date> {
+     *   transformValueToDataverse(value: Date): string {
+     *     return value.toISOString().slice(0, 10);
+     *   }
+     * }
      */
     transformValueToDataverse(value: any): any;
     getIssues(value: unknown, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    /**
+     * Validates a value against this property's validators. Returns either
+     * `{ value }` on success or `{ issues }` on failure.
+     *
+     * @example
+     * const field = new StringField("email").required();
+     * field.validate("test@example.com"); // { value: "test@example.com" }
+     * field.validate(null);               // { issues: [{ message: "Required", path: [] }] }
+     */
     validate(value: unknown, path?: PropertyKey[]): StandardSchemaV1.Result<T>;
+    /**
+     * Validates a value and returns it if valid, or throws if invalid.
+     * This is a convenience wrapper around {@link validate}.
+     *
+     * @throws {Error} If validation fails, the error message contains the JSON-serialized issues.
+     *
+     * @example
+     * const field = new StringField("age").check((v) =>
+     *   Number(v) >= 0 ? undefined : "Must be non-negative"
+     * );
+     * field.parse("25");  // "25"
+     * field.parse("-1");  // throws Error("[{\"message\":\"Must be non-negative\",\"path\":[]}]")
+     */
     parse(value: unknown): T;
     /**
      * Provides access to the standard schema properties for this property.
@@ -2253,466 +2080,377 @@ declare class Schema<T> implements StandardSchemaV1<T> {
 }
 
 /**
- * Creates an OData $select expression.
- *
- * @param values An array of property names to select.
- * @returns A comma-separated string of property names.
+ * Formats a comma-separated list of fields for a `$select` query.
  *
  * @example
- * // Select multiple properties:
- * $select("id", "name", "email");
- * // returns "id,name,email"
- *
- * // Select properties including nested properties
- * $select("id", "name", "address/city");
- * // returns "id,name,address/city"
+ * select("name", "email", "telephone1")
+ * // "name,email,telephone1"
  */
-export declare function select(...values: string[]): string;
+export declare function select(...values: (Name)[]): string;
+
+declare type Simplify<T> = {
+    [Key in keyof T]: T[Key];
+} & {};
 
 /**
- * Sets the global configuration for the application, including the base URL and default headers.
- *
- * @param config The configuration object to set.  The headers are merged with the existing global headers.
+ * Creates a `startswith` filter.
  *
  * @example
- * // Set a new base URL:
- * setConfig({ url: "/newapi/data/v9.2" });
- *
- * // Add a custom header:
- * setConfig({ headers: { "X-Custom-Header": "MyValue" } });
+ * startsWith("fullname", "John")
+ * // "startswith(fullname,'John')"
  */
-export declare function setConfig(config: Config): void;
-
-/** The Standard Schema interface. */
-export declare interface StandardSchemaV1<Input = unknown, Output = Input> {
-    /** The Standard Schema properties. */
-    readonly "~standard": StandardSchemaV1.Props<Input, Output>;
-}
-
-export declare namespace StandardSchemaV1 {
-    /** The Standard Schema properties interface. */
-    export interface Props<Input = unknown, Output = Input> {
-        /** The version number of the standard. */
-        readonly version: 1;
-        /** The vendor name of the schema library. */
-        readonly vendor: string;
-        /** Validates unknown input values. */
-        readonly validate: (value: unknown) => Result<Output> | Promise<Result<Output>>;
-        /** Inferred types associated with the schema. */
-        readonly types?: Types<Input, Output> | undefined;
-    }
-    /** The result interface of the validate function. */
-    export type Result<Output> = SuccessResult<Output> | FailureResult;
-    /** The result interface if validation succeeds. */
-    export interface SuccessResult<Output> {
-        /** The typed output value. */
-        readonly value: Output;
-        /** The non-existent issues. */
-        readonly issues?: undefined;
-    }
-    /** The result interface if validation fails. */
-    export interface FailureResult {
-        /** The issues of failed validation. */
-        readonly issues: ReadonlyArray<Issue>;
-    }
-    /** The issue interface of the failure output. */
-    export interface Issue {
-        /** The error message of the issue. */
-        readonly message: string;
-        /** The path of the issue, if any. */
-        readonly path?: ReadonlyArray<PropertyKey | PathSegment> | undefined;
-    }
-    /** The path segment interface of the issue. */
-    export interface PathSegment {
-        /** The key representing a path segment. */
-        readonly key: PropertyKey;
-    }
-    /** The Standard Schema types interface. */
-    export interface Types<Input = unknown, Output = Input> {
-        /** The input type of the schema. */
-        readonly input: Input;
-        /** The output type of the schema. */
-        readonly output: Output;
-    }
-    /** Infers the input type of a Standard Schema. */
-    export type InferInput<Schema extends StandardSchemaV1> = NonNullable<Schema["~standard"]["types"]>["input"];
-    /** Infers the output type of a Standard Schema. */
-    export type InferOutput<Schema extends StandardSchemaV1> = NonNullable<Schema["~standard"]["types"]>["output"];
-}
+export declare function startsWith(field: Name, value: string): string;
 
 /**
- * Creates an OData filter condition using the "startswith" operator.
- * Checks if a string property starts with a specified substring.
+ * Creates a string-typed Dataverse column definition.
  *
- * @param name The name of the string property to check.
- * @param value The substring to search for at the beginning of the property's value.
- * @returns A string representing the "startswith" filter condition.
+ * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
  *
  * @example
- * startsWith("name", "A"); // returns "startswith(name,'A')"
- *
- * // Example: Combining with and
- * and(startsWith("name", "A"), lessThan("age", 20));
- * // returns "startswith(name,'A') and (age lt 20)"
+ * const table = defineTable({
+ *   name: string("fullname"),
+ * });
+ * // Infer<typeof table>["name"] → string
  */
-export declare function startsWith(name: string, value: Primitive): string;
+export declare function string(name: string): StringField;
 
-/**
- * A factory function to create a new StringProperty instance.
- *
- * @param name The name of the string property.
- * @returns A new StringProperty instance.
- */
-export declare function string(name: string): StringProperty;
-
-/**
- * Represents a string property within a dataverse schema.
- * Extends the base Property class with a string or null type and a default value of null.
- */
-export declare class StringProperty extends Schema<string | null> {
-    /**
-     * The kind of schema element for a string property, which is "value".
-     */
+export declare class StringField extends Schema<string> {
     kind: "value";
-    /**
-     * The type of the property, which is "string".
-     */
     type: "string";
-    /**
-     * Creates a new StringProperty instance.
-     *
-     * @param name The name of the string property.
-     */
     constructor(name: string);
+    transformValueFromDataverse(value: any): string;
 }
 
 /**
- * Creates an OData aggregation expression for calculating the sum of a property.
- *
- * @param name The name of the property to sum.
- * @param alias The alias for the resulting sum value (defaults to the property name).
- * @returns An OData aggregation expression string for sum.
+ * Creates a `sum` aggregation expression for `$apply`.
  *
  * @example
- * sum("quantity");           // returns "quantity with sum as quantity"
- * sum("quantity", "total"); // returns "quantity with sum as total"
+ * sum("revenue", "total_revenue")
+ * // "revenue with sum as total_revenue"
  */
-export declare function sum(name: string, alias?: string): string;
+export declare function sum(field: Name, alias?: string): string;
 
 /**
- * Represents a Dataverse table and provides methods for interacting with it.
- * Implements the StandardSchemaV1 interface.
+ * Represents a Dataverse table (entity) and provides methods for CRUD, querying,
+ * navigation properties, actions, functions, and bulk operations.
  *
- * @template TProperties An object defining the properties of the table.  Each property definition
- * describes the type and behavior of a column in the Dataverse table.
+ * Use the {@link table} factory function to create instances. All API calls go
+ * through the provided {@link DataverseClient}.
+ *
+ * @template TProperties An object mapping property names to their field definitions.
+ *
+ * @example
+ * const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
+ *
+ * const Account = table(client, "accounts", {
+ *   id: primaryKey("accountid"),
+ *   name: string("name"),
+ *   revenue: number("revenue"),
+ *   primaryContact: lookup("primarycontactid", () => Contact),
+ * });
+ *
+ * // Type-safe queries
+ * const record = await Account.getRecord("GUID-HERE");
+ * console.log(record.name); // typed as string
  */
 export declare class Table<TProperties extends GenericProperties> extends Schema<Infer<TProperties>> {
-    properties: TProperties;
+    client: DataverseClient;
+    fields: TProperties;
     kind: "table";
     type: "table";
     /**
-     * Creates a new Table instance.
-     *
-     * @param entitySetName The entity set name of the Dataverse table.
-     * @param props An object defining the properties of the table.
+     * @param client An instance of the DataverseClient for all API operations.
+     * @param entitySetName The logical collection name of the Dataverse table (e.g. `"accounts"`).
+     * @param props An object mapping property names to field definitions.
      */
-    constructor(entitySetName: string, props: TProperties);
+    constructor(client: DataverseClient, entitySetName: string, props: TProperties);
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
-    /**
-     * Gets the default values for the table's properties, optionally merged with provided values.
-     *
-     * @param value Optional object containing values to merge with the defaults.
-     * @returns An object containing the default values for the table.
-     *
-     * @example
-     * // Example 1: Get all default values.
-     * const defaultAccount = myAccountTable.getDefault();
-     * // Returns an object with all properties set to their defaults.
-     *
-     * // Example 2: Merge provided values with defaults.
-     * const partialAccount = { name: "Initial Name" };
-     * const mergedAccount = myAccountTable.getDefault(partialAccount);
-     * // Returns an object with defaults, but 'name' is set to "Initial Name".
-     */
     getDefault(value?: Partial<Infer<TProperties>>): Infer<TProperties>;
     /**
-     * Retrieves a single record from the table by its ID.
+     * Retrieves a single record by its primary key (GUID) or alternate key.
+     * Returns `null` when the record is not found.
      *
-     * @param keys The unique identifier of the record to retrieve.
-     * @returns A promise that resolves to the retrieved record, or null if not found.
+     * @param id The primary key GUID, alternate key, or string identifier.
      *
      * @example
-     * const account = await myAccountTable.getRecord("12345678-90ab-cdef-1234-567890abcdef");
-     * if (account) {
-     * console.log(account.name); // Access a property of the record
-     * }
+     * const account = await Account.getRecord("acme-1234-abcd");
+     * if (account) console.log(account.name);
      */
     getRecord(id: DataverseKey): Promise<Infer<TProperties> | null>;
     getAlternateKeys(value: Partial<Infer<TProperties>>): AlternateKey;
     /**
-     * Retrieves multiple records from the table, optionally with a query.
+     * Retrieves multiple records from the table, with optional filtering, sorting, and paging.
      *
-     * @param query An optional object specifying query parameters such as order, filter, and top.
-     * @returns A promise that resolves to an array of retrieved records.
+     * @param queryOptions Optional query parameters (filter, orderby, top).
      *
      * @example
-     * // Example 1: Get all accounts
-     * const allAccounts = await myAccountTable.getRecords();
-     *
-     * // Example 2: Get accounts ordered by name, with a limit
-     * const limitedAccounts = await myAccountTable.getRecords({
-     * orderby: { name: "asc" },
-     * top: 10,
-     * });
-     *
-     * // Example 3: Get accounts filtered by a condition
-     * const filteredAccounts = await myAccountTable.getRecords({
-     * filter: equals("accountnumber", "123")
+     * const activeAccounts = await Account.getRecords({
+     *   filter: "statecode eq 0",
+     *   orderby: "name asc",
+     *   top: 10,
      * });
      */
-    getRecords(query?: QueryForTable<TProperties>): Promise<Infer<TProperties>[]>;
+    getRecords(queryOptions?: QueryForTable<TProperties>): Promise<Infer<TProperties>[]>;
     /**
-     * Retrieves the value of a specific property for a record.
-     *
-     * @param key The key of the property to retrieve.
-     * @param id The unique identifier of the record.
-     * @param query Optional query parameters to apply.
-     * @returns A promise that resolves to the property value.
+     * Retrieves the value of a single property for a record by ID.
+     * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
      *
      * @example
-     * //Get a single property
-     * const accountName = await myAccountTable.getPropertyValue("name", "12345678-90ab-cdef-1234-567890abcdef");
-     *
-     * //Get a collection valued property
-     * const contacts = await myAccountTable.getPropertyValue("contact_customer_accounts", "12345678-90ab-cdef-1234-567890abcdef");
+     * const age = await Person.getPropertyValue("age", "some-guid");
+     * const address = await Person.getPropertyValue("primaryAddress", "some-guid");
      */
-    getPropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, query?: QueryForTable<TProperties>): Promise<Infer<TProperties[TKey]>>;
+    getPropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, queryOptions?: QueryForTable<TProperties>): Promise<Infer<TProperties[TKey]>>;
     /**
-     * Updates the value of a specific property for a record.
-     *
-     * @param key The key of the property to update.
-     * @param id The unique identifier of the record to update.
-     * @param value The new value for the property.
-     * @returns A promise that resolves to the ID of the updated record.
+     * Updates the value of a single property for a record by ID.
+     * For navigation properties, this associates/dissociates related records.
      *
      * @example
-     * await myAccountTable.updatePropertyValue("name", "12345678-90ab-cdef-1234-567890abcdef", "New Name");
+     * await Person.updatePropertyValue("age", "some-guid", 35);
      */
-    updatePropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, value: Infer<TProperties[TKey]>): Promise<DataverseKey>;
+    updatePropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, value: Infer<TProperties[TKey]>): Promise<GUID>;
+    protected updateNavigationProperty(property: GenericNavigationProperty, id: DataverseKey, value: any): Promise<`${string}-${string}-${string}-${string}-${string}` | `${string}-${string}-${string}-${string}-${string}`[] | undefined>;
     /**
-     * Handles updating navigation properties (lookups, expands, collections, lookups).
-     * @param property The navigation property to update
-     * @param id The id of the record being updated.
-     * @param value The new value for the navigation property.
-     */
-    protected updateNavigationProperty(property: GenericNavigationProperty, id: DataverseKey, value: any): Promise<`${string}-${string}-${string}-${string}-${string}` | `${string}=${string}` | DataverseKey[] | undefined>;
-    /**
-     * Associates a child record with a parent record through a navigation property.
-     *
-     * @param key The key of the navigation property to use for the association.
-     * @param id The unique identifier of the parent record.
-     * @param childId The unique identifier of the child record to associate.
-     * @returns A promise that resolves to the ID of the parent record.
+     * Links an existing child record to a parent record through a navigation property.
      *
      * @example
-     * const accountId = "a1b2c3d4-e5f6-7890-1234-567890abcdef";
-     * const contactId = "f9e8d7c6-b5a4-3210-fedc-ba9876543210";
-     * await myAccountTable.associateRecord("primarycontactid", accountId, contactId);
+     * await Person.associateRecord("primaryAddress", "person-guid", "address-guid");
      */
-    associateRecord<TKey extends NarrowKeysByValue<TProperties, GenericNavigationProperty>>(key: TKey, id: DataverseKey, childId: DataverseKey): Promise<DataverseKey>;
+    associateRecord<TKey extends NarrowKeysByValue<TProperties, GenericNavigationProperty>>(key: TKey, id: DataverseKey, childId: GUID): Promise<GUID>;
     /**
-     * Dissociates a child record from a parent record through a navigation property.
-     *
-     * @param key The key of the navigation property to use for the disassociation.
-     * @param id The unique identifier of the parent record.
-     * @param childId The unique identifier of the child record to dissociate (only for collection-valued navigation properties).
-     * @returns A promise that resolves to the ID of the parent record.
+     * Removes the link between a parent and child record through a navigation property.
+     * Overloads:
+     * - Collection/collectionIds: requires childId
+     * - Lookup/lookupId: omits childId (clears the lookup)
      *
      * @example
-     * // Dissociate a contact from an account's primary contact
-     * await myAccountTable.dissociateRecord("primarycontactid", accountId);
-     *
-     * // Dissociate a contact from an account's contact collection
-     * await myAccountTable.dissociateRecord("contact_customer_accounts", accountId, contactId);
+     * await Person.dissociateRecord("addresses", "person-guid", "address-guid");
+     * await Person.dissociateRecord("primaryAddress", "person-guid"); // clears lookup
      */
-    dissociateRecord<TKey extends NarrowKeysByValue<TProperties, CollectionProperty<any> | CollectionIdsProperty>>(key: TKey, id: DataverseKey, childId: DataverseKey): Promise<DataverseKey>;
-    dissociateRecord<TKey extends NarrowKeysByValue<TProperties, LookupProperty<any> | LookupIdProperty>>(key: TKey, id: DataverseKey): Promise<DataverseKey>;
+    dissociateRecord<TKey extends NarrowKeysByValue<TProperties, CollectionProperty<any> | CollectionIdsProperty>>(key: TKey, id: DataverseKey, childId: GUID): Promise<GUID>;
+    dissociateRecord<TKey extends NarrowKeysByValue<TProperties, LookupProperty<any> | LookupIdProperty>>(key: TKey, id: DataverseKey): Promise<GUID>;
     /**
-     * Saves a record to the table.  Handles both creating new records and updating existing ones.
+     * Creates a new record in Dataverse and returns its generated GUID.
      *
-     * @param value An object containing the data to save.  The object structure should match the table's properties.
-     * @returns A promise that resolves to the GUID of the saved record.
+     * @param value The record data (partial — primary key is auto-generated).
      *
      * @example
-     * // Example 1: Creating a new account
-     * const newAccountId = await myAccountTable.saveRecord({
-     * name: "New Account Name",
-     * accountnumber: "NewAccount001",
-     * });
-     *
-     * // Example 2: Updating an existing account
-     * const existingAccountId = "a1b2c3d4-e5f6-7890-1234-567890abcdef";
-     * const updatedAccountId = await myAccountTable.saveRecord({
-     * id: existingAccountId,
-     * name: "Updated Account Name",
-     * });
+     * const newId = await Person.insertRecord({ name: "John", age: 30 });
      */
-    saveRecord(value: Partial<Infer<TProperties>>): Promise<GUID>;
+    insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID>;
     /**
-     * Deletes a record from the table by its ID.
+     * Updates an existing record by ID. Supports optimistic concurrency via etag.
      *
-     * @param id The unique identifier of the record to delete.
-     * @returns A promise that resolves to the ID of the deleted record.
+     * @param id The record's primary key.
+     * @param value The fields to update (partial record data).
+     * @param etag Optional etag for conditional updates (If-Match header).
      *
      * @example
-     * await myAccountTable.deleteRecord("12345678-90ab-cdef-1234-567890abcdef");
+     * await Person.updateRecord("some-guid", { name: "Jane" });
+     * // With etag:
+     * await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
      */
-    deleteRecord(id: DataverseKey): Promise<DataverseKey>;
+    updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID>;
     /**
-     * Deletes the value of a specific property for a record.  Only works for value properties.
+     * Creates or updates a record. If `id` is provided the record is updated;
+     * otherwise a new record is created. Navigation properties (collections, lookups)
+     * are also synced through nested upserts.
      *
-     * @param key The key of the property to delete the value of.
-     * @param id The unique identifier of the record.
-     * @returns A promise that resolves to the ID of the record.
+     * @param id The GUID of an existing record, or `undefined` to create new.
+     * @param value The record data (partial for updates).
+     * @param etag Optional etag for conditional upsert.
      *
      * @example
-     * await myAccountTable.deletePropertyValue("accountnumber", "12345678-90ab-cdef-1234-567890abcdef");
+     * // Create
+     * const newId = await Person.upsertRecord(undefined, { name: "John" });
+     * // Update
+     * await Person.upsertRecord(existingId, { name: "Jane" });
      */
-    deletePropertyValue<TKey extends NarrowKeysByValue<TProperties, GenericValueProperty>>(key: TKey, id: DataverseKey): Promise<DataverseKey>;
+    upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID>;
     /**
-     * Gets the primary key property of the table.
+     * Deletes a record by its primary key. Supports optimistic concurrency via etag.
      *
-     * @returns An object containing the key and property definition of the primary key.
-     * @throws Error if no primary key is found.
+     * @param id The primary key of the record to delete.
+     * @param etag Optional etag for conditional deletion.
      *
      * @example
-     * const primaryKeyInfo = myAccountTable.getPrimaryKey();
-     * console.log(primaryKeyInfo.key); // "id" (or whatever the primary key property is named)
-     * console.log(primaryKeyInfo.property); // The PrimaryKeyProperty object
+     * await Person.deleteRecord("some-guid");
+     */
+    deleteRecord(id: DataverseKey, etag?: string): Promise<GUID>;
+    /**
+     * Activates a record by setting its `statecode` to 0.
+     *
+     * @example
+     * await Person.activateRecord("some-guid");
+     */
+    activateRecord(id: DataverseKey): Promise<GUID>;
+    /**
+     * Deactivates a record by setting its `statecode` to 1.
+     *
+     * @example
+     * await Person.deactivateRecord("some-guid");
+     */
+    deactivateRecord(id: DataverseKey): Promise<GUID>;
+    /**
+     * Deletes (clears) the value of a value property for a record. Cannot be used
+     * on navigation properties.
+     *
+     * @example
+     * await Person.deletePropertyValue("name", "some-guid");
+     */
+    deletePropertyValue<TKey extends NarrowKeysByValue<TProperties, GenericValueProperty>>(key: TKey, id: DataverseKey): Promise<GUID>;
+    /**
+     * Executes a bound Dataverse action on this entity set or a specific record.
+     * POST /{entitySet}({id})/Microsoft.Dynamics.CRM.{ActionName}
+     *
+     * @param actionName The Dataverse action name (without the CRM namespace prefix, e.g. `"GenerateInvoice"`).
+     * @param params Optional parameters to pass in the request body.
+     * @param id Optional record GUID — if provided, the action is bound to a specific record.
+     *
+     * @example
+     * // Bound to entity set
+     * await Account.executeAction("BulkDetectDuplicates", { ... });
+     * // Bound to a record
+     * await Account.executeAction("CalculatePrice", { discount: 10 }, "record-guid");
+     */
+    executeAction(actionName: string, params?: Record<string, any>, id?: DataverseKey): Promise<any>;
+    /**
+     * Executes a bound Dataverse function on a record.
+     * GET /{entitySet}({id})/Microsoft.Dynamics.CRM.{FunctionName}(...)
+     *
+     * @param functionName The Dataverse function name (e.g. `"CalculateActualValueOfOpportunity"`).
+     * @param id The record GUID to bind the function to.
+     * @param params Optional function parameters (appended as query parameters).
+     *
+     * @example
+     * const result = await Opportunity.executeFunction(
+     *   "CalculateActualValueOfOpportunity",
+     *   "opportunity-guid",
+     * );
+     */
+    executeFunction(functionName: string, id: DataverseKey, params?: Record<string, any>): Promise<any>;
+    /**
+     * Creates multiple records in a single API call via `CreateMultiple`.
+     *
+     * @param records Array of partial records to create.
+     *
+     * @example
+     * await Account.createMultiple([
+     *   { name: "Acme" },
+     *   { name: "Beta" },
+     * ]);
+     */
+    createMultiple(records: Partial<Infer<TProperties>>[]): Promise<any>;
+    /**
+     * Updates multiple records in a single API call via `UpdateMultiple`.
+     *
+     * @param records Array of partial records to update (must include primary key).
+     *
+     * @example
+     * await Account.updateMultiple([
+     *   { id: "guid-1", name: "Acme Updated" },
+     *   { id: "guid-2", name: "Beta Updated" },
+     * ]);
+     */
+    updateMultiple(records: Partial<Infer<TProperties>>[]): Promise<any>;
+    /**
+     * Deletes multiple records in a single API call via `DeleteMultiple`.
+     *
+     * @param ids Array of record GUIDs to delete.
+     *
+     * @example
+     * await Account.deleteMultiple(["guid-1", "guid-2"]);
+     */
+    deleteMultiple(ids: string[]): Promise<any>;
+    /**
+     * Returns the primary key field definition for this table.
+     *
+     * @example
+     * const pk = Account.getPrimaryKey();
+     * console.log(pk.key);      // "id"
+     * console.log(pk.property.name); // "accountid"
      */
     getPrimaryKey(): {
         key: string;
-        property: PrimaryKeyProperty;
+        property: PrimaryKeyField;
     };
     /**
-     * Gets the primary key value from a record object.
-     *
-     * @param value An object representing a record, typically of type `Partial<Infer<TProperties>>`.
-     * @returns The GUID of the primary key, or undefined if not found in the provided value.
+     * Extracts the primary key GUID from a record object, or `undefined` if not present.
      *
      * @example
-     * const accountData = { id: "a1b2c3d4-e5f6-7890-1234-567890abcdef", name: "My Account" };
-     * const accountId = myAccountTable.getPrimaryId(accountData); // returns "a1b2c3d4-e5f6-7890-1234-567890abcdef"
+     * const account = await Account.getRecord("some-guid");
+     * const pk = Account.getPrimaryId(account); // GUID | undefined
      */
     getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined;
-    /**
-     * Transforms a record from Dataverse format to the format expected by the application.
-     * This involves using the `transformValueFromDataverse` method of each property.
-     *
-     * @param value The record data in Dataverse format.
-     * @returns The transformed record data in the application's format.
-     *
-     * @example
-     * // Assuming Dataverse returns: { accountid: "...", name: "Account Name", ... }
-     * const transformedAccount = myAccountTable.transformValueFromDataverse(dataverseAccountData);
-     * // transformedAccount might look like: { id: "...", name: "Account Name", ... }
-     */
     transformValueFromDataverse(value: any): Infer<TProperties>;
-    /**
-     * Transforms a record from the application's format to Dataverse format.
-     * This involves using the `transformValueToDataverse` method of each property.
-     *
-     * @param value The record data in the application's format.
-     * @returns The record data in Dataverse format.
-     *
-     * @example
-     * const appAccountData = { id: "...", name: "Account Name", ... };
-     * const dataverseAccountData = myAccountTable.transformValueToDataverse(appAccountData);
-     * // dataverseAccountData might look like: { accountid: "...", name: "Account Name", ... }
-     */
     transformValueToDataverse(value: Partial<Infer<TProperties>>): DataverseRecord;
     /**
-     * Creates a new Table instance with a subset of the original table's properties.
-     *
-     * @param keys The keys of the properties to include in the new table.
-     * @returns A new Table instance with the specified properties.
+     * Creates a new `Table` with only the specified properties. Useful for
+     * narrowing the type when querying a subset of columns.
      *
      * @example
-     * // Create a new table with only 'name' and 'accountnumber' properties.
-     * const nameAndNumberTable = myAccountTable.pickProperties("name", "accountnumber");
+     * const NameOnly = Account.pickProperties("name", "id");
+     * const records = await NameOnly.getRecords(); // { name: string; id: GUID }[]
      */
     pickProperties<TKeys extends keyof TProperties>(...keys: TKeys[]): Table<Pick<TProperties, TKeys>>;
     /**
-     * Creates a new Table instance with all but the specified properties from the original table.
-     *
-     * @param keys The keys of the properties to exclude from the new table.
-     * @returns A new Table instance with the remaining properties.
+     * Creates a new `Table` with the specified properties excluded.
      *
      * @example
-     * // Create a new table without the 'notes' and 'tasks' properties.
-     * const noNotesAndTasksTable = myAccountTable.omitProperties("notes", "tasks");
+     * const WithoutSensitive = Person.omitProperties("ssn");
      */
     omitProperties<TKeys extends keyof TProperties>(...keys: TKeys[]): Table<Omit<TProperties, TKeys>>;
     /**
-     * Creates a new Table instance with additional properties added to the original table's properties.
-     *
-     * @param properties An object defining the properties to append.
-     * @returns A new Table instance with the appended properties.
+     * Creates a new `Table` with additional properties appended.
      *
      * @example
-     * // Create a new table with an added 'customField' property.
-     * const extendedTable = myAccountTable.appendProperties({
-     * customField: string("custom_field"),
+     * const Extended = Account.appendProperties({
+     *   customField: string("new_stringcolumn"),
      * });
+     * // Extended has all original fields plus `customField`
      */
     appendProperties<TAppendedProperties extends GenericProperties>(properties: TAppendedProperties): Table<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties>;
-    /**
-     * Use for typescript only. const x: typeof table.T
-     */
+    /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
     T: Infer<TProperties>;
 }
 
-export declare function table<TProperties extends GenericProperties>(name: string, properties: TProperties): Table<TProperties>;
-
 /**
- * Generates a query expression for the "ThisFiscalPeriod" operator in Microsoft Dynamics CRM.
+ * Creates a new {@link Table} instance bound to a Dataverse entity set.
+ * This is the primary entry point for defining table schemas.
  *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "ThisFiscalPeriod" operator.
+ * @param client The {@link DataverseClient} instance used for all API calls.
+ * @param name The logical collection name of the entity (e.g. `"accounts"`).
+ * @param properties An object mapping property names to field definitions (`primaryKey`, `string`, `number`, `lookup`, `collection`, etc.).
+ *
+ * @example
+ * const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
+ *
+ * const Contact = table(client, "contacts", {
+ *   id: primaryKey("contactid"),
+ *   fullName: string("fullname"),
+ *   email: string("emailaddress1"),
+ *   age: number("age"),
+ * });
+ *
+ * // Type-safe CRUD
+ * const record = await Contact.getRecord("guid");
+ * console.log(record.fullName); // string
  */
-export declare function ThisFiscalPeriod(name: string): string;
+export declare function table<TProperties extends GenericProperties>(client: DataverseClient, name: string, properties: TProperties): Table<TProperties>;
 
-/**
- * Generates a query expression for the "ThisFiscalYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "ThisFiscalYear" operator.
- */
-export declare function ThisFiscalYear(name: string): string;
+/** Filters records in the current fiscal period. */
+export declare const ThisFiscalPeriod: (field: Name) => string;
 
-/**
- * Generates a query expression for the "ThisMonth" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "ThisMonth" operator.
- */
-export declare function ThisMonth(name: string): string;
+/** Filters records in the current fiscal year. */
+export declare const ThisFiscalYear: (field: Name) => string;
 
-/**
- * Generates a query expression for the "ThisWeek" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "ThisWeek" operator.
- */
-export declare function ThisWeek(name: string): string;
+/** Filters records from this month. */
+export declare const ThisMonth: (field: Name) => string;
 
-/**
- * Generates a query expression for the "ThisYear" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "ThisYear" operator.
- */
-export declare function ThisYear(name: string): string;
+/** Filters records from this week. */
+export declare const ThisWeek: (field: Name) => string;
+
+/** Filters records from this year. */
+export declare const ThisYear: (field: Name) => string;
 
 /**
  * Converts a File object to a base64 encoded string.
@@ -2727,92 +2465,29 @@ export declare function ThisYear(name: string): string;
  * .then(base64String => console.log(base64String))
  * .catch(error => console.error(error));
  */
-export declare function toBase64(file: File): Promise<unknown>;
+export declare function toBase64(file: File): Promise<string>;
 
-/**
- * Generates a query expression for the "Today" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "Today" operator.
- */
-export declare function Today(name: string): string;
+export declare function toDateOnly(date: Date): string | null;
 
-/**
- * Generates a query expression for the "Tomorrow" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "Tomorrow" operator.
- */
-export declare function Tomorrow(name: string): string;
+/** Filters records from today. */
+export declare const Today: (field: Name) => string;
 
-/**
- * Performs a fetch request and handles common response processing, including JSON parsing,
- * error handling, and special handling for 204 No Content responses.
- *
- * @param url The URL to fetch.
- * @param init Optional fetch options.
- * @returns A promise that resolves to the JSON data if the response is JSON,
- * the extracted entity ID from the OData-EntityId header for 204 responses,
- * the response text for non-JSON responses, or void if 204 and no entity ID.
- * @throws An error if the response status is not ok or if an error is present in the JSON data.
- *
- * @example
- * // Fetch JSON data:
- * tryFetch("/api/data/v9.2/accounts/12345")
- * .then(data => console.log(data))
- * .catch(error => console.error(error));
- *
- * // Fetch with custom headers:
- * tryFetch("/api/data/v9.2/accounts", {
- * headers: { "Prefer": "odata.include-annotations=*" }
- * })
- * .then(data => console.log(data))
- * .catch(error => console.error(error));
- */
-export declare function tryFetch(url: RequestInfo | URL, init?: RequestInit): Promise<any>;
+/** Filters records from tomorrow. */
+export declare const Tomorrow: (field: Name) => string;
 
-/**
- * Generates a query expression for the "Under" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The value to compare.
- * @returns {string} The query expression for the "Under" operator.
- */
-export declare function Under(name: string, value: string): string;
+export declare type Types = "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function";
 
-/**
- * Generates a query expression for the "UnderOrEqual" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @param {string} value - The value to compare.
- * @returns {string} The query expression for the "UnderOrEqual" operator.
- */
-export declare function UnderOrEqual(name: string, value: string): string;
+/** Filters records under a specific hierarchical node. */
+export declare const Under: (field: Name, value: string) => string;
 
-/**
- * Updates the value of a single property of an existing Dataverse record.
- *
- * @param entitySetName - The logical name of the entity set where the record is located (e.g., 'accounts', 'contacts').
- * @param id - The unique identifier of the record to update.
- * @param propertyName - The name of the property to update (e.g., 'name', 'emailaddress1').
- * @param value - The new primitive value for the property (e.g., a string, number, or boolean).
- * @returns A promise that resolves to the ID of the updated record upon successful update.
- *
- * @example
- * // Update the 'name' property of the account record with ID 'a1b2c3d4-e5f6-7890-1234-567890abcdef' to 'New Account Name'.
- * updatePropertyValue('accounts', 'a1b2c3d4-e5f6-7890-1234-567890abcdef', 'name', 'New Account Name')
- * .then(updatedAccountId => console.log('Updated Account ID:', updatedAccountId))
- * .catch(error => console.error('Error updating account name:', error));
- *
- * @example
- * // Update the 'emailaddress1' property of the contact record with ID 'f9e8d7c6-b5a4-3210-fedc-ba9876543210' to 'updated.email@example.com'.
- * updatePropertyValue('contacts', 'f9e8d7c6-b5a4-3210-fedc-ba9876543210', 'emailaddress1', 'updated.email@example.com')
- * .then(updatedContactId => console.log('Updated Contact ID:', updatedContactId))
- * .catch(error => console.error('Error updating contact email:', error));
- */
-export declare function updatePropertyValue(entitySetName: string, id: DataverseKey, propertyName: string, value: Primitive): Promise<DataverseKey>;
+/** Filters records at or under a specific hierarchical node. */
+export declare const UnderOrEqual: (field: Name, value: string) => string;
 
 export declare type Validator<T> = (value: T) => void | undefined | string;
+
+declare type ValueKeys<T> = {
+    [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? never : K;
+}[keyof T];
 
 /**
  * Retrieves the identity information of the currently authenticated user.
@@ -2820,24 +2495,25 @@ export declare type Validator<T> = (value: T) => void | undefined | string;
  * @returns A promise that resolves to an object containing the BusinessUnitId, UserId, and OrganizationId
  * of the currently authenticated user.
  */
-export declare function WhoAmI(): Promise<{
+export declare function WhoAmI(client: DataverseClient): Promise<{
     BusinessUnitId: GUID;
     UserId: GUID;
     OrganizationId: GUID;
 }>;
 
 /**
- * Wraps a value in single quotes if it's a string, otherwise converts it to a string.
- * This is used to properly format values in OData queries.
- *
- * @param value The value to wrap.
- * @returns The value wrapped in single quotes if it's a string, or its string representation otherwise.
+ * Wraps a value in single quotes for OData, unless it's a GUID or date.
+ * Escapes existing single quotes.
  *
  * @example
- * wrapString("hello"); // returns "'hello'"
- * wrapString(123);     // returns "123"
+ * wrapString("hello")     // "'hello'"
+ * wrapString("it's")      // "'it''s'"
+ * wrapString("123e4567-e89b-12d3-a456-426614174000")  // "123e4567-e89b-12d3-a456-426614174000"
+ * wrapString("2025-01-01") // "2025-01-01"
+ * wrapString(null)        // "null"
+ * wrapString(42)          // "42"
  */
-export declare function wrapString(value: any): string;
+export declare function wrapString(value: unknown): string;
 
 /**
  * Creates an XML string from a template string array, removing unnecessary whitespace.
@@ -2857,12 +2533,7 @@ export declare function wrapString(value: any): string;
  */
 export declare function xml(raw: TemplateStringsArray, ...values: unknown[]): string;
 
-/**
- * Generates a query expression for the "Yesterday" operator in Microsoft Dynamics CRM.
- *
- * @param {string} name - The name of the property.
- * @returns {string} The query expression for the "Yesterday" operator.
- */
-export declare function Yesterday(name: string): string;
+/** Filters records from yesterday. */
+export declare const Yesterday: (field: Name) => string;
 
 export { }

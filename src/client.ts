@@ -4,17 +4,41 @@ import { wrapString } from "./query";
 
 const parenthesesRegEx = /\(([^)]+)\)/;
 
+/** Options for configuring a DataverseClient instance. */
 export type DataverseClientOptions = {
+    /** Base URL of the Dataverse environment (defaults to `location.origin`). */
     url?: string;
+    /** Bearer token for authentication. */
     token?: string;
+    /** Azure AD object ID to impersonate (sets CallerObjectId header). */
     impersonateByAAId?: string;
+    /** Dataverse user ID to impersonate (sets MSCRMCallerID header). */
     impersonateByUserId?: string;
+    /** Additional headers to include on every request. */
     headers?: Record<string, string>;
 };
 
+/**
+ * Low-level HTTP client for the Dataverse Web API (v9.2).
+ * Provides CRUD, batch, action, function, and bulk operation methods.
+ *
+ * @example
+ * const client = new DataverseClient({
+ *   url: "https://org.crm.dynamics.com",
+ *   token: "eyJ...",
+ * });
+ *
+ * @example
+ * // With impersonation
+ * const client = new DataverseClient({
+ *   url: "https://org.crm.dynamics.com",
+ *   impersonateByUserId: "00000000-0000-0000-0000-000000000001",
+ * });
+ */
 export class DataverseClient {
     options: DataverseClientOptions;
 
+    /** @param options Connection and authentication options. */
     constructor(options: DataverseClientOptions = {}) {
         this.options = {
             url: location.origin,
@@ -23,7 +47,18 @@ export class DataverseClient {
     }
 
     /**
-     * The core fetch method for all Dataverse API calls.
+     * Core HTTP fetch method for all Dataverse API calls.
+     * Automatically prepends the API base path, applies auth headers,
+     * handles 204/304 responses, and extracts OData-EntityId from POST headers.
+     *
+     * @example
+     * await client.fetch("accounts?$select=name&$top=5")
+     *
+     * @example
+     * await client.fetch("accounts", {
+     *   method: "POST",
+     *   body: JSON.stringify({ name: "New Account" }),
+     * })
      */
     async fetch(resource: string, options: RequestInit = {}): Promise<any> {
         if (this._processChangeset(resource, options)) return;
@@ -94,6 +129,13 @@ export class DataverseClient {
     // --- PUBLIC API METHODS ---
     //
 
+    /**
+     * Retrieves a single record by ID.
+     *
+     * @example
+     * const account = await client.getRecord("accounts", "00000000-0000-0000-0000-000000000001",
+     *   "$select=name,revenue")
+     */
     async getRecord(entitySetName: Name, id: DataverseKey, query: string = "", etag?: string) {
         const resource = `${getName(entitySetName)}(${id})?${query}`;
         if (etag) {
@@ -102,11 +144,25 @@ export class DataverseClient {
         return this.fetch(resource);
     }
 
+    /**
+     * Retrieves multiple records, automatically following `@odata.nextLink` pagination.
+     *
+     * @example
+     * const accounts = await client.getRecords("accounts",
+     *   "$select=name,revenue&$filter=revenue gt 10000")
+     */
     async getRecords(entitySetName: Name, query: string = ""): Promise<any[]> {
         const resource = `${entitySetName}?${query}`;
         return this.fetch(resource).then((r) => this._getNextLink(r));
     }
 
+    /**
+     * Creates a record and returns its full representation.
+     *
+     * @example
+     * const newAccount = await client.postRecord("accounts",
+     *   { name: "New Account", revenue: 50000 })
+     */
     async postRecord(entitySetName: Name, value: object, query: string = "") {
         return this.fetch(`${getName(entitySetName)}?${query}`, {
             method: "POST",
@@ -115,6 +171,14 @@ export class DataverseClient {
         });
     }
 
+    /**
+     * Creates a record and returns only its GUID (no Prefer header).
+     *
+     * @example
+     * const id = await client.postRecordGetId("accounts",
+     *   { name: "New Account" })
+     * // id: "00000000-0000-0000-0000-000000000001"
+     */
     async postRecordGetId(entitySetName: Name, value: object): Promise<GUID> {
         return this.fetch(getName(entitySetName), {
             method: "POST",
@@ -122,6 +186,13 @@ export class DataverseClient {
         });
     }
 
+    /**
+     * Updates an existing record (partial update via PATCH).
+     *
+     * @example
+     * await client.patchRecord("accounts", "00000000-0000-0000-0000-000000000001",
+     *   { name: "Updated Name", revenue: 75000 })
+     */
     async patchRecord(entitySetName: Name, id: string, value: object, query: string = "", etag?: string) {
         const extraHeaders: Record<string, string> = { Prefer: "return=representation" };
         if (etag) extraHeaders["If-Match"] = etag;
@@ -132,6 +203,13 @@ export class DataverseClient {
         });
     }
 
+    /**
+     * Deletes a record by ID.
+     *
+     * @example
+     * const deletedId = await client.deleteRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001")
+     */
     async deleteRecord(entitySetName: Name, id: string, etag?: string): Promise<GUID> {
         const options: RequestInit = { method: "DELETE" };
         if (etag) options.headers = { "If-Match": etag } as Record<string, string>;
@@ -139,6 +217,13 @@ export class DataverseClient {
         return id as GUID;
     }
 
+    /**
+     * Updates a single property value via PUT.
+     *
+     * @example
+     * await client.updatePropertyValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "name", "New Name")
+     */
     async updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, etag?: string): Promise<GUID> {
         const options: RequestInit = {
             method: "PUT",
@@ -149,6 +234,13 @@ export class DataverseClient {
         return id as GUID;
     }
 
+    /**
+     * Deletes (nulls out) a single property value.
+     *
+     * @example
+     * await client.deletePropertyValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "emailaddress1")
+     */
     async deletePropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<GUID> {
         await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
             method: "DELETE",
@@ -156,26 +248,69 @@ export class DataverseClient {
         return id as GUID;
     }
 
+    /**
+     * Retrieves a single property value.
+     *
+     * @example
+     * const name = await client.getPropertyValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "name")
+     */
     async getPropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<any> {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`).then((r) => r.value);
     }
 
+    /**
+     * Retrieves a property's raw value (e.g. file content) via `/$value`.
+     *
+     * @example
+     * const imageData = await client.getPropertyRawValue("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
     async getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name): Promise<any> {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`);
     }
 
+    /**
+     * Returns the URL for a property's raw value.
+     *
+     * @example
+     * const url = client.getPropertyRawValueURL("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
     getPropertyRawValueURL(entitySetName: Name, id: string, propertyName: Name): string {
         return `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`;
     }
 
+    /**
+     * Returns the full-size image download URL.
+     *
+     * @example
+     * const url = client.getImageFullSizeURL("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
     getImageFullSizeURL(entitySetName: Name, id: string, propertyName: Name): string {
         return `${this.options.url}/api/data/v9.2/${getName(entitySetName)}(${id})/${getName(propertyName)}/$value?size=full`;
     }
 
+    /**
+     * Returns the legacy image download URL.
+     *
+     * @example
+     * const url = client.getImageDownloadURL("accounts",
+     *   "00000000-0000-0000-0000-000000000001", "entityimage")
+     */
     getImageDownloadURL(entitySetName: Name, id: string, propertyName: Name): string {
         return `${this.options.url}/Image/download.aspx?Entity=${getName(entitySetName)}&Attribute=${getName(propertyName)}&Id=${id}&Full=true`;
     }
 
+    /**
+     * Uploads a file to a file property.
+     *
+     * @example
+     * await client.updateFileProperty("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "myfile", "report.pdf", fileBlob)
+     */
     async updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource) {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
             method: "PATCH",
@@ -187,14 +322,38 @@ export class DataverseClient {
         });
     }
 
+    /**
+     * Activates a record (sets statecode to 0).
+     *
+     * @example
+     * await client.activateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001")
+     */
     async activateRecord(entitySetName: Name, id: string): Promise<GUID> {
         return this.updatePropertyValue(entitySetName, id, "statecode", 0);
     }
 
+    /**
+     * Deactivates a record (sets statecode to 1).
+     *
+     * @example
+     * await client.deactivateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001")
+     */
     async deactivateRecord(entitySetName: Name, id: string): Promise<GUID> {
         return this.updatePropertyValue(entitySetName, id, "statecode", 1);
     }
 
+    /**
+     * Associates two records via a navigation property.
+     *
+     * @example
+     * await client.associateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "primarycontactid",
+     *   "contacts",
+     *   "00000000-0000-0000-0000-000000000002")
+     */
     async associateRecord(
         entitySetName: Name,
         parentId: string,
@@ -211,12 +370,30 @@ export class DataverseClient {
         return childId as GUID;
     }
 
+    /**
+     * Dissociates two records. If childId is omitted, all references are removed.
+     *
+     * @example
+     * await client.dissociateRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "primarycontactid",
+     *   "00000000-0000-0000-0000-000000000002")
+     */
     async dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string): Promise<GUID> {
         const resource = `${getName(entitySetName)}(${parentId})/${getName(propertyName)}${childId ? `(${childId})` : ""}/$ref`;
         await this.fetch(resource, { method: "DELETE" });
         return (childId ?? parentId) as GUID;
     }
 
+    /**
+     * Retrieves associated records via a collection navigation property.
+     *
+     * @example
+     * const contacts = await client.getAssociatedRecords("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "contact_customer_accounts",
+     *   "$select=fullname,email")
+     */
     async getAssociatedRecords(
         entitySetName: Name,
         id: string,
@@ -227,11 +404,32 @@ export class DataverseClient {
         return this.fetch(resource).then((r) => r.value);
     }
 
+    /**
+     * Retrieves a single associated record via a single-valued navigation property.
+     *
+     * @example
+     * const contact = await client.getAssociatedRecord("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "primarycontactid",
+     *   "$select=fullname,email")
+     */
     async getAssociatedRecord(entitySetName: Name, id: string, navigationPropertyName: Name, query: string = "") {
         const resource = `${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}?${query}`;
         return this.fetch(resource);
     }
 
+    /**
+     * Synchronizes a list of associated records: adds new ones and removes ones
+     * no longer in the list.
+     *
+     * @example
+     * await client.associateRecordToList("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "contact_customer_accounts",
+     *   "contacts",
+     *   "contactid",
+     *   ["id1", "id2", "id3"])
+     */
     async associateRecordToList(
         entitySetName: Name,
         parentId: string,
@@ -273,8 +471,13 @@ export class DataverseClient {
     //
 
     /**
-     * Executes an unbound Dataverse action.
-     * POST /{ActionName}
+     * Executes an unbound Dataverse action (POST).
+     *
+     * @example
+     * const result = await client.executeAction("WinQuote", {
+     *   QuoteClose: { ... },
+     *   Status: 4,
+     * })
      */
     async executeAction(actionName: string, params?: Record<string, any>): Promise<any> {
         return this.fetch(actionName, {
@@ -284,9 +487,17 @@ export class DataverseClient {
     }
 
     /**
-     * Executes a bound Dataverse action on a specific record or entity set.
-     * POST /{entitySet}({id})/Microsoft.Dynamics.CRM.{ActionName}  (bound to record)
-     * POST /{entitySet}/Microsoft.Dynamics.CRM.{ActionName}        (bound to entity set)
+     * Executes a bound Dataverse action on a specific record or entity set (POST).
+     *
+     * @example
+     * // Bound to a record
+     * await client.executeBoundAction("accounts",
+     *   "WinQuote", { Status: 4 },
+     *   "00000000-0000-0000-0000-000000000001")
+     *
+     * @example
+     * // Bound to an entity set (no id)
+     * await client.executeBoundAction("accounts", "BulkDelete", { Query: ... })
      */
     async executeBoundAction(
         entitySetName: Name,
@@ -308,8 +519,14 @@ export class DataverseClient {
     //
 
     /**
-     * Executes an unbound Dataverse function.
-     * GET /{FunctionName}(Param1=value1,Param2='string')
+     * Executes an unbound Dataverse function (GET).
+     *
+     * @example
+     * const result = await client.executeFunction("WhoAmI")
+     *
+     * @example
+     * const result = await client.executeFunction("CalculateTotalTime",
+     *   { Start: "2025-01-01", End: "2025-12-31" })
      */
     async executeFunction(functionName: string, params?: Record<string, any>): Promise<any> {
         const paramString = params
@@ -319,8 +536,13 @@ export class DataverseClient {
     }
 
     /**
-     * Executes a bound Dataverse function on a specific record.
-     * GET /{entitySet}({id})/Microsoft.Dynamics.CRM.{FunctionName}(Param1=value1)
+     * Executes a bound Dataverse function on a specific record (GET).
+     *
+     * @example
+     * const result = await client.executeBoundFunction("accounts",
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "CalculateDepreciation",
+     *   { Year: 2025 })
      */
     async executeBoundFunction(
         entitySetName: Name,
@@ -341,8 +563,13 @@ export class DataverseClient {
     //
 
     /**
-     * Creates multiple records in a single API call.
-     * POST /{entitySet}/Microsoft.Dynamics.CRM.CreateMultiple
+     * Creates multiple records in a single API call using CreateMultiple.
+     *
+     * @example
+     * await client.createMultiple("accounts", [
+     *   { name: "Account 1" },
+     *   { name: "Account 2" },
+     * ])
      */
     async createMultiple(entitySetName: Name, records: Record<string, any>[]): Promise<any> {
         return this.fetch(
@@ -352,8 +579,13 @@ export class DataverseClient {
     }
 
     /**
-     * Updates multiple records in a single API call.
-     * POST /{entitySet}/Microsoft.Dynamics.CRM.UpdateMultiple
+     * Updates multiple records in a single API call using UpdateMultiple.
+     *
+     * @example
+     * await client.updateMultiple("accounts", [
+     *   { accountid: "id1", name: "Updated 1" },
+     *   { accountid: "id2", name: "Updated 2" },
+     * ])
      */
     async updateMultiple(entitySetName: Name, records: Record<string, any>[]): Promise<any> {
         return this.fetch(
@@ -364,7 +596,12 @@ export class DataverseClient {
 
     /**
      * Deletes multiple records in a single API call by their IDs.
-     * POST /{entitySet}/Microsoft.Dynamics.CRM.DeleteMultiple
+     *
+     * @example
+     * await client.deleteMultiple("accounts", [
+     *   "00000000-0000-0000-0000-000000000001",
+     *   "00000000-0000-0000-0000-000000000002",
+     * ])
      */
     async deleteMultiple(entitySetName: Name, ids: string[]): Promise<any> {
         const targets = ids.map(id => ({
@@ -378,6 +615,17 @@ export class DataverseClient {
 
     _batchTxs: NestedStringArray | null = null;
 
+    /**
+     * Groups multiple requests into a batch for improved performance.
+     * All fetch() calls inside the callback are collected and sent as a single
+     * HTTP request.
+     *
+     * @example
+     * await client.batch(async () => {
+     *   await client.getRecord("accounts", "id1", "$select=name");
+     *   await client.getRecord("accounts", "id2", "$select=name");
+     * })
+     */
     async batch(fn: () => Promise<void>) {
         if (this._batchTxs) throw new Error("Cannot nest batches")
         let tx: NestedStringArray | null = [];
@@ -420,6 +668,17 @@ export class DataverseClient {
 
     _changeSetTxs: NestedStringArray | null = null;
 
+    /**
+     * Groups multiple write operations into a change set within a batch.
+     * All changes in a change set are committed atomically.
+     * If not already inside a batch, automatically wraps one.
+     *
+     * @example
+     * await client.changeset(async () => {
+     *   await client.postRecordGetId("accounts", { name: "New" });
+     *   await client.patchRecord("accounts", "id", { name: "Updated" });
+     * })
+     */
     async changeset(fn: () => Promise<void>): Promise<void> {
         if (this._changeSetTxs) throw new Error("Cannot nest changesets")
         if (!this._batchTxs) return this.batch(()=>this.changeset(fn))
