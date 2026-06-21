@@ -178,7 +178,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         const isIntersect = intersect ?? ((table as any).intersect === true);
 
         this._links.push({
-            name: table.name,
+            name: table.logicalName,
             from: fromFieldName,
             to: toFieldName,
             alias: autoAlias,
@@ -260,7 +260,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
         const intersectBuilder = new EntityQueryBuilder(stubTable);
         intersectBuilder._links.push({
-            name: targetTable.name,
+            name: targetTable.logicalName,
             from: targetPkName,
             to: targetPkName,
             alias: `auto_link_${++this._aliasCounter}`,
@@ -486,7 +486,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         if (this._options) fetchAttrs.push(`options='${this._options}'`);
 
         lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
-        lines.push(`  <entity name="${this._table.name}">`);
+        lines.push(`  <entity name="${this._table.logicalName}">`);
 
         for (const attr of this._attributes) {
             const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
@@ -604,7 +604,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
    * // contacts: Array<{ name: string; email: string }>
    */
   public async execute(): Promise<TResult[]> {
-      const raw = await this._table.client.getRecords(this._table.name, this.toString());
+      const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
       return raw.map((v: any) => this._table.transformValueFromDataverse(v)) as TResult[];
   }
 }

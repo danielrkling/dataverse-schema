@@ -7,7 +7,7 @@ import { BASE_URL } from "./mocks/handlers"
 const client = new DataverseClient({ url: BASE_URL })
 
 const Location = new DataverseTable({
-  client, entitySetName: "locations", logicalName: "locations",
+  client, entitySetName: "locations", logicalName: "location",
   fields: {
     id: primaryKey("locationid"),
     name: string("location_name"),
@@ -15,7 +15,7 @@ const Location = new DataverseTable({
 })
 
 const Address = new DataverseTable({
-  client, entitySetName: "addresses", logicalName: "addresses",
+  client, entitySetName: "addresses", logicalName: "address",
   fields: {
     id: primaryKey("addressid"),
     street: string("street_Address"),
@@ -26,7 +26,7 @@ const Address = new DataverseTable({
 })
 
 const Person = new DataverseTable({
-  client, entitySetName: "people", logicalName: "people",
+  client, entitySetName: "people", logicalName: "person",
   fields: {
     pk: primaryKey("personid"),
     name: string("fullname"),
@@ -42,7 +42,7 @@ const Person = new DataverseTable({
 // --- TripPin-inspired schema (https://www.odata.org/blog/trippin-new-odata-v4-sample-service/) ---
 
 const TrippinTrip = new DataverseTable({
-  client, entitySetName: "trippin_trips", logicalName: "trippin_trips",
+  client, entitySetName: "trippin_trips", logicalName: "trippin_trip",
   fields: {
     tripId: primaryKey("tripid"),
     name: string("trip_name"),
@@ -51,7 +51,7 @@ const TrippinTrip = new DataverseTable({
 })
 
 const TrippinPerson = new DataverseTable({
-  client, entitySetName: "trippin_people", logicalName: "trippin_people",
+  client, entitySetName: "trippin_people", logicalName: "trippin_person",
   fields: {
     userName: primaryKey("username"),
     firstName: string("firstname"),

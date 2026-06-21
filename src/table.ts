@@ -71,6 +71,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   client: DataverseClient;
   fields: TProperties;
   logicalName: string;
+  entitySetName: string;
   kind = "table" as const;
   type = "table" as const;
 
@@ -80,7 +81,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   constructor(options: DataverseTableOptions<TProperties>) {
     super(options.entitySetName, null as Infer<TProperties>);
     this.client = options.client;
-    this.name = options.entitySetName;
+    this.entitySetName = options.entitySetName;
     this.logicalName = options.logicalName;
     this.fields = options.fields;
   }
@@ -119,7 +120,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    */
   async getRecord(id: DataverseKey): Promise<Infer<TProperties> | null> {
     return this.client
-      .getRecord(this.name, id, buildQuery(this as unknown as DataverseTable<GenericProperties>))
+      .getRecord(this.entitySetName, id, buildQuery(this as unknown as DataverseTable<GenericProperties>))
       .then((v) => this.transformValueFromDataverse(v));
   }
 
@@ -145,7 +146,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     queryOptions?: QueryForTable<TProperties>,
   ): Promise<Infer<TProperties>[]> {
     return this.client
-      .getRecords(this.name, buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>))
+      .getRecords(this.entitySetName, buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>))
       .then((values) => values.map((v) => this.transformValueFromDataverse(v)));
   }
 
@@ -165,7 +166,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     const prop = this.fields[key];
     if (prop.kind === "value" || prop.type === "lookupId") {
       return this.client
-        .getPropertyValue(this.name, id, prop.name)
+        .getPropertyValue(this.entitySetName, id, prop.name)
         .then((v) => prop.transformValueFromDataverse(v)) as Infer<
         TProperties[TKey]
       >;
@@ -173,7 +174,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     if (prop.type === "collection" || prop.type === "collectionIds") {
       return this.client
         .getAssociatedRecords(
-          this.name,
+          this.entitySetName,
           id,
           prop.name,
           buildQuery(prop.table as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>), // Note: buildQuery needs to handle related table schema
@@ -186,7 +187,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     if (prop.type === "lookup") {
       return this.client
         .getAssociatedRecord(
-          this.name,
+          this.entitySetName,
           id,
           prop.name,
           buildQuery(prop.table, queryOptions),
@@ -216,7 +217,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
       await this.updateNavigationProperty(prop, id, value);
     } else {
       await this.client.updatePropertyValue(
-        this.name,
+        this.entitySetName,
         id,
         this.fields[key].name,
         prop.transformValueToDataverse(value),
@@ -239,10 +240,10 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
               )
             : (value as GUID[]);
         return this.client.associateRecordToList(
-          this.name,
+          this.entitySetName,
           id,
           property.name,
-          property.table.name,
+          property.table.entitySetName,
           property.table.getPrimaryKey().property.name,
           ids,
         );
@@ -252,17 +253,17 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
       const name =
         property.type === "lookup" ? property.name : property.navigationName;
       if (value === null) {
-        return this.client.dissociateRecord(this.name, id, name);
+        return this.client.dissociateRecord(this.entitySetName, id, name);
       } else {
         const childId =
           property.type === "lookup"
             ? await property.table.upsertRecord(undefined, value)
             : (value as GUID);
         return this.client.associateRecord(
-          this.name,
+          this.entitySetName,
           id,
           name,
-          property.table.name,
+          property.table.entitySetName,
           childId,
         );
       }
@@ -281,10 +282,10 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
       return this.client.associateRecord(
-        this.name,
+        this.entitySetName,
         id,
         prop.name,
-        prop.table.name,
+        prop.table.entitySetName,
         childId,
       );
     } else {
@@ -319,7 +320,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   >(key: TKey, id: DataverseKey, childId?: GUID): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
-      return this.client.dissociateRecord(this.name, id, prop.name, childId);
+      return this.client.dissociateRecord(this.entitySetName, id, prop.name, childId);
     } else {
       throw new Error("Can only dissociate navigation properties");
     }
@@ -336,7 +337,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   async insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
     const pkName = this.getPrimaryKey().property.name;
     const record = await this.client.postRecord(
-      this.name,
+      this.entitySetName,
       this.transformValueToDataverse(value),
       queryString({ select: pkName }),
     );
@@ -358,7 +359,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     if (!id) throw new Error("No ID provided")
     await this.client.patchRecord(
-      this.name,
+      this.entitySetName,
       id,
       this.transformValueToDataverse(value),
       "",
@@ -389,7 +390,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     if (id) {
       promises.push(
         this.client.patchRecord(
-          this.name,
+          this.entitySetName,
           id,
           this.transformValueToDataverse(value),
           queryString({ select: pkName }),
@@ -398,7 +399,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
       );
     } else {
       const record = await this.client.postRecord(
-        this.name,
+        this.entitySetName,
         this.transformValueToDataverse(value),
         queryString({ select: pkName }),
       );
@@ -431,7 +432,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    * await Person.deleteRecord("some-guid");
    */
   async deleteRecord(id: DataverseKey, etag?: string): Promise<GUID> {
-    return this.client.deleteRecord(this.name, id, etag);
+    return this.client.deleteRecord(this.entitySetName, id, etag);
   }
 
   /**
@@ -441,7 +442,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    * await Person.activateRecord("some-guid");
    */
   async activateRecord(id: DataverseKey): Promise<GUID>{
-    return this.client.activateRecord(this.name,id)
+    return this.client.activateRecord(this.entitySetName,id)
   }
 
   /**
@@ -451,7 +452,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    * await Person.deactivateRecord("some-guid");
    */
   async deactivateRecord(id: DataverseKey): Promise<GUID>{
-    return this.client.deactivateRecord(this.name,id)
+    return this.client.deactivateRecord(this.entitySetName,id)
   }
 
   /**
@@ -466,7 +467,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   >(key: TKey, id: DataverseKey): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "value") {
-      return this.client.deletePropertyValue(this.name, id, prop.name);
+      return this.client.deletePropertyValue(this.entitySetName, id, prop.name);
     }
     throw new Error("Cannot delete navigation property values");
   }
@@ -491,9 +492,9 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    */
   async executeAction(actionName: string, params?: Record<string, any>, id?: DataverseKey): Promise<any> {
     if (id) {
-      return this.client.executeBoundAction(this.name, actionName, params, id as string);
+      return this.client.executeBoundAction(this.entitySetName, actionName, params, id as string);
     }
-    return this.client.executeBoundAction(this.name, actionName, params);
+    return this.client.executeBoundAction(this.entitySetName, actionName, params);
   }
 
   /**
@@ -511,7 +512,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    * );
    */
   async executeFunction(functionName: string, id: DataverseKey, params?: Record<string, any>): Promise<any> {
-    return this.client.executeBoundFunction(this.name, id as string, functionName, params);
+    return this.client.executeBoundFunction(this.entitySetName, id as string, functionName, params);
   }
 
   //
@@ -531,7 +532,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    */
   async createMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
     return this.client.createMultiple(
-      this.name,
+      this.entitySetName,
       records.map((r) => this.transformValueToDataverse(r)),
     );
   }
@@ -549,7 +550,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    */
   async updateMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
     return this.client.updateMultiple(
-      this.name,
+      this.entitySetName,
       records.map((r) => this.transformValueToDataverse(r)),
     );
   }
@@ -563,7 +564,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
    * await Account.deleteMultiple(["guid-1", "guid-2"]);
    */
   async deleteMultiple(ids: string[]): Promise<any> {
-    return this.client.deleteMultiple(this.name, ids);
+    return this.client.deleteMultiple(this.entitySetName, ids);
   }
 
   /**
@@ -638,7 +639,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => keys.includes(v[0] as any)),
     ) as Pick<TProperties, TKeys>;
-    return new DataverseTable({ client: this.client, entitySetName: this.name, logicalName: this.logicalName, fields: properties });
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
   }
 
   /**
@@ -653,7 +654,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => !keys.includes(v[0] as any)),
     ) as Omit<TProperties, TKeys>;
-    return new DataverseTable({ client: this.client, entitySetName: this.name, logicalName: this.logicalName, fields: properties });
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
   }
 
   /**
@@ -668,7 +669,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
   appendProperties<TAppendedProperties extends GenericProperties>(
     properties: TAppendedProperties,
   ): DataverseTable<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
-    return new DataverseTable({ client: this.client, entitySetName: this.name, logicalName: this.logicalName, fields: {
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: {
       ...this.fields,
       ...properties,
     } as any});

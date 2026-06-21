@@ -364,7 +364,7 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   async execute(): Promise<TResult[]> {
     const qs = this.toString()
     if (!qs) return this._table.getRecords() as Promise<TResult[]>
-    const raw = await this._table.client.getRecords(this._table.name, qs)
+    const raw = await this._table.client.getRecords(this._table.entitySetName, qs)
     return raw.map((v: unknown) => this._table.transformValueFromDataverse(v)) as TResult[]
   }
 }

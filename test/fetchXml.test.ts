@@ -16,7 +16,7 @@ import { BASE_URL } from "./mocks/handlers"
 const client = new DataverseClient({ url: BASE_URL })
 
 const Address = new DataverseTable({
-  client, entitySetName: "addresses", logicalName: "addresses",
+  client, entitySetName: "addresses", logicalName: "address",
   fields: {
     id: primaryKey("addressid"),
     street: string("street_Address"),
@@ -25,7 +25,7 @@ const Address = new DataverseTable({
 })
 
 const Person = new DataverseTable({
-  client, entitySetName: "people", logicalName: "people",
+  client, entitySetName: "people", logicalName: "person",
   fields: {
     pk: primaryKey("personid"),
     name: string("fullname"),
@@ -35,7 +35,7 @@ const Person = new DataverseTable({
 })
 
 const Account = new DataverseTable({
-  client, entitySetName: "accounts", logicalName: "accounts",
+  client, entitySetName: "accounts", logicalName: "account",
   fields: {
     id: primaryKey("accountid"),
     name: string("name"),
@@ -547,7 +547,7 @@ test("orderby in join subquery stays inside link-entity", () => {
         .orderby(s => s.zip)
     )
   const xml = q.toXml()
-  expect(xml).toContain(`<link-entity name="addresses"`)
+  expect(xml).toContain(`<link-entity name="address"`)
   expect(xml).toContain(`<order attribute='zip_code' />`)
   expect(xml).not.toContain(`entityname='auto_link_1'`)
 })
@@ -561,7 +561,7 @@ test("orderby in innerJoin subquery stays inside link-entity", () => {
         .orderby(s => s.zip, "desc")
     )
   const xml = q.toXml()
-  expect(xml).toContain(`<link-entity name="addresses"`)
+  expect(xml).toContain(`<link-entity name="address"`)
   expect(xml).toContain(`<order attribute='zip_code' descending='true' />`)
   expect(xml).not.toContain(`entityname='auto_link_1'`)
 })
