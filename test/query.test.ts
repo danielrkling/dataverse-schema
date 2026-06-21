@@ -219,153 +219,153 @@ test("keys encodes single quotes", () => {
 // --- Dataverse-specific filter operators ---
 
 test("Above", () => {
-  expect(Above("field", "value")).toContain("Microsoft.Dynamics.CRM.Above")
+  expect(Above("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.Above")
 })
 
 test("AboveOrEqual", () => {
-  expect(AboveOrEqual("field", "value")).toContain("Microsoft.Dynamics.CRM.AboveOrEqual")
+  expect(AboveOrEqual("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.AboveOrEqual")
 })
 
 test("Between", () => {
-  expect(Between("field", 10, 20)).toContain("Microsoft.Dynamics.CRM.Between")
-  expect(Between("field", 10, 20)).toContain("PropertyValues=[10,20]")
+  expect(Between("field", 10, 20).toString()).toContain("Microsoft.Dynamics.CRM.Between")
+  expect(Between("field", 10, 20).toString()).toContain("PropertyValues=[10,20]")
 })
 
 test("NotBetween", () => {
-  expect(NotBetween("field", 10, 20)).toContain("Microsoft.Dynamics.CRM.NotBetween")
+  expect(NotBetween("field", 10, 20).toString()).toContain("Microsoft.Dynamics.CRM.NotBetween")
 })
 
 test("In", () => {
-  expect(In("field", ["a", "b"])).toContain("Microsoft.Dynamics.CRM.In")
-  expect(In("field", ["a", "b"])).toContain("PropertyValues=['a','b']")
+  expect(In("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.In")
+  expect(In("field", ["a", "b"]).toString()).toContain("PropertyValues=['a','b']")
 })
 
 test("NotIn", () => {
-  expect(NotIn("field", ["a", "b"])).toContain("Microsoft.Dynamics.CRM.NotIn")
+  expect(NotIn("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.NotIn")
 })
 
 test("ContainsValues", () => {
-  expect(ContainsValues("field", ["a", "b"])).toContain("Microsoft.Dynamics.CRM.ContainsValues")
+  expect(ContainsValues("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.ContainsValues")
 })
 
 test("DoesNotContainValues", () => {
-  expect(DoesNotContainValues("field", ["a", "b"])).toContain("Microsoft.Dynamics.CRM.DoesNotContainValues")
+  expect(DoesNotContainValues("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.DoesNotContainValues")
 })
 
 test("Under", () => {
-  expect(Under("field", "value")).toContain("Microsoft.Dynamics.CRM.Under")
+  expect(Under("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.Under")
 })
 
 test("UnderOrEqual", () => {
-  expect(UnderOrEqual("field", "value")).toContain("Microsoft.Dynamics.CRM.UnderOrEqual")
+  expect(UnderOrEqual("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.UnderOrEqual")
 })
 
 test("NotUnder", () => {
-  expect(NotUnder("field", "value")).toContain("Microsoft.Dynamics.CRM.NotUnder")
+  expect(NotUnder("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.NotUnder")
 })
 
 test("On / OnOrAfter / OnOrBefore", () => {
-  expect(On("field", "2024-01-01")).toContain("Microsoft.Dynamics.CRM.On")
-  expect(OnOrAfter("field", "2024-01-01")).toContain("Microsoft.Dynamics.CRM.OnOrAfter")
-  expect(OnOrBefore("field", "2024-01-01")).toContain("Microsoft.Dynamics.CRM.OnOrBefore")
+  expect(On("field", "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.On")
+  expect(OnOrAfter("field", "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.OnOrAfter")
+  expect(OnOrBefore("field", "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.OnOrBefore")
 })
 
 test("EqualUserId", () => {
-  expect(EqualUserId("ownerid")).toContain("Microsoft.Dynamics.CRM.EqualUserId")
+  expect(EqualUserId("ownerid").toString()).toContain("Microsoft.Dynamics.CRM.EqualUserId")
 })
 
 test("EqualUserOrUserHierarchy", () => {
-  expect(EqualUserOrUserHierarchy("ownerid")).toContain("Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy")
+  expect(EqualUserOrUserHierarchy("ownerid").toString()).toContain("Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy")
 })
 
 test("EqualUserOrUserHierarchyAndTeams", () => {
-  expect(EqualUserOrUserHierarchyAndTeams("ownerid")).toContain("EqualUserOrUserHierarchyAndTeams")
+  expect(EqualUserOrUserHierarchyAndTeams("ownerid").toString()).toContain("EqualUserOrUserHierarchyAndTeams")
 })
 
 test("EqualUserOrUserTeams", () => {
-  expect(EqualUserOrUserTeams("ownerid")).toContain("EqualUserOrUserTeams")
+  expect(EqualUserOrUserTeams("ownerid").toString()).toContain("EqualUserOrUserTeams")
 })
 
 test("EqualUserLanguage", () => {
-  expect(EqualUserLanguage("language")).toContain("EqualUserLanguage")
+  expect(EqualUserLanguage("language").toString()).toContain("EqualUserLanguage")
 })
 
 test("EqualBusinessId", () => {
-  expect(EqualBusinessId("businessunitid")).toContain("EqualBusinessId")
+  expect(EqualBusinessId("businessunitid").toString()).toContain("EqualBusinessId")
 })
 
 test("NotEqualBusinessId", () => {
-  expect(NotEqualBusinessId("businessunitid")).toContain("NotEqualBusinessId")
+  expect(NotEqualBusinessId("businessunitid").toString()).toContain("NotEqualBusinessId")
 })
 
 test("Today / Tomorrow / Yesterday", () => {
-  expect(Today("createdon")).toContain("Microsoft.Dynamics.CRM.Today")
-  expect(Tomorrow("createdon")).toContain("Microsoft.Dynamics.CRM.Tomorrow")
-  expect(Yesterday("createdon")).toContain("Microsoft.Dynamics.CRM.Yesterday")
+  expect(Today("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Today")
+  expect(Tomorrow("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Tomorrow")
+  expect(Yesterday("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Yesterday")
 })
 
 test("Last7Days / Next7Days", () => {
-  expect(Last7Days("createdon")).toContain("Microsoft.Dynamics.CRM.Last7Days")
-  expect(Next7Days("createdon")).toContain("Microsoft.Dynamics.CRM.Next7Days")
+  expect(Last7Days("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Last7Days")
+  expect(Next7Days("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Next7Days")
 })
 
 test("LastMonth / NextMonth / ThisMonth", () => {
-  expect(LastMonth("createdon")).toContain("Microsoft.Dynamics.CRM.LastMonth")
-  expect(NextMonth("createdon")).toContain("Microsoft.Dynamics.CRM.NextMonth")
-  expect(ThisMonth("createdon")).toContain("Microsoft.Dynamics.CRM.ThisMonth")
+  expect(LastMonth("createdon").toString()).toContain("Microsoft.Dynamics.CRM.LastMonth")
+  expect(NextMonth("createdon").toString()).toContain("Microsoft.Dynamics.CRM.NextMonth")
+  expect(ThisMonth("createdon").toString()).toContain("Microsoft.Dynamics.CRM.ThisMonth")
 })
 
 test("LastWeek / NextWeek / ThisWeek", () => {
-  expect(LastWeek("createdon")).toContain("Microsoft.Dynamics.CRM.LastWeek")
-  expect(NextWeek("createdon")).toContain("Microsoft.Dynamics.CRM.NextWeek")
-  expect(ThisWeek("createdon")).toContain("Microsoft.Dynamics.CRM.ThisWeek")
+  expect(LastWeek("createdon").toString()).toContain("Microsoft.Dynamics.CRM.LastWeek")
+  expect(NextWeek("createdon").toString()).toContain("Microsoft.Dynamics.CRM.NextWeek")
+  expect(ThisWeek("createdon").toString()).toContain("Microsoft.Dynamics.CRM.ThisWeek")
 })
 
 test("LastYear / NextYear / ThisYear", () => {
-  expect(LastYear("createdon")).toContain("Microsoft.Dynamics.CRM.LastYear")
-  expect(NextYear("createdon")).toContain("Microsoft.Dynamics.CRM.NextYear")
-  expect(ThisYear("createdon")).toContain("Microsoft.Dynamics.CRM.ThisYear")
+  expect(LastYear("createdon").toString()).toContain("Microsoft.Dynamics.CRM.LastYear")
+  expect(NextYear("createdon").toString()).toContain("Microsoft.Dynamics.CRM.NextYear")
+  expect(ThisYear("createdon").toString()).toContain("Microsoft.Dynamics.CRM.ThisYear")
 })
 
 test("LastXDays / NextXDays / OlderThanXDays", () => {
-  expect(LastXDays("createdon", 7)).toContain("Microsoft.Dynamics.CRM.LastXDays")
-  expect(NextXDays("createdon", 7)).toContain("Microsoft.Dynamics.CRM.NextXDays")
-  expect(OlderThanXDays("createdon", 30)).toContain("Microsoft.Dynamics.CRM.OlderThanXDays")
+  expect(LastXDays("createdon", 7).toString()).toContain("Microsoft.Dynamics.CRM.LastXDays")
+  expect(NextXDays("createdon", 7).toString()).toContain("Microsoft.Dynamics.CRM.NextXDays")
+  expect(OlderThanXDays("createdon", 30).toString()).toContain("Microsoft.Dynamics.CRM.OlderThanXDays")
 })
 
 test("OlderThanXHours / OlderThanXMinutes", () => {
-  expect(OlderThanXHours("createdon", 2)).toContain("OlderThanXHours")
-  expect(OlderThanXMinutes("createdon", 30)).toContain("OlderThanXMinutes")
+  expect(OlderThanXHours("createdon", 2).toString()).toContain("OlderThanXHours")
+  expect(OlderThanXMinutes("createdon", 30).toString()).toContain("OlderThanXMinutes")
 })
 
 test("Fiscal period filters", () => {
-  expect(ThisFiscalPeriod("createdon")).toContain("ThisFiscalPeriod")
-  expect(ThisFiscalYear("createdon")).toContain("ThisFiscalYear")
-  expect(LastFiscalPeriod("createdon")).toContain("LastFiscalPeriod")
-  expect(LastFiscalYear("createdon")).toContain("LastFiscalYear")
-  expect(NextFiscalPeriod("createdon")).toContain("NextFiscalPeriod")
-  expect(NextFiscalYear("createdon")).toContain("NextFiscalYear")
-  expect(InFiscalPeriod("createdon", 1)).toContain("InFiscalPeriod")
-  expect(InFiscalYear("createdon", 2024)).toContain("InFiscalYear")
-  expect(InFiscalPeriodAndYear("createdon", 1, 2024)).toContain("InFiscalPeriodAndYear")
-  expect(InOrAfterFiscalPeriodAndYear("createdon", 1, 2024)).toContain("InOrAfterFiscalPeriodAndYear")
-  expect(InOrBeforeFiscalPeriodAndYear("createdon", 1, 2024)).toContain("InOrBeforeFiscalPeriodAndYear")
+  expect(ThisFiscalPeriod("createdon").toString()).toContain("ThisFiscalPeriod")
+  expect(ThisFiscalYear("createdon").toString()).toContain("ThisFiscalYear")
+  expect(LastFiscalPeriod("createdon").toString()).toContain("LastFiscalPeriod")
+  expect(LastFiscalYear("createdon").toString()).toContain("LastFiscalYear")
+  expect(NextFiscalPeriod("createdon").toString()).toContain("NextFiscalPeriod")
+  expect(NextFiscalYear("createdon").toString()).toContain("NextFiscalYear")
+  expect(InFiscalPeriod("createdon", 1).toString()).toContain("InFiscalPeriod")
+  expect(InFiscalYear("createdon", 2024).toString()).toContain("InFiscalYear")
+  expect(InFiscalPeriodAndYear("createdon", 1, 2024).toString()).toContain("InFiscalPeriodAndYear")
+  expect(InOrAfterFiscalPeriodAndYear("createdon", 1, 2024).toString()).toContain("InOrAfterFiscalPeriodAndYear")
+  expect(InOrBeforeFiscalPeriodAndYear("createdon", 1, 2024).toString()).toContain("InOrBeforeFiscalPeriodAndYear")
 })
 
 test("LastX / NextX for various time periods", () => {
-  expect(LastXHours("createdon", 4)).toContain("LastXHours")
-  expect(LastXMonths("createdon", 3)).toContain("LastXMonths")
-  expect(LastXWeeks("createdon", 2)).toContain("LastXWeeks")
-  expect(LastXYears("createdon", 5)).toContain("LastXYears")
-  expect(LastXFiscalPeriods("createdon", 2)).toContain("LastXFiscalPeriods")
-  expect(LastXFiscalYears("createdon", 3)).toContain("LastXFiscalYears")
-  expect(NextXHours("createdon", 4)).toContain("NextXHours")
-  expect(NextXMonths("createdon", 3)).toContain("NextXMonths")
-  expect(NextXWeeks("createdon", 2)).toContain("NextXWeeks")
-  expect(NextXYears("createdon", 5)).toContain("NextXYears")
-  expect(NextXFiscalPeriods("createdon", 2)).toContain("NextXFiscalPeriods")
-  expect(NextXFiscalYears("createdon", 3)).toContain("NextXFiscalYears")
-  expect(OlderThanXMonths("createdon", 6)).toContain("OlderThanXMonths")
-  expect(OlderThanXWeeks("createdon", 4)).toContain("OlderThanXWeeks")
-  expect(OlderThanXYears("createdon", 2)).toContain("OlderThanXYears")
+  expect(LastXHours("createdon", 4).toString()).toContain("LastXHours")
+  expect(LastXMonths("createdon", 3).toString()).toContain("LastXMonths")
+  expect(LastXWeeks("createdon", 2).toString()).toContain("LastXWeeks")
+  expect(LastXYears("createdon", 5).toString()).toContain("LastXYears")
+  expect(LastXFiscalPeriods("createdon", 2).toString()).toContain("LastXFiscalPeriods")
+  expect(LastXFiscalYears("createdon", 3).toString()).toContain("LastXFiscalYears")
+  expect(NextXHours("createdon", 4).toString()).toContain("NextXHours")
+  expect(NextXMonths("createdon", 3).toString()).toContain("NextXMonths")
+  expect(NextXWeeks("createdon", 2).toString()).toContain("NextXWeeks")
+  expect(NextXYears("createdon", 5).toString()).toContain("NextXYears")
+  expect(NextXFiscalPeriods("createdon", 2).toString()).toContain("NextXFiscalPeriods")
+  expect(NextXFiscalYears("createdon", 3).toString()).toContain("NextXFiscalYears")
+  expect(OlderThanXMonths("createdon", 6).toString()).toContain("OlderThanXMonths")
+  expect(OlderThanXWeeks("createdon", 4).toString()).toContain("OlderThanXWeeks")
+  expect(OlderThanXYears("createdon", 2).toString()).toContain("OlderThanXYears")
 })

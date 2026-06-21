@@ -1,6 +1,5 @@
 import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
-import { OrderSpec } from "./util";
 import { FilterExpr } from "./filter";
 
 type Simplify<T> = { [Key in keyof T]: T[Key] } & {};
@@ -13,7 +12,7 @@ export type FieldProxy<T extends GenericProperties> = {
     [K in keyof T]: string
 };
 
-export type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in";
+export type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in" | "matchfirstrowusingcrossapply";
 
 type AttrDef = {
     name: string;
@@ -43,7 +42,7 @@ type OrderDef = {
  * const q = fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name, email: f.email }))
  *   .where(f => condition(f.status, "eq", 1))
- *   .orderby(f => desc(f.name))
+ *   .orderby(f => f.name, "desc")
  *   .top(10);
  *
  * const xml = q.toXml();
@@ -350,41 +349,26 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 
   /**
    * Adds ordering to the FetchXML query.
+   * Matches the OData syntax: pass a field selector callback and optional direction.
    *
    * @example
-   * // With asc/desc helpers
-   * fetchXml(contactDataverseTable).orderby(f => desc(f.name))
+   * fetchXml(contactDataverseTable).orderby(f => f.name);
+   * fetchXml(contactDataverseTable).orderby(f => f.name, "desc");
    *
    * @example
-   * // With record syntax
-   * fetchXml(contactDataverseTable).orderby(f => ({ name: 'asc', createdon: 'desc' }))
-   *
-   * @example
-   * // With explicit entity name
+   * // With explicit entity name (for cross-entity ordering)
    * fetchXml(contactDataverseTable).orderby("contact", "createdon", "desc")
    */
   public orderby(
-      spec: ((f: FieldProxy<TProps>) => OrderSpec | OrderSpec[] | Record<string, 'asc' | 'desc'>)
+      fieldSelector: (f: FieldProxy<TProps>) => string,
+      direction?: 'asc' | 'desc'
   ): this;
   public orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
   public orderby(...args: any[]): this {
       if (typeof args[0] === 'function') {
-          const result = args[0](this._proxy);
-          if (result instanceof OrderSpec) {
-              for (const attr of result.fields) {
-                  this._orders.push({ attribute: attr, descending: result.direction === 'desc' });
-              }
-          } else if (Array.isArray(result)) {
-              for (const spec of result) {
-                  for (const attr of spec.fields) {
-                      this._orders.push({ attribute: attr, descending: spec.direction === 'desc' });
-                  }
-              }
-          } else {
-              for (const [attr, dir] of Object.entries(result)) {
-                  this._orders.push({ attribute: attr, descending: dir === 'desc' });
-              }
-          }
+          const name = args[0](this._proxy);
+          const dir = (args[1] as 'asc' | 'desc' | undefined) ?? 'asc';
+          this._orders.push({ attribute: name, descending: dir === 'desc' });
       } else {
           const entityname = args[0] as string;
           const attribute = args[1] as string;
@@ -582,6 +566,12 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
             if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
             if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
             lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
+        }
+
+        for (const order of link.builder._orders) {
+            const parts = [`attribute='${order.attribute}'`];
+            if (order.descending) parts.push(`descending='true'`);
+            lines.push(`${childIndent}<order ${parts.join(" ")} />`);
         }
 
         for (const nestedLink of link.builder._links) {

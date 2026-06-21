@@ -1,6 +1,15 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, asc, desc, Infer } from "../src"
+import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, Infer,
+  Today, Tomorrow, Yesterday, Last7Days, Next7Days, LastMonth, NextMonth, ThisMonth,
+  LastWeek, NextWeek, ThisWeek, LastYear, NextYear, ThisYear,
+  LastXDays, NextXDays, OlderThanXDays,
+  EqualUserId, EqualUserLanguage, NotEqualUserId,
+  In, NotIn, ContainsValues, DoesNotContainValues,
+  Between, NotBetween, On, Under, Above,
+  ThisFiscalPeriod, ThisFiscalYear, InFiscalPeriodAndYear,
+  LastXHours, LastXMonths, LastXWeeks, LastXYears,
+} from "../src"
 import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 
@@ -160,21 +169,21 @@ test("[docs] join with link-entity", () => {
 
 test("[docs] order ascending", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .orderby(f => ({ [f.name]: "asc" }))
+    .orderby(f => f.name)
   const xml = q.toXml()
   expect(xml).toContain(`<order attribute='name' />`)
 })
 
 test("[docs] order descending", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, createdon: f.city }))
-    .orderby(f => ({ [f.city]: "desc" }))
+    .orderby(f => f.city, "desc")
   const xml = q.toXml()
   expect(xml).toContain(`<order attribute='address1_city' descending='true' />`)
 })
 
 test("[docs] multiple orders", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, revenue: f.revenue }))
-    .orderby(f => ({ [f.revenue]: "asc", [f.name]: "asc" }))
+    .orderby(f => f.revenue).orderby(f => f.name)
   const xml = q.toXml()
   expect(xml).toContain(`<order attribute='revenue' />`)
   expect(xml).toContain(`<order attribute='name' />`)
@@ -200,7 +209,7 @@ test("[docs] order with entityname descending", () => {
 
 test("[docs] simple paging with page and count", () => {
   const q = fetchXml(Account).page(1).pageSize(3).select(f => ({ name: f.name }))
-    .orderby(f => ({ [f.name]: "asc" }))
+    .orderby(f => f.name)
   const xml = q.toXml()
   expect(xml).toContain(`page='1'`)
   expect(xml).toContain(`count='3'`)
@@ -208,7 +217,7 @@ test("[docs] simple paging with page and count", () => {
 
 test("[docs] page 2 with count", () => {
   const q = fetchXml(Account).page(2).pageSize(3).select(f => ({ name: f.name }))
-    .orderby(f => ({ [f.name]: "asc" }))
+    .orderby(f => f.name)
   const xml = q.toXml()
   expect(xml).toContain(`page='2'`)
   expect(xml).toContain(`count='3'`)
@@ -327,7 +336,7 @@ test("[docs] paging-cookie", () => {
   const q = fetchXml(Account).page(2).pageSize(3)
     .pagingCookie(`<cookie page="1"><fullname last="Susanna" first="Yvonne" /></cookie>`)
     .select(f => ({ name: f.name }))
-    .orderby(f => ({ [f.name]: "desc" }))
+    .orderby(f => f.name, "desc")
   const xml = q.toXml()
   expect(xml).toContain(`paging-cookie='<cookie page="1"><fullname last="Susanna" first="Yvonne" /></cookie>'`)
 })
@@ -388,34 +397,27 @@ test("toString returns URL-encoded fetchXml", () => {
   expect(q.toString()).toContain(encodeURIComponent("<fetch"))
 })
 
-// --- orderby with asc/desc helpers ---
+// --- orderby with field proxy ---
 
-test("orderby with asc helper", () => {
+test("orderby with asc default", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .orderby(f => asc(f.name))
+    .orderby(f => f.name)
   const xml = q.toXml()
   expect(xml).toContain(`<order attribute='name' />`)
 })
 
-test("orderby with desc helper", () => {
+test("orderby with desc direction", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .orderby(f => desc(f.name))
+    .orderby(f => f.name, "desc")
   const xml = q.toXml()
   expect(xml).toContain(`<order attribute='name' descending='true' />`)
 })
 
 test("orderby with multiple specs", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, revenue: f.revenue }))
-    .orderby(f => [asc(f.name), desc(f.revenue)])
+    .orderby(f => f.revenue).orderby(f => f.name)
   const xml = q.toXml()
-  expect(xml).toContain(`<order attribute='name' />`)
-  expect(xml).toContain(`<order attribute='revenue' descending='true' />`)
-})
-
-test("orderby old function style still works", () => {
-  const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .orderby(f => ({ [f.name]: "asc" }))
-  const xml = q.toXml()
+  expect(xml).toContain(`<order attribute='revenue' />`)
   expect(xml).toContain(`<order attribute='name' />`)
 })
 
@@ -487,4 +489,79 @@ test("through narrows result type to selected fields", () => {
       sub.select(f => ({ accountName: f.name }))
     )
   expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ name: string; accountName: string }[]>()
+})
+
+// --- FetchXML serialization of CRM functions ---
+
+test("CRM function Today produces correct FetchXML", () => {
+  expect(Today("createdon").toFetchXml()).toContain(`operator="today"`)
+})
+
+test("CRM function EqualUserId produces correct FetchXML", () => {
+  expect(EqualUserId("ownerid").toFetchXml()).toContain(`operator="eq-userid"`)
+})
+
+test("CRM function Between produces correct FetchXML with value children", () => {
+  const xml = Between("field", 10, 20).toFetchXml()
+  expect(xml).toContain(`operator="between"`)
+  expect(xml).toContain(`<value>10</value>`)
+  expect(xml).toContain(`<value>20</value>`)
+})
+
+test("CRM function In produces correct FetchXML with value children", () => {
+  const xml = In("field", ["a", "b"]).toFetchXml()
+  expect(xml).toContain(`operator="in"`)
+  expect(xml).toContain(`<value>a</value>`)
+  expect(xml).toContain(`<value>b</value>`)
+})
+
+test("CRM function Today can be used in fetchXml where clause", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .where(Today("createdon"))
+  const xml = q.toXml()
+  expect(xml).toContain(`operator="today"`)
+  expect(xml).toContain(`attribute="createdon"`)
+})
+
+// --- matchfirstrowusingcrossapply link type ---
+
+test("matchfirstrowusingcrossapply link type is accepted", () => {
+  const q = fetchXml(Account)
+    .select(f => ({ name: f.name }))
+    .join("matchfirstrowusingcrossapply", Address,
+      "id", "id",
+      sub => sub.select(s => ({ street: s.street }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="matchfirstrowusingcrossapply"`)
+})
+
+// --- Linked entity ordering (stays inside <link-entity>, not pulled to root) ---
+
+test("orderby in join subquery stays inside link-entity", () => {
+  const q = fetchXml(Account)
+    .select(f => ({ name: f.name }))
+    .join("inner", Address,
+      "id", "id",
+      sub => sub.select(s => ({ street: s.street }))
+        .orderby(s => s.zip)
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`<link-entity name="addresses"`)
+  expect(xml).toContain(`<order attribute='zip_code' />`)
+  expect(xml).not.toContain(`entityname='auto_link_1'`)
+})
+
+test("orderby in innerJoin subquery stays inside link-entity", () => {
+  const q = fetchXml(Account)
+    .select(f => ({ name: f.name }))
+    .join("inner", Address,
+      "id", "id",
+      sub => sub.select(s => ({ street: s.street }))
+        .orderby(s => s.zip, "desc")
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`<link-entity name="addresses"`)
+  expect(xml).toContain(`<order attribute='zip_code' descending='true' />`)
+  expect(xml).not.toContain(`entityname='auto_link_1'`)
 })
