@@ -1,5 +1,5 @@
 import { DataverseClient } from "./client";
-import { wrapString } from "./query";
+import { wrapString } from "./util";
 import { GUID } from "./types";
 
 /**

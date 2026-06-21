@@ -1,11 +1,9 @@
 import { expect, test } from "vitest"
-import { sum, min, max, count } from "../src/query"
 import {
-  select, orderby, expand, query, and, or, not, equals, notEquals,
-  greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual,
+  select, orderby, expand, and, or, not, eq, ne, gt, ge, lt, le,
   contains, startsWith, endsWith, isNull, isNotNull, isActive, isInactive,
-  groupby, aggregate, average, asc, desc, keys,
-  fetchXML, wrapString,
+  asc, desc, keys, compare,
+  wrapString, isNonEmptyString,
   Above, AboveOrEqual, Between, In, NotIn, Under, UnderOrEqual, NotUnder,
   On, OnOrAfter, OnOrBefore, NotBetween,
   Today, Tomorrow, Yesterday,
@@ -25,7 +23,6 @@ import {
   EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams,
   EqualUserOrUserTeams,
 } from "../src"
-
 
 test("select joins field names", () => {
   expect(select("name", "address", "phone")).toBe("name,address,phone")
@@ -95,161 +92,109 @@ test("expand formats with filter and orderby", () => {
   expect(result).toContain("$orderby=fullname asc")
 })
 
-test.skip("query builds URLSearchParams string", () => {
-  const q = query({ select: "name,age", filter: "age gt 20", top: 10 })
-  expect(q).toContain("$select=name,age")
-  expect(q).toContain("$filter=age+gt+20")
-  expect(q).toContain("$top=10")
+// --- FilterExpr tests ---
+
+test("eq wraps field eq value", () => {
+  expect(eq("name", "John").toOdata()).toBe("(name eq 'John')")
 })
 
-test("query handles empty", () => {
-  expect(query({})).toBe("")
+test("eq with number does not quote", () => {
+  expect(eq("age", 25).toOdata()).toBe("(age eq 25)")
 })
 
-test.skip("query handles apply", () => {
-  const q = query({ apply: "groupby((_ownerid_value))" })
-  expect(q).toContain("$apply=groupby((_ownerid_value))")
+test("eq with boolean does not quote", () => {
+  expect(eq("active", true).toOdata()).toBe("(active eq true)")
+})
+
+test("eq with null", () => {
+  expect(eq("field", null).toOdata()).toBe("(field eq null)")
+})
+
+test("ne formats correctly", () => {
+  expect(ne("name", "John").toOdata()).toBe("(name ne 'John')")
+})
+
+test("gt formats correctly", () => {
+  expect(gt("age", 18).toOdata()).toBe("(age gt 18)")
+})
+
+test("ge formats correctly", () => {
+  expect(ge("age", 18).toOdata()).toBe("(age ge 18)")
+})
+
+test("lt formats correctly", () => {
+  expect(lt("age", 65).toOdata()).toBe("(age lt 65)")
+})
+
+test("le formats correctly", () => {
+  expect(le("age", 65).toOdata()).toBe("(age le 65)")
 })
 
 test("and joins multiple conditions", () => {
-  expect(and("age gt 20", "name eq 'John'")).toBe("(age gt 20 and name eq 'John')")
+  expect(and(gt("age", 20), eq("name", "John")).toOdata()).toBe("((age gt 20) and (name eq 'John'))")
 })
 
 test("and returns empty for no conditions", () => {
-  expect(and()).toBe("")
+  expect(and().toOdata()).toBe("")
 })
 
-test("and returns single condition unwrapped", () => {
-  expect(and("age gt 20")).toBe("(age gt 20)")
+test("and handles single condition", () => {
+  expect(and(gt("age", 20)).toOdata()).toBe("((age gt 20))")
 })
 
 test("or joins multiple conditions", () => {
-  expect(or("age lt 10", "age gt 20")).toBe("(age lt 10 or age gt 20)")
+  expect(or(lt("age", 10), gt("age", 20)).toOdata()).toBe("((age lt 10) or (age gt 20))")
 })
 
 test("or returns empty for no conditions", () => {
-  expect(or()).toBe("")
+  expect(or().toOdata()).toBe("")
 })
 
 test("not wraps condition", () => {
-  expect(not("age eq 20")).toBe("not(age eq 20)")
-})
-
-test("not returns empty for empty condition", () => {
-  expect(not("")).toBe("")
-})
-
-test("equals wraps field eq value", () => {
-  expect(equals("name", "John")).toBe("(name eq 'John')")
-})
-
-test("equals with number does not quote", () => {
-  expect(equals("age", 25)).toBe("(age eq 25)")
-})
-
-test("equals with boolean does not quote", () => {
-  expect(equals("active", true)).toBe("(active eq true)")
-})
-
-test("equals with null", () => {
-  expect(equals("field", null)).toBe("(field eq null)")
-})
-
-test("notEquals formats correctly", () => {
-  expect(notEquals("name", "John")).toBe("(name ne 'John')")
-})
-
-test("greaterThan formats correctly", () => {
-  expect(greaterThan("age", 18)).toBe("(age gt 18)")
-})
-
-test("greaterThanOrEqual formats correctly", () => {
-  expect(greaterThanOrEqual("age", 18)).toBe("(age ge 18)")
-})
-
-test("lessThan formats correctly", () => {
-  expect(lessThan("age", 65)).toBe("(age lt 65)")
-})
-
-test("lessThanOrEqual formats correctly", () => {
-  expect(lessThanOrEqual("age", 65)).toBe("(age le 65)")
+  expect(not(eq("age", 20)).toOdata()).toBe("not((age eq 20))")
 })
 
 test("contains wraps field in OData contains", () => {
-  expect(contains("name", "ohn")).toBe("contains(name,'ohn')")
+  expect(contains("name", "ohn").toOdata()).toBe("contains(name,'ohn')")
 })
 
 test("startsWith wraps field in OData startswith", () => {
-  expect(startsWith("name", "Jo")).toBe("startswith(name,'Jo')")
+  expect(startsWith("name", "Jo").toOdata()).toBe("startswith(name,'Jo')")
 })
 
 test("endsWith wraps field in OData endswith", () => {
-  expect(endsWith("name", "hn")).toBe("endswith(name,'hn')")
+  expect(endsWith("name", "hn").toOdata()).toBe("endswith(name,'hn')")
 })
 
 test("isNull formats correctly", () => {
-  expect(isNull("email")).toBe("email eq null")
+  expect(isNull("email").toOdata()).toBe("email eq null")
 })
 
 test("isNotNull formats correctly", () => {
-  expect(isNotNull("email")).toBe("email ne null")
+  expect(isNotNull("email").toOdata()).toBe("email ne null")
 })
 
 test("isActive returns statecode eq 0", () => {
-  expect(isActive()).toBe("statecode eq 0")
+  expect(isActive().toOdata()).toBe("(statecode eq 0)")
 })
 
 test("isInactive returns statecode eq 1", () => {
-  expect(isInactive()).toBe("statecode eq 1")
+  expect(isInactive().toOdata()).toBe("(statecode eq 1)")
 })
 
-test("groupby formats with fields", () => {
-  expect(groupby(["name", "category"])).toBe("groupby((name,category))")
+test("compare compares two fields", () => {
+  expect(compare("modifiedon", "gt", "createdon").toOdata()).toBe("(modifiedon gt createdon)")
 })
 
-test("groupby formats with aggregations", () => {
-  expect(groupby(["category"], "aggregate(revenue with sum as total)")).toBe("groupby((category),aggregate(revenue with sum as total))")
+test("and filters empty conditions", () => {
+  expect(and(eq("a", 1), "").toOdata()).toBe("((a eq 1))")
 })
 
-test("aggregate joins values", () => {
-  expect(aggregate("revenue with sum as total", "count with count as c")).toBe("aggregate(revenue with sum as total,count with count as c)")
+test("or filters empty conditions", () => {
+  expect(or(eq("a", 1), "").toOdata()).toBe("((a eq 1))")
 })
 
-test("average formats", () => {
-  expect(average("revenue")).toBe("revenue with average as revenue")
-  expect(average("revenue", "avgRev")).toBe("revenue with average as avgRev")
-})
-
-test("sum formats", () => {
-  expect(sum("revenue", "totalRev")).toBe("revenue with sum as totalRev")
-})
-
-test("min formats", () => {
-  expect(min("age")).toBe("age with min as age")
-})
-
-test("max formats", () => {
-  expect(max("age")).toBe("age with max as age")
-})
-
-test("count formats", () => {
-  expect(count()).toBe("$count as count")
-  expect(count("total")).toBe("$count as total")
-})
-
-test("keys formats key-value pairs", () => {
-  expect(keys({ name: "John", age: 25 })).toBe("name='John',age=25")
-})
-
-test("keys encodes single quotes", () => {
-  expect(keys({ name: "O'Brien" })).toBe("name='O''Brien'")
-})
-
-test("fetchXML creates query string", () => {
-  const result = fetchXML("<fetch><entity name='account'></entity></fetch>")
-  expect(result).toContain("fetchXml=")
-  expect(result).toContain("account")
-})
+// --- OData value helpers ---
 
 test("wrapString quotes strings except GUIDs and dates", () => {
   expect(wrapString("hello")).toBe("'hello'")
@@ -261,6 +206,14 @@ test("wrapString quotes strings except GUIDs and dates", () => {
 
 test("wrapString escapes single quotes", () => {
   expect(wrapString("O'Brien")).toBe("'O''Brien'")
+})
+
+test("keys formats key-value pairs", () => {
+  expect(keys({ name: "John", age: 25 })).toBe("name='John',age=25")
+})
+
+test("keys encodes single quotes", () => {
+  expect(keys({ name: "O'Brien" })).toBe("name='O''Brien'")
 })
 
 // --- Dataverse-specific filter operators ---
@@ -415,12 +368,4 @@ test("LastX / NextX for various time periods", () => {
   expect(OlderThanXMonths("createdon", 6)).toContain("OlderThanXMonths")
   expect(OlderThanXWeeks("createdon", 4)).toContain("OlderThanXWeeks")
   expect(OlderThanXYears("createdon", 2)).toContain("OlderThanXYears")
-})
-
-test("and filters empty conditions", () => {
-  expect(and("valid", "")).toBe("(valid)")
-})
-
-test("or filters empty conditions", () => {
-  expect(or("valid", "")).toBe("(valid)")
 })

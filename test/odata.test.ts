@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchOdata, ODataQuery, equals, notEquals, greaterThan, greaterThanOrEqual, lessThanOrEqual, and, or, not, any, all, compare, contains, startsWith, endsWith, sum, avg, min, max, count } from "../src"
+import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, sum, avg, min, max, count } from "../src"
 import { DataverseTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection, Infer } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 
@@ -86,7 +86,7 @@ test("select + expand combined", () => {
 })
 
 test("where preserves result type", () => {
-  const q = fetchOdata(Person).where(f => equals(f.name, "John"))
+  const q = fetchOdata(Person).where(f => eq(f.name, "John"))
   expectTypeOf(q.execute).returns.resolves.toExtend<Infer<typeof Person>[]>()
 })
 
@@ -160,7 +160,7 @@ test("multi-expand on lookup and collection nav properties", () => {
 
 test("expand with filter on collection nav property", () => {
   const q = fetchOdata(Person)
-    .expand("addresses", sub => sub.where(f => equals(f.street, "Main")))
+    .expand("addresses", sub => sub.where(f => eq(f.street, "Main")))
     .toString()
   expect(q).toContain("person_Address_person(")
   expect(q).toContain("$filter=(street_Address eq 'Main')")
@@ -220,7 +220,7 @@ test("default select includes all value columns", () => {
 
 test("existing filter functions work with field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => and(equals(f.name, "John"), greaterThan(f.age, 20)))
+    .where(f => and(eq(f.name, "John"), gt(f.age, 20)))
     .toString()
   expect(q).toContain("fullname eq 'John'")
   expect(q).toContain("person_age gt 20")
@@ -269,8 +269,8 @@ test("where raw string works with other clauses", () => {
 
 test("multiple where calls stack additively", () => {
   const q = fetchOdata(Person)
-    .where(f => equals(f.name, "John"))
-    .where(f => greaterThan(f.age, 20))
+    .where(f => eq(f.name, "John"))
+    .where(f => gt(f.age, 20))
     .toString()
   expect(q).toContain("$filter=(fullname eq 'John') and (person_age gt 20)")
 })
@@ -287,7 +287,7 @@ test("grouping operators use parentheses for precedence", () => {
   const q = fetchOdata(Person)
     .where(f => and(
       or(contains(f.name, "sample"), contains(f.name, "test")),
-      equals(f.active, true),
+      eq(f.active, true),
     ))
     .toString()
   expect(q).toContain("$filter=((contains(fullname,'sample') or contains(fullname,'test')) and (active eq true))")
@@ -423,21 +423,24 @@ test("groupby with nav property path and includeAnnotations", () => {
 // --- Filter helpers ---
 
 test("any lambda filter", () => {
-  const filter = any("person_Address_person", "a", "contains(a/city, 'Seattle')")
-  expect(filter).toBe("person_Address_person/any(a: contains(a/city, 'Seattle'))")
+  const q = fetchOdata(Person)
+    .where(f => any(f.addresses, a => contains(a.street, "Seattle")))
+    .toString()
+  expect(q).toContain("person_Address_person/any(x: contains(x/street_Address,'Seattle'))")
 })
 
 test("all lambda filter", () => {
-  const filter = all("person_Address_person", "a", "a/zip_code gt 0")
-  expect(filter).toBe("person_Address_person/all(a: a/zip_code gt 0)")
+  const q = fetchOdata(Person)
+    .where(f => all(f.addresses, a => gt(a.zip, 0)))
+    .toString()
+  expect(q).toContain("person_Address_person/all(x: (x/zip_code gt 0))")
 })
 
-test("any used in where clause", () => {
+test("any used in where clause with raw string", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, "a", `contains(a/city, 'Seattle')`))
+    .where(f => any(f.addresses, a => `contains(x/street_Address, 'Seattle')`))
     .toString()
-  // f.addresses resolves to "person_Address_person" which is the nav property name
-  expect(q).toContain("person_Address_person/any(a: contains(a/city, 'Seattle'))")
+  expect(q).toContain("person_Address_person/any(x: contains(x/street_Address, 'Seattle'))")
 })
 
 test("column comparison", () => {
@@ -447,62 +450,46 @@ test("column comparison", () => {
   expect(q).toContain("(fullname eq person_age)")
 })
 
-// --- Lambda callback API (any/all methods on nav proxy) ---
-
-test("any method on nav proxy with explicit alias", () => {
+test("any with equals inside callback", () => {
   const q = fetchOdata(Person)
-    .where(f => f.addresses.any("a", a => `contains(a/street_Address, 'Main')`))
+    .where(f => any(f.addresses, a => eq(a.street, "Main")))
     .toString()
-  expect(q).toContain("person_Address_person/any(a: contains(a/street_Address, 'Main'))")
+  expect(q).toContain("person_Address_person/any(x: (x/street_Address eq 'Main'))")
 })
 
-test("any method on nav proxy with auto alias", () => {
+test("any with contains inside callback", () => {
   const q = fetchOdata(Person)
-    .where(f => f.addresses.any(a => `contains(a/street_Address, 'Main')`))
+    .where(f => any(f.addresses, a => contains(a.street, "Main")))
     .toString()
-  expect(q).toContain("person_Address_person/any(a: contains(a/street_Address, 'Main'))")
+  expect(q).toContain("person_Address_person/any(x: contains(x/street_Address,'Main'))")
 })
 
-test("all method on nav proxy with auto alias", () => {
+test("all with raw string callback", () => {
   const q = fetchOdata(Person)
-    .where(f => f.addresses.all(a => `${a.zip} gt 0`))
+    .where(f => all(f.addresses, a => `${a.zip} gt 0`))
     .toString()
-  expect(q).toContain("person_Address_person/all(a: a/zip_code gt 0)")
+  expect(q).toContain("person_Address_person/all(x: x/zip_code gt 0)")
 })
 
-test("auto alias increments across multiple any calls", () => {
+test("multiple any calls compose via and", () => {
   const q = fetchOdata(Person)
     .where(f => and(
-      f.addresses.any(a => contains(a.street, "Main")),
-      f.addresses.any(b => equals(b.zip, "98101")),
+      any(f.addresses, a => contains(a.street, "Main")),
+      any(f.addresses, b => eq(b.zip, "98101")),
     ))
     .toString()
-  expect(q).toContain("any(a: contains(a/street_Address,'Main'))")
-  expect(q).toContain("any(b: (b/zip_code eq '98101'))")
+  expect(q).toContain("any(x: contains(x/street_Address,'Main'))")
+  expect(q).toContain("any(x: (x/zip_code eq '98101'))")
 })
 
-test("any with equals inside callback (auto alias)", () => {
-  const q = fetchOdata(Person)
-    .where(f => f.addresses.any(a => equals(a.street, "Main")))
-    .toString()
-  expect(q).toContain("person_Address_person/any(a: (a/street_Address eq 'Main'))")
-})
-
-test("any with contains inside callback (auto alias)", () => {
-  const q = fetchOdata(Person)
-    .where(f => f.addresses.any(a => contains(a.street, "Main")))
-    .toString()
-  expect(q).toContain("person_Address_person/any(a: contains(a/street_Address,'Main'))")
-})
-
-test("any and other where conditions combine (auto alias)", () => {
+test("any and other where conditions combine", () => {
   const q = fetchOdata(Person)
     .where(f => and(
-      equals(f.name, "John"),
-      f.addresses.any(a => contains(a.street, "Main")),
+      eq(f.name, "John"),
+      any(f.addresses, a => contains(a.street, "Main")),
     ))
     .toString()
-  expect(q).toContain("((fullname eq 'John') and person_Address_person/any(a: contains(a/street_Address,'Main')))")
+  expect(q).toContain("((fullname eq 'John') and person_Address_person/any(x: contains(x/street_Address,'Main')))")
 })
 
 // --- Nested expand ---
@@ -518,7 +505,7 @@ test("filter on lookup nav property sub-field generates slash path", () => {
 
 test("filter on lookup nav property sub-field with equals", () => {
   const q = fetchOdata(Person)
-    .where(f => equals(f.primaryAddress.zip, "98101"))
+    .where(f => eq(f.primaryAddress.zip, "98101"))
     .toString()
   expect(q).toContain("(person_Address/zip_code eq '98101')")
 })
@@ -546,9 +533,9 @@ test("nav proxy toString works in template literal", () => {
 
 test("nav proxy works with any lambda", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, "a", `contains(a/street_Address, 'Main')`))
+    .where(f => any(f.addresses, a => contains(a.street, "Main")))
     .toString()
-  expect(q).toContain("person_Address_person/any(a: contains(a/street_Address, 'Main'))")
+  expect(q).toContain("person_Address_person/any(x: contains(x/street_Address,'Main'))")
 })
 
 test("nested expand generates nested query string", () => {
@@ -582,14 +569,14 @@ test("TripPin: select basic fields (FirstName, LastName, Age)", () => {
 
 test("TripPin: filter by gender enum value", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => equals(f.gender, "Male"))
+    .where(f => eq(f.gender, "Male"))
     .toString()
   expect(q).toContain("gendercode eq 'Male'")
 })
 
 test("TripPin: filter not null (Age ne null)", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => notEquals(f.age, null))
+    .where(f => ne(f.age, null))
     .toString()
   expect(q).toContain("(person_age ne null)")
 })
@@ -597,8 +584,8 @@ test("TripPin: filter not null (Age ne null)", () => {
 test("TripPin: filter with age range using ge and le", () => {
   const q = fetchOdata(TrippinPerson)
     .where(f => or(
-      greaterThanOrEqual(f.age, "18"),
-      lessThanOrEqual(f.age, "65"),
+      ge(f.age, "18"),
+      le(f.age, "65"),
     ))
     .toString()
   expect(q).toContain("(person_age ge '18')")
@@ -651,7 +638,7 @@ test("TripPin: combined real-world query (select, filter, orderby, top)", () => 
 
 test("TripPin: filter by first name AND last name", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => and(equals(f.firstName, "Russell"), equals(f.lastName, "Whyte")))
+    .where(f => and(eq(f.firstName, "Russell"), eq(f.lastName, "Whyte")))
     .toString()
   expect(q).toContain("firstname eq 'Russell'")
   expect(q).toContain("lastname eq 'Whyte'")

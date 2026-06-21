@@ -1,7 +1,15 @@
 import { StandardSchemaV1 } from "@standard-schema/spec";
 import { DataverseClient } from "./client"; // Assuming this is the path to your client
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, primaryKey, lookupId } from "./fields";
-import { query } from "./query";
+function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
+  const params = new URLSearchParams()
+  if (opts.select) params.set("$select", opts.select)
+  if (opts.top !== undefined) params.set("$top", opts.top.toFixed(0))
+  if (opts.filter) params.set("$filter", opts.filter)
+  if (opts.orderby) params.set("$orderby", opts.orderby)
+  if (opts.expand) params.set("$expand", opts.expand)
+  return params.toString()
+}
 import { Schema } from "./schema";
 import {
   AlternateKey,
@@ -330,7 +338,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     const record = await this.client.postRecord(
       this.name,
       this.transformValueToDataverse(value),
-      query({ select: pkName }),
+      queryString({ select: pkName }),
     );
     return record?.[pkName] as GUID;
   }
@@ -384,7 +392,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
           this.name,
           id,
           this.transformValueToDataverse(value),
-          query({ select: pkName }),
+          queryString({ select: pkName }),
           etag,
         ),
       );
@@ -392,7 +400,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
       const record = await this.client.postRecord(
         this.name,
         this.transformValueToDataverse(value),
-        query({ select: pkName }),
+        queryString({ select: pkName }),
       );
       id = record[pkName] as GUID;
     }
@@ -676,7 +684,7 @@ function buildQuery(
   table: DataverseTable<GenericProperties>,
   q?: QueryForTable<GenericProperties>,
 ): string {
-  return query({
+  return queryString({
     top: q?.top,
     filter: q?.filter,
     orderby: q?.orderby

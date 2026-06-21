@@ -1,6 +1,6 @@
 import { DataverseKey, GUID } from "./types";
 import { getName, Name } from "./util";
-import { wrapString } from "./query";
+import { wrapString } from "./util";
 
 const parenthesesRegEx = /\(([^)]+)\)/;
 

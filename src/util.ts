@@ -3,6 +3,97 @@ import { DataverseRecord, Primitive } from "./types";
 
 export const Etag = Symbol("etag");
 
+// --- OData value helpers ---
+
+const rxGUID =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
+const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
+
+export function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+export function wrapString(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    if (rxGUID.test(value) || rxDateOnly.test(value)) {
+      return value;
+    }
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  return String(value);
+}
+
+// --- OData query formatting helpers ---
+
+export type ExpandValue =
+  | string
+  | {
+      select?: (Name)[];
+      expand?: ExpandObject;
+      filter?: string;
+      orderby?: { [key: string]: "asc" | "desc" };
+    };
+
+export interface ExpandObject {
+  [key: string]: ExpandValue;
+}
+
+export function select(...values: (Name)[]): string {
+  return values.map(getName).filter(isNonEmptyString).join(",");
+}
+
+export function orderby(values: { [key: string]: "asc" | "desc" } | string[]): string {
+  if (Array.isArray(values)) return values.filter(isNonEmptyString).join(",")
+  return Object.entries(values)
+    .filter(([, v]) => isNonEmptyString(v))
+    .map(([k, v]) => `${k} ${v}`)
+    .join(",");
+}
+
+export class OrderSpec {
+  constructor(
+    readonly fields: string[],
+    readonly direction: "asc" | "desc",
+  ) {}
+  toString(): string {
+    return this.fields.map(f => `${f} ${this.direction}`).join(",")
+  }
+}
+
+export function asc(...fields: Name[]): OrderSpec {
+  return new OrderSpec(fields.map(getName), "asc")
+}
+
+export function desc(...fields: Name[]): OrderSpec {
+  return new OrderSpec(fields.map(getName), "desc")
+}
+
+export function keys(keyValues: { [key: string]: string | number }): string {
+  return Object.entries(keyValues)
+    .filter(([, v]) => isNonEmptyString(String(v)))
+    .map(([k, v]) => `${k}=${wrapString(v)}`)
+    .join(",");
+}
+
+export function expand(values: string | ExpandObject): string {
+  if (typeof values === "string") return values;
+  return Object.entries(values)
+    .map(([name, v]) => {
+      if (typeof v === "string") return v;
+      const expandParts = [] as string[];
+      if (v.select)
+        expandParts.push(
+          `$select=${select(...(Array.isArray(v.select) ? v.select : [v.select]))}`,
+        );
+      if (v.filter) expandParts.push(`$filter=${v.filter}`);
+      if (v.orderby) expandParts.push(`$orderby=${orderby(v.orderby)}`);
+      if (v.expand) expandParts.push(`$expand=${expand(v.expand)}`);
+      return `${name}(${expandParts.join(";")})`;
+    })
+    .join(",");
+}
+
 export function attachEtag<T>(v: T): T {
   if (v && typeof v === "object")
   (v as any)[Etag] = (v as any)["@odata.etag"];

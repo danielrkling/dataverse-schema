@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchXml, condition, filterAnd, filterOr, equals, greaterThan, and, asc, desc, Infer } from "../src"
+import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, asc, desc, Infer } from "../src"
 import { DataverseTable, DataverseInterestTable, primaryKey, string, number, boolean } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 
@@ -349,13 +349,13 @@ test("multiple where calls accumulate in single filter", () => {
 })
 
 test("where with existing filter functions", () => {
-  const q = fetchXml(Person).where(f => equals(f.name, "John"))
+  const q = fetchXml(Person).where(f => eq(f.name, "John"))
   expect(q.toXml()).toContain("fullname")
   expect(q.toXml()).toContain("John")
 })
 
 test("where with and/greaterThan filter functions", () => {
-  const q = fetchXml(Person).where(f => and(equals(f.name, "John"), greaterThan(f.age, 20)))
+  const q = fetchXml(Person).where(f => and(eq(f.name, "John"), gt(f.age, 20)))
   expect(q.toXml()).toContain("fullname")
   expect(q.toXml()).toContain("person_age")
 })

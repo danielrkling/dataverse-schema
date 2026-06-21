@@ -2,6 +2,9 @@ import { DataverseTable } from "./table"
 import { GenericProperties, Infer } from "./types"
 import { LookupProperty, CollectionProperty } from "./fields"
 import { getName } from "./util"
+import { FilterExpr } from "./filter"
+
+const proxyTableMap = new WeakMap<object, DataverseTable<any>>()
 
 // --- Aggregation ---
 
@@ -100,10 +103,6 @@ type ODataLambdaProxy<P extends GenericProperties> = {
 
 type ODataCollectionNavProxy<P extends GenericProperties> = {
   toString(): string;
-  any(cb: (proxy: ODataLambdaProxy<P>) => string): string;
-  any(alias: string, cb: (proxy: ODataLambdaProxy<P>) => string): string;
-  all(cb: (proxy: ODataLambdaProxy<P>) => string): string;
-  all(alias: string, cb: (proxy: ODataLambdaProxy<P>) => string): string;
 } & ODataFieldProxy<P>
 
 type ODataLookupNavProxy<P extends GenericProperties> = {
@@ -144,7 +143,6 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
   private _top?: number
   private _apply = ""
-  private _lambdaAliasIndex = 0
   private _proxy: ODataFieldProxy<T>
 
   constructor(table: DataverseTable<T>) {
@@ -181,33 +179,8 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
             if (!cached) {
               const sub = this._buildProxyForDataverseTable(navProp.table, currentPrefix)
               sub.toString = () => dataverseName
-              const lambdaMap: Record<string, string> = {}
-              const navFields = navProp.table.fields as Record<string, any>
-              for (const [lk, lp] of Object.entries(navFields)) {
-                lambdaMap[lk] = lp.fromDataverseName ?? lp.name
-              }
-              const buildLambdaProxy = (alias: string) => {
-                const lp: Record<string, string> = {}
-                for (const [k, n] of Object.entries(lambdaMap)) lp[k] = `${alias}/${n}`
-                return lp
-              }
-              const resolveAliasAndCallback = (a: string | ((p: any) => string), b?: (p: any) => string) => {
-                if (typeof a === "function") {
-                  const alias = String.fromCharCode(97 + (this._lambdaAliasIndex++ % 26))
-                  return { alias, cb: a }
-                }
-                return { alias: a, cb: b! }
-              }
-              // Only add any/all for collection nav properties
               if (isCollection) {
-                sub.any = (a: string | ((p: any) => string), b?: (p: any) => string) => {
-                  const { alias, cb } = resolveAliasAndCallback(a, b)
-                  return `${getName(sub)}/any(${alias}: ${cb(buildLambdaProxy(alias))})`
-                }
-                sub.all = (a: string | ((p: any) => string), b?: (p: any) => string) => {
-                  const { alias, cb } = resolveAliasAndCallback(a, b)
-                  return `${getName(sub)}/all(${alias}: ${cb(buildLambdaProxy(alias))})`
-                }
+                proxyTableMap.set(sub, navProp.table)
               }
               cached = sub
             }
@@ -251,9 +224,18 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
    *   .where(f => greaterThan(f.age, 20));
    */
   where(filter: string): this
-  where(filter: (f: ODataFieldProxy<T>) => string): this
-  where(filter: string | ((f: ODataFieldProxy<T>) => string)): this {
-    const str = typeof filter === "string" ? filter : filter(this._proxy)
+  where(filter: FilterExpr): this
+  where(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this
+  where(filter: string | FilterExpr | ((f: ODataFieldProxy<T>) => string | FilterExpr)): this {
+    let str: string
+    if (filter instanceof FilterExpr) {
+      str = filter.toOdata()
+    } else if (typeof filter === "function") {
+      const result = filter(this._proxy)
+      str = result instanceof FilterExpr ? result.toOdata() : result
+    } else {
+      str = filter
+    }
     this._filters.push(str)
     return this
   }
@@ -385,6 +367,40 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     const raw = await this._table.client.getRecords(this._table.name, qs)
     return raw.map((v: unknown) => this._table.transformValueFromDataverse(v)) as TResult[]
   }
+}
+
+function buildLambdaProxy<P extends GenericProperties>(
+  alias: string,
+  table: DataverseTable<P>,
+): ODataLambdaProxy<P> {
+  const fields = table.fields as Record<string, any>
+  const proxy = {} as Record<string, string>
+  for (const [key, prop] of Object.entries(fields)) {
+    proxy[key] = `${alias}/${prop.fromDataverseName ?? prop.name}`
+  }
+  return proxy as ODataLambdaProxy<P>
+}
+
+export function any<P extends GenericProperties>(
+  proxy: ODataCollectionNavProxy<P>,
+  condition: (x: ODataLambdaProxy<P>) => string | FilterExpr,
+): FilterExpr {
+  const alias = "x"
+  const table = proxyTableMap.get(proxy as object)
+  if (!table) throw new Error("any() requires a collection navigation proxy")
+  const result = condition(buildLambdaProxy(alias, table as DataverseTable<P>))
+  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "any", alias, condition: result instanceof FilterExpr ? result.toOdata() : result })
+}
+
+export function all<P extends GenericProperties>(
+  proxy: ODataCollectionNavProxy<P>,
+  condition: (x: ODataLambdaProxy<P>) => string | FilterExpr,
+): FilterExpr {
+  const alias = "x"
+  const table = proxyTableMap.get(proxy as object)
+  if (!table) throw new Error("all() requires a collection navigation proxy")
+  const result = condition(buildLambdaProxy(alias, table as DataverseTable<P>))
+  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "all", alias, condition: result instanceof FilterExpr ? result.toOdata() : result })
 }
 
 export function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): ODataQuery<T, Infer<T>> {

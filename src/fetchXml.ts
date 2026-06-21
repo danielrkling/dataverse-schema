@@ -1,6 +1,7 @@
 import { DataverseTable, DataverseInterestTable } from "./table";
 import { GenericProperties, Infer } from "./types";
-import { OrderSpec } from "./query";
+import { OrderSpec } from "./util";
+import { FilterExpr } from "./filter";
 
 type Simplify<T> = { [Key in keyof T]: T[Key] } & {};
 
@@ -129,9 +130,17 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * fetchXml(contactDataverseTable).where(condition("statuscode", "eq", "1"))
      */
     public where(
-        filter: string | ((f: FieldProxy<TProps>) => string),
+        filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr),
     ): this {
-        const str = typeof filter === "function" ? filter(this._proxy) : filter;
+        let str: string
+        if (filter instanceof FilterExpr) {
+            str = filter.toFetchXml()
+        } else if (typeof filter === "function") {
+            const result = filter(this._proxy)
+            str = result instanceof FilterExpr ? result.toFetchXml() : result
+        } else {
+            str = filter
+        }
         this._filters.push(str);
         return this;
     }

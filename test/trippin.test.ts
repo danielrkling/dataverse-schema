@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchOdata, equals, notEquals, greaterThan, contains, and } from "../src"
+import { fetchOdata, eq, ne, gt, contains, and } from "../src"
 import { DataverseTable, primaryKey, string, number, collection } from "../src"
 
 const TRIPPIN_URL = "https://services.odata.org/TripPinRESTierService"
@@ -69,7 +69,7 @@ test("TripPin: select + top returns correct fields", async () => {
 
 test("TripPin: filter by gender enum", async () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => equals(f.gender, "Female"))
+    .where(f => eq(f.gender, "Female"))
     .select("userName", "gender")
     .top(3)
   const data = await trippinFetch<{ value: Record<string, unknown>[] }>("People", q.toString())
@@ -93,7 +93,7 @@ test("TripPin: orderby lastName descending", async () => {
 test("TripPin: filter age not null", async () => {
   const q = fetchOdata(TrippinPerson)
     .select("userName", "age")
-    .where(f => notEquals(f.age, null))
+    .where(f => ne(f.age, null))
     .top(5)
   const data = await trippinFetch<{ value: Record<string, unknown>[] }>("People", q.toString())
   for (const p of data.value) {
@@ -115,7 +115,7 @@ test("TripPin: contains on FirstName string field", async () => {
 test("TripPin: filter by first AND last name", async () => {
   const q = fetchOdata(TrippinPerson)
     .select("userName", "firstName", "lastName")
-    .where(f => and(equals(f.firstName, "Russell"), equals(f.lastName, "Whyte")))
+    .where(f => and(eq(f.firstName, "Russell"), eq(f.lastName, "Whyte")))
   const data = await trippinFetch<{ value: Record<string, unknown>[] }>("People", q.toString())
   expect(data.value.length).toBeGreaterThanOrEqual(1)
   expect(data.value[0].FirstName).toBe("Russell")
@@ -154,7 +154,7 @@ test("TripPin: Airlines entity set", async () => {
 test("TripPin: combined query (filter + orderby + top + select)", async () => {
   const q = fetchOdata(TrippinPerson)
     .select("firstName", "lastName", "age")
-    .where(f => greaterThan(f.age, 30))
+    .where(f => gt(f.age, 30))
     .orderby(f => f.lastName)
     .top(5)
   const data = await trippinFetch<{ value: Record<string, unknown>[] }>("People", q.toString())

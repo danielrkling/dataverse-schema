@@ -2,6 +2,7 @@ import { expect, test } from "vitest"
 import { DataverseClient } from "../../src/client"
 import { fetchOdata } from "../../src"
 import { DataverseTable, primaryKey, string, number, lookup, lookupId, collection } from "../../src"
+import { eq, ge, and } from "../../src/filter"
 import { http, HttpResponse } from "msw"
 import { server } from "../mocks/server"
 import { BASE_URL } from "../mocks/handlers"
@@ -113,7 +114,7 @@ test("MS Docs filter-rows: $filter on lookup property path", async () => {
   server.use(
     http.get(`${API}/accounts`, ({ request }) => {
       const url = new URL(request.url)
-      expect(url.searchParams.get("$filter")).toBe("primarycontactid/fullname eq 'Susanna Stubberod (sample)'")
+      expect(url.searchParams.get("$filter")).toBe("(primarycontactid/fullname eq 'Susanna Stubberod (sample)')")
       expect(url.searchParams.get("$select")).toBe("name,_primarycontactid_value")
       return HttpResponse.json({
         "@odata.context": "[Organization URI]/api/data/v9.2/$metadata#accounts(name,_primarycontactid_value)",
@@ -131,8 +132,8 @@ test("MS Docs filter-rows: $filter on lookup property path", async () => {
 
   const q = fetchOdata(Account)
     .select("name", "primaryContactId")
-    .where(() => `primarycontactid/fullname eq 'Susanna Stubberod (sample)'`)
-  expect(q.toString()).toBe("$select=name,_primarycontactid_value&$filter=primarycontactid/fullname eq 'Susanna Stubberod (sample)'")
+    .where(eq("primarycontactid/fullname", "Susanna Stubberod (sample)"))
+  expect(q.toString()).toBe("$select=name,_primarycontactid_value&$filter=(primarycontactid/fullname eq 'Susanna Stubberod (sample)')")
 
   const result = await q.execute()
   expect(result).toHaveLength(1)
@@ -151,7 +152,7 @@ test("MS Docs filter-rows: nested filter on multi-hop lookup + nested expand", a
   server.use(
     http.get(`${API}/accounts`, ({ request }) => {
       const url = new URL(request.url)
-      expect(url.searchParams.get("$filter")).toBe("primarycontactid/createdby/fullname eq 'System Administrator'")
+      expect(url.searchParams.get("$filter")).toBe("(primarycontactid/createdby/fullname eq 'System Administrator')")
       expect(url.searchParams.get("$top")).toBe("1")
       return HttpResponse.json({
         "@odata.context": "[Organization URI]/api/data/v9.2/$metadata#accounts(name,_primarycontactid_value,primarycontactid(fullname,_createdby_value,createdby(fullname)))",
@@ -180,7 +181,7 @@ test("MS Docs filter-rows: nested filter on multi-hop lookup + nested expand", a
   const q = fetchOdata(Account)
     .select("name", "primaryContactId")
     .top(1)
-    .where(() => `primarycontactid/createdby/fullname eq 'System Administrator'`)
+    .where(eq("primarycontactid/createdby/fullname", "System Administrator"))
     .expand("primaryContact", (sub) =>
       sub
         .select("fullname", "createdById")
@@ -188,7 +189,7 @@ test("MS Docs filter-rows: nested filter on multi-hop lookup + nested expand", a
     )
   const s = q.toString()
   expect(s).toContain("$select=name,_primarycontactid_value")
-  expect(s).toContain("$filter=primarycontactid/createdby/fullname eq 'System Administrator'")
+  expect(s).toContain("$filter=(primarycontactid/createdby/fullname eq 'System Administrator')")
   expect(s).toContain("$expand=primarycontactid($select=fullname,_createdby_value;$expand=createdby($select=fullname))")
   expect(s).toContain("$top=1")
 
