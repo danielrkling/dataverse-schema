@@ -1,4 +1,4 @@
-import { DataverseTable } from "./table";
+import { DataverseTable, DataverseInterestTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { OrderSpec } from "./query";
 
@@ -102,7 +102,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      */
     public select<TSelect extends Record<string, keyof TProps>>(
         selector: (fields: FieldSelector<TProps>) => TSelect,
-    ): EntityQueryBuilder<TProps, Simplify<TResult & { [K in keyof TSelect]: Infer<TProps[TSelect[K]]> }>> {
+    ): EntityQueryBuilder<TProps, { [K in keyof TSelect]: Infer<TProps[TSelect[K]]> }> {
         const fieldsMock = {} as FieldSelector<TProps>;
         for (const key of Object.keys(this._table.fields)) {
             (fieldsMock as any)[key] = key;
@@ -167,6 +167,8 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 
         const autoAlias = `auto_link_${++this._aliasCounter}`;
 
+        const isIntersect = intersect ?? ((table as any).intersect === true);
+
         this._links.push({
             name: table.name,
             from: fromFieldName,
@@ -174,7 +176,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
             alias: autoAlias,
             linkType: linkType,
             builder: nestedBuilder,
-            intersect,
+            intersect: isIntersect,
         });
 
         return this as any;
@@ -202,6 +204,83 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         intersect?: boolean,
     ) {
         return this.join("inner", table, from, to, subquery, intersect);
+    }
+
+    /**
+     * Auto-joins through a DataverseInterestTable intersect table, detecting
+     * which side matches the current query and which is the target.
+     * Creates both join legs (source → intersect, intersect → target) so the
+     * subquery receives the target table's builder directly.
+     *
+     * @example
+     * fetchXml(Person)
+     *   .select(f => ({ name: f.name }))
+     *   .through(PersonAccount, sub =>
+     *     sub.select(f => ({ accountName: f.name }))
+     *   )
+     */
+    public through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+        intersectTable: DataverseInterestTable<TProps, T2>,
+        subquery: (q: EntityQueryBuilder<T2, {}>) => EntityQueryBuilder<T2, TJoinResult>,
+    ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
+    public through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+        intersectTable: DataverseInterestTable<T1, TProps>,
+        subquery: (q: EntityQueryBuilder<T1, {}>) => EntityQueryBuilder<T1, TJoinResult>,
+    ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
+    public through(
+        intersectTable: DataverseInterestTable<any, any>,
+        subquery: (q: EntityQueryBuilder<any, {}>) => EntityQueryBuilder<any, Record<string, any>>,
+    ): EntityQueryBuilder<TProps, any> {
+        let sourceFrom: string;
+        let targetFrom: string;
+        let targetTable: DataverseTable<any>;
+
+        if (intersectTable.table1 === this._table) {
+            sourceFrom = "table1";
+            targetFrom = "table2";
+            targetTable = intersectTable.table2;
+        } else if (intersectTable.table2 === this._table) {
+            sourceFrom = "table2";
+            targetFrom = "table1";
+            targetTable = intersectTable.table1;
+        } else {
+            throw new Error(
+                `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`,
+            );
+        }
+
+        const targetBuilder = new EntityQueryBuilder(targetTable);
+        subquery(targetBuilder);
+
+        const targetToKey = targetTable.getPrimaryKey().key;
+        const targetFromFieldName = intersectTable.fields[targetFrom].name;
+        const targetToFieldName = targetTable.fields[targetToKey].name;
+
+        const intersectBuilder = new EntityQueryBuilder(intersectTable);
+        intersectBuilder._links.push({
+            name: targetTable.name,
+            from: targetFromFieldName,
+            to: targetToFieldName,
+            alias: `auto_link_${++this._aliasCounter}`,
+            linkType: "inner",
+            builder: targetBuilder,
+        });
+
+        const sourceToKey = this._table.getPrimaryKey().key;
+        const sourceFromFieldName = intersectTable.fields[sourceFrom].name;
+        const sourceToFieldName = this._table.fields[sourceToKey].name;
+
+        this._links.push({
+            name: intersectTable.name,
+            from: sourceFromFieldName,
+            to: sourceToFieldName,
+            alias: `auto_link_${++this._aliasCounter}`,
+            linkType: "inner",
+            builder: intersectBuilder,
+            intersect: true,
+        });
+
+        return this as any;
     }
 
     /** Enables distinct (deduplicated) results. */
@@ -453,42 +532,65 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         }
 
         for (const link of this._links) {
-            const linkAttrs: string[] = [
-                `name="${link.name}"`,
-                `from="${link.from}"`,
-                `to="${link.to}"`,
-                `alias="${link.alias}"`,
-                `link-type="${link.linkType}"`,
-            ];
-            if (link.intersect) linkAttrs.push(`intersect="true"`);
-
-            lines.push(`    <link-entity ${linkAttrs.join(" ")}>`);
-
-            if (link.builder._filters.length > 0) {
-                lines.push(`      <filter type="and">`);
-                for (const c of link.builder._filters) {
-                    const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
-                    lines.push(`        ${entityScoped}`);
-                }
-                lines.push(`      </filter>`);
-            }
-
-            for (const nestedAttr of link.builder._attributes) {
-                const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
-                if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
-                if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
-                if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
-                if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
-                if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
-                lines.push(`      <attribute ${attrParts.join(" ")} />`);
-            }
-
-            lines.push(`    </link-entity>`);
+            lines.push(...this._renderLinkEntity(link, "    "));
         }
 
         lines.push(`  </entity>`);
         lines.push(`</fetch>`);
         return lines.join("\n");
+    }
+
+    private _renderLinkEntity(
+        link: {
+            name: string;
+            alias: string;
+            from: string;
+            to: string;
+            linkType: FetchLinkType;
+            builder: EntityQueryBuilder<any, any>;
+            intersect?: boolean;
+        },
+        indent: string,
+    ): string[] {
+        const lines: string[] = [];
+        const linkAttrs: string[] = [
+            `name="${link.name}"`,
+            `from="${link.from}"`,
+            `to="${link.to}"`,
+            `alias="${link.alias}"`,
+            `link-type="${link.linkType}"`,
+        ];
+        if (link.intersect) linkAttrs.push(`intersect="true"`);
+
+        lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
+
+        const childIndent = `${indent}  `;
+
+        if (link.builder._filters.length > 0) {
+            lines.push(`${childIndent}<filter type="and">`);
+            for (const c of link.builder._filters) {
+                const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
+                lines.push(`${childIndent}  ${entityScoped}`);
+            }
+            lines.push(`${childIndent}</filter>`);
+        }
+
+        for (const nestedAttr of link.builder._attributes) {
+            const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
+            if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
+            if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
+            if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
+            if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
+            if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
+            lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
+        }
+
+        for (const nestedLink of link.builder._links) {
+            lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+        }
+
+        lines.push(`${indent}</link-entity>`);
+        return lines;
     }
 
     /**

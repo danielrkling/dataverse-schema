@@ -1,9 +1,6 @@
 import { StandardSchemaV1 } from "@standard-schema/spec";
 import { DataverseClient } from "./client"; // Assuming this is the path to your client
-import { CollectionIdsProperty, CollectionProperty } from "./fields";
-import { LookupProperty } from "./fields";
-import { LookupIdProperty } from "./fields";
-import { PrimaryKeyField } from "./fields";
+import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, primaryKey, lookupId } from "./fields";
 import { query } from "./query";
 import { Schema } from "./schema";
 import {
@@ -719,4 +716,60 @@ function buildExpand(table: DataverseTable<GenericProperties>, depth = 0): strin
       return `${navProp.name}(${expandQuery})`;
     })
     .join(",");
+}
+
+/**
+ * Represents a Dataverse many-to-many intersect (association) table.
+ *
+ * Auto-generates a primary key and two lookup-id fields for the related tables.
+ * When used in a FetchXML {@link EntityQueryBuilder.join join}, the `intersect="true"`
+ * attribute is automatically applied.
+ *
+ * @example
+ * const AccountContact = new DataverseInterestTable("accountcontact", Account, Contact);
+ *
+ * // Use in FetchXML — intersect is auto-detected:
+ * fetchXml(Account)
+ *   .innerJoin(AccountContact, "table1", "id", sub =>
+ *     sub.innerJoin(Contact, "id", "table2", sub2 =>
+ *       sub2.select(f => ({ name: f.name }))
+ *     )
+ *   )
+ */
+export class DataverseInterestTable<
+  T1 extends GenericProperties,
+  T2 extends GenericProperties,
+> extends DataverseTable<any> {
+  /** Marks this table as an intersect table for FetchXML joins. */
+  readonly intersect = true
+
+  /** The first related table. */
+  table1: DataverseTable<T1>
+  /** The second related table. */
+  table2: DataverseTable<T2>
+
+  constructor(
+    name: string,
+    table1: DataverseTable<T1>,
+    table2: DataverseTable<T2>,
+  ) {
+    const pk1 = table1.getPrimaryKey().property
+    const pk2 = table2.getPrimaryKey().property
+
+    const fields: Record<string, any> = {
+      id: primaryKey(`${name}id`),
+      table1: lookupId(pk1.name, () => table1),
+      table2: lookupId(pk2.name, () => table2),
+    }
+
+    super({
+      client: table1.client,
+      entitySetName: name,
+      logicalName: name,
+      fields: fields as any,
+    })
+
+    this.table1 = table1
+    this.table2 = table2
+  }
 }

@@ -1,7 +1,7 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchOdata, ODataQuery, equals, notEquals, greaterThan, greaterThanOrEqual, lessThanOrEqual, and, or, any, all, compare, contains, sum, avg, min, max, count } from "../src"
-import { DataverseTable, primaryKey, string, number, boolean, lookup, lookupId, collection, Infer } from "../src"
+import { fetchOdata, ODataQuery, equals, notEquals, greaterThan, greaterThanOrEqual, lessThanOrEqual, and, or, not, any, all, compare, contains, startsWith, endsWith, sum, avg, min, max, count } from "../src"
+import { DataverseTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection, Infer } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 
 const client = new DataverseClient({ url: BASE_URL })
@@ -35,6 +35,7 @@ const Person = new DataverseTable({
     primaryAddressId: lookupId("person_Address", () => Address),
     primaryAddress: lookup("person_Address", () => Address),
     addresses: collection("person_Address_person", () => Address),
+    createdOn: datetime("createdon"),
   },
 })
 
@@ -149,6 +150,35 @@ test("expand with where inside subquery", () => {
   expect(q).toContain("zip_code eq 12345")
 })
 
+test("multi-expand on lookup and collection nav properties", () => {
+  const q = fetchOdata(Person)
+    .expand("primaryAddress", sub => sub.select("street"))
+    .expand("addresses", sub => sub.select("zip"))
+    .toString()
+  expect(q).toContain("$expand=person_Address($select=street_Address),person_Address_person($select=zip_code)")
+})
+
+test("expand with filter on collection nav property", () => {
+  const q = fetchOdata(Person)
+    .expand("addresses", sub => sub.where(f => equals(f.street, "Main")))
+    .toString()
+  expect(q).toContain("person_Address_person(")
+  expect(q).toContain("$filter=(street_Address eq 'Main')")
+})
+
+test("expand with select, filter, and orderby on collection nav", () => {
+  const q = fetchOdata(Person)
+    .expand("addresses", sub => sub
+      .select("street", "zip")
+      .where(f => `${f.zip} gt 10000`)
+      .orderby(f => f.street)
+    )
+    .toString()
+  expect(q).toContain("$select=street_Address,zip_code")
+  expect(q).toContain("$filter=zip_code gt 10000")
+  expect(q).toContain("$orderby=street_Address asc")
+})
+
 test("orderby resolves field names with new API", () => {
   const q = fetchOdata(Person)
     .orderby(f => f.name)
@@ -196,6 +226,27 @@ test("existing filter functions work with field proxy", () => {
   expect(q).toContain("person_age gt 20")
 })
 
+test("startsWith via field proxy", () => {
+  const q = fetchOdata(Person)
+    .where(f => startsWith(f.name, "A"))
+    .toString()
+  expect(q).toContain("startswith(fullname,'A')")
+})
+
+test("endsWith via field proxy", () => {
+  const q = fetchOdata(Person)
+    .where(f => endsWith(f.name, "Inc."))
+    .toString()
+  expect(q).toContain("endswith(fullname,'Inc.')")
+})
+
+test("not via field proxy", () => {
+  const q = fetchOdata(Person)
+    .where(f => not(contains(f.name, "sample")))
+    .toString()
+  expect(q).toContain("not(contains(fullname,'sample'))")
+})
+
 // --- where raw string overload ---
 
 test("where accepts raw string directly", () => {
@@ -230,6 +281,16 @@ test("multiple where with raw strings stacks additively", () => {
     .where("person_age gt 20")
     .toString()
   expect(q).toContain("$filter=fullname eq 'John' and person_age gt 20")
+})
+
+test("grouping operators use parentheses for precedence", () => {
+  const q = fetchOdata(Person)
+    .where(f => and(
+      or(contains(f.name, "sample"), contains(f.name, "test")),
+      equals(f.active, true),
+    ))
+    .toString()
+  expect(q).toContain("$filter=((contains(fullname,'sample') or contains(fullname,'test')) and (active eq true))")
 })
 
 // --- orderby new API ---
@@ -324,6 +385,13 @@ test("groupby without aggregate callback", () => {
     .groupby(f => [f.age])
     .toString()
   expect(q).toContain("$apply=groupby((person_age))")
+})
+
+test("aggregate min and max on date field (last/first created)", () => {
+  const q = fetchOdata(Person)
+    .groupby(() => [], f => ({ lastCreate: max(f.createdOn), firstCreate: min(f.createdOn) }))
+    .toString()
+  expect(q).toContain("$apply=aggregate(createdon with max as lastCreate,createdon with min as firstCreate)")
 })
 
 test("groupby with nav property path and includeAnnotations", () => {
