@@ -1,8 +1,83 @@
-import { Table } from "./table"
+import { DataverseTable } from "./table"
 import { GenericProperties, Infer } from "./types"
 import { LookupProperty, CollectionProperty } from "./fields"
 import { getName } from "./util"
-import { OrderSpec } from "./query"
+
+// --- Aggregation ---
+
+/**
+ * Phantom branded string that carries the inferred TypeScript type of a Dataverse field.
+ * At runtime it is just a string (the OData field name).
+ */
+export type FieldRef<T> = string & { __fieldType: T }
+
+/**
+ * Represents a server-side aggregation expression usable in OData `$apply` and FetchXML.
+ * Created via factory functions like `avg()`, `sum()`, `min()`, `max()`, `count()`.
+ */
+export class Aggregation<TValue = number> {
+  constructor(
+    readonly operation: string,
+    readonly field?: string,
+    readonly alias?: string,
+  ) {}
+
+  /** OData format (e.g. `"title with average as avg_title"`). */
+  toOdata(alias?: string): string {
+    const a = alias ?? this.alias
+    if (this.operation === "count" || this.operation === "countdistinct") {
+      return a ? `$count as ${a}` : `$count`
+    }
+    const resolvedAlias = a ?? this.field
+    return `${this.field} with ${this.operation} as ${resolvedAlias}`
+  }
+
+  /** FetchXML format (e.g. `name="title" alias="avg_title" aggregate="avg"`). */
+  toXml(alias?: string): string {
+    if (!this.field) return ""
+    const a = alias ?? this.alias ?? this.field
+    return `name="${this.field}" alias="${a}" aggregate="${this.operation}"`
+  }
+
+  toString(): string {
+    return this.toOdata()
+  }
+}
+
+/** Average aggregation. `avg(field)` or `avg("field_name")`. */
+export function avg<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>
+export function avg(name: string, alias?: string): Aggregation<number>
+export function avg(name: any, alias?: string): Aggregation<number> {
+  return new Aggregation<number>("average", name, alias)
+}
+
+/** Sum aggregation. */
+export function sum<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>
+export function sum(name: string, alias?: string): Aggregation<number>
+export function sum(name: any, alias?: string): Aggregation<number> {
+  return new Aggregation<number>("sum", name, alias)
+}
+
+/** Minimum aggregation. */
+export function min<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>
+export function min(name: string, alias?: string): Aggregation<number>
+export function min(name: any, alias?: string): Aggregation<number> {
+  return new Aggregation<number>("min", name, alias)
+}
+
+/** Maximum aggregation. */
+export function max<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>
+export function max(name: string, alias?: string): Aggregation<number>
+export function max(name: any, alias?: string): Aggregation<number> {
+  return new Aggregation<number>("max", name, alias)
+}
+
+/** Count aggregation. `count()` or `count("myCount")`. */
+export function count(alias?: string): Aggregation<number> {
+  return new Aggregation<number>("count", undefined, alias)
+}
+
+// --- OData Query Types ---
 
 type NavKeys<T> = {
   [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? K : never
@@ -23,7 +98,7 @@ type ODataLambdaProxy<P extends GenericProperties> = {
   [K in keyof P]: string;
 }
 
-type ODataNavProxyValue<P extends GenericProperties> = {
+type ODataCollectionNavProxy<P extends GenericProperties> = {
   toString(): string;
   any(cb: (proxy: ODataLambdaProxy<P>) => string): string;
   any(alias: string, cb: (proxy: ODataLambdaProxy<P>) => string): string;
@@ -31,66 +106,74 @@ type ODataNavProxyValue<P extends GenericProperties> = {
   all(alias: string, cb: (proxy: ODataLambdaProxy<P>) => string): string;
 } & ODataFieldProxy<P>
 
+type ODataLookupNavProxy<P extends GenericProperties> = {
+  toString(): string;
+} & ODataFieldProxy<P>
+
 type ODataFieldProxy<T extends GenericProperties> = {
-  [K in keyof T]: T[K] extends LookupProperty<infer P> ? ODataNavProxyValue<P>
-    : T[K] extends CollectionProperty<infer P> ? ODataNavProxyValue<P>
-    : string
+  [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P>
+    : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P>
+    : FieldRef<Infer<T[K]>>
 }
 
 /**
- * A type-safe OData query builder for Dataverse. Construct OData query strings
- * with `$select`, `$filter`, `$expand`, `$orderby`, `$top`, `$count`, `$apply`,
- * and `$ref` using auto-completing field proxies.
+ * A type-safe OData query builder for Dataverse.
  *
  * Create one via {@link fetchOdata} — never instantiate directly.
- *
- * @template T The table's property definitions.
- * @template TResult The result row shape (narrowed by `.select()`, `.expand()`, etc.).
  *
  * @example
  * const q = fetchOdata(Person)
  *   .select("name", "age")
  *   .where(f => equals(f.name, "John"))
- *   .orderby({ name: "asc" })
+ *   .orderby(f => f.name)
  *   .top(10);
  *
  * const results = await q.execute();
- * // results: { name: string; age: number }[]
  */
 export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
-  private _table: Table<T>
+  private _table: DataverseTable<T>
   private _fields: string[] = []
   private _filters: string[] = []
-  private _expands: Array<{ name: string; query: string; isRef?: boolean }> = []
+  private _expands: Array<{ name: string; query: string }> = []
   private _orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
   private _top?: number
-  private _includeCount = false
   private _apply = ""
   private _lambdaAliasIndex = 0
   private _proxy: ODataFieldProxy<T>
 
-  constructor(table: Table<T>) {
+  constructor(table: DataverseTable<T>) {
     this._table = table
     this._proxy = this._buildProxy()
+    this._selectDefaults()
+  }
+
+  private _selectDefaults(): void {
+    for (const prop of Object.values(this._table.fields) as any[]) {
+      if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
+        this._fields.push(prop.fromDataverseName ?? prop.name)
+      }
+    }
   }
 
   private _buildProxy(): ODataFieldProxy<T> {
-    return this._buildProxyForTable(this._table) as any
+    return this._buildProxyForDataverseTable(this._table) as any
   }
 
-  private _buildProxyForTable(table: Table<any>, prefix?: string): Record<string, any> {
+  private _buildProxyForDataverseTable(table: DataverseTable<any>, prefix?: string): Record<string, any> {
     const proxy: Record<string, any> = {}
     const fields = table.fields as Record<string, any>
     for (const [key, prop] of Object.entries(fields)) {
       const dataverseName = prop.fromDataverseName ?? prop.name
-      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
+      const isCollection = prop.kind === "navigation" && prop.type === "collection"
+      const isLookup = prop.kind === "navigation" && prop.type === "lookup"
+      if (isCollection || isLookup) {
         const navProp = prop as LookupProperty<any> | CollectionProperty<any>
         const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName
         let cached: Record<string, any> | undefined
         Object.defineProperty(proxy, key, {
           get: () => {
             if (!cached) {
-              const sub = this._buildProxyForTable(navProp.table, currentPrefix)
+              const sub = this._buildProxyForDataverseTable(navProp.table, currentPrefix)
               sub.toString = () => dataverseName
               const lambdaMap: Record<string, string> = {}
               const navFields = navProp.table.fields as Record<string, any>
@@ -109,13 +192,16 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
                 }
                 return { alias: a, cb: b! }
               }
-              sub.any = (a: string | ((p: any) => string), b?: (p: any) => string) => {
-                const { alias, cb } = resolveAliasAndCallback(a, b)
-                return `${getName(sub)}/any(${alias}: ${cb(buildLambdaProxy(alias))})`
-              }
-              sub.all = (a: string | ((p: any) => string), b?: (p: any) => string) => {
-                const { alias, cb } = resolveAliasAndCallback(a, b)
-                return `${getName(sub)}/all(${alias}: ${cb(buildLambdaProxy(alias))})`
+              // Only add any/all for collection nav properties
+              if (isCollection) {
+                sub.any = (a: string | ((p: any) => string), b?: (p: any) => string) => {
+                  const { alias, cb } = resolveAliasAndCallback(a, b)
+                  return `${getName(sub)}/any(${alias}: ${cb(buildLambdaProxy(alias))})`
+                }
+                sub.all = (a: string | ((p: any) => string), b?: (p: any) => string) => {
+                  const { alias, cb } = resolveAliasAndCallback(a, b)
+                  return `${getName(sub)}/all(${alias}: ${cb(buildLambdaProxy(alias))})`
+                }
               }
               cached = sub
             }
@@ -133,13 +219,12 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
 
   /**
    * Restricts the returned columns to the specified fields.
-   * This narrows the result type to only the selected properties.
+   * By default, all value columns are selected.
    *
    * @param keys One or more value-field keys (navigation properties are excluded).
    *
    * @example
-   * const q = fetchOdata(Person).select("name", "age");
-   * // TResult → { name: string; age: number }
+   * fetchOdata(Person).select("name", "age");
    */
   select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, { [P in K]: Infer<T[P]> }> {
     this._fields = keys.map(k => this._proxy[k] as string)
@@ -147,31 +232,17 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   }
 
   /**
-   * Adds a `$filter` clause. Can be a raw OData filter string or a callback
-   * that receives a typed field proxy. Multiple `.where()` calls are combined
-   * with `and`.
-   *
-   * @overload
-   * @param filter A raw OData filter string.
-   *
-   * @overload
-   * @param filter A callback receiving a field proxy for type-safe filter construction.
+   * Adds a `$filter` clause. Can be a raw string or a callback receiving a
+   * typed field proxy. Multiple `.where()` calls stack with `and`.
    *
    * @example
-   * // String overload:
-   * fetchOdata(Person).where("fullname eq 'John'");
+   * fetchOdata(Person).where(f => equals(f.name, "John"));
    *
    * @example
-   * // Callback with field proxy and filter helpers:
-   * fetchOdata(Person)
-   *   .where(f => and(equals(f.name, "John"), greaterThan(f.age, 20)));
-   *
-   * @example
-   * // Multiple where calls stack additively:
+   * // Multiple calls stack:
    * fetchOdata(Person)
    *   .where(f => equals(f.name, "John"))
    *   .where(f => greaterThan(f.age, 20));
-   * // $filter=(fullname eq 'John') and (person_age gt 20)
    */
   where(filter: string): this
   where(filter: (f: ODataFieldProxy<T>) => string): this
@@ -182,12 +253,7 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   }
 
   /**
-   * Adds a `$expand` clause for a navigation property. The callback receives a
-   * nested {@link ODataQuery} scoped to the related table for further `.select()`,
-   * `.where()`, `.expand()`, etc.
-   *
-   * @param key The navigation property key.
-   * @param sub A callback to configure the nested query.
+   * Adds a `$expand` clause for a navigation property.
    *
    * @example
    * fetchOdata(Person)
@@ -209,109 +275,82 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     const child = new ODataQuery(prop.table) as unknown as ODataQuery<RelatedProps<T, K>>
     const result = sub(child)
     const q = result ?? child
-    this._expands.push({ name: prop.name, query: q._build() })
+    this._expands.push({ name: prop.name, query: q._build(true) })
     return this as any
   }
 
   /**
-   * Adds a `$orderby` clause. Supports function callback with auto-completing
-   * field proxy, `asc`/`desc` helpers, or a simple direction map.
-   *
-   * @overload
-   * @param spec Callback that receives a field proxy and returns an ordering spec.
-   *
-   * @overload
-   * @param keys An object mapping field names to `"asc"` or `"desc"`.
+   * Adds a `$orderby` clause. The callback receives a field proxy to select
+   * a field. Direction defaults to `"asc"`. Multiple calls accumulate.
    *
    * @example
-   * // Function overload with asc/desc helpers:
-   * fetchOdata(Person).orderby(f => asc(f.name, f.age));
-   * fetchOdata(Person).orderby(f => desc(f.age));
-   *
-   * @example
-   * // Record overload:
-   * fetchOdata(Person).orderby({ name: "asc", age: "desc" });
+   * fetchOdata(Person).orderby(f => f.name);
+   * fetchOdata(Person).orderby(f => f.age, "desc");
    */
-  orderby(spec: (f: ODataFieldProxy<T>) => OrderSpec | OrderSpec[] | Record<string, "asc" | "desc">): this
-  orderby(keys: { [K in keyof T]?: "asc" | "desc" }): this
-  orderby(arg: any): this {
-    if (typeof arg === "function") {
-      const result = arg(this._proxy)
-      if (result instanceof OrderSpec) {
-        this._orderby = result.fields.map(f => ({ name: f, dir: result.direction }))
-      } else if (Array.isArray(result)) {
-        this._orderby = result.flatMap((s: OrderSpec) => s.fields.map(f => ({ name: f, dir: s.direction })))
-      } else {
-        this._orderby = Object.entries(result)
-          .filter(([, v]) => v)
-          .map(([k, v]) => ({ name: k, dir: v as "asc" | "desc" }))
-      }
-      return this
-    }
-    this._orderby = Object.entries(arg)
-      .filter(([, v]) => v)
-      .map(([k, v]) => ({ name: this._proxy[k as keyof T] as string, dir: v as "asc" | "desc" }))
+  orderby(fieldSelector: (f: ODataFieldProxy<T>) => string, direction: "asc" | "desc" = "asc"): this {
+    this._orderby.push({ name: fieldSelector(this._proxy), dir: direction })
     return this
   }
 
-  /**
-   * Limits the number of returned records (`$top`).
-   *
-   * @example
-   * fetchOdata(Person).top(10);
-   */
+  /** Limits the number of returned records (`$top`). */
   top(n: number): this {
     this._top = n
     return this
   }
 
   /**
-   * Includes the total record count in the response (`$count=true`).
+   * Adds a `$apply` expression with optional grouping and aggregations.
+   *
+   * @param selectFields Callback returning a record of field aliases → field refs to group by.
+   *   Pass `() => ({})` to aggregate the whole table without grouping.
+   * @param aggFields Optional callback returning a record of alias → Aggregation.
    *
    * @example
-   * const q = fetchOdata(Person).includeCount();
-   * // query string: "$count=true"
+   * fetchOdata(Person).groupby(
+   *   f => ({ age: f.age }),
+   *   f => ({ total: sum(f.age) }),
+   * );
+   *
+   * @example
+   * // Aggregate without grouping:
+   * fetchOdata(Person).groupby(
+   *   () => ({}),
+   *   f => ({ total: sum(f.age) }),
+   * );
+   *
+   * @example
+   * // Just groupby without aggregates:
+   * fetchOdata(Person).groupby(f => ({ age: f.age }));
    */
-  includeCount(): this {
-    this._includeCount = true
+  groupby<TFields extends Record<string, FieldRef<any>>, A extends Record<string, Aggregation>>(
+    selectFields: (f: ODataFieldProxy<T>) => TFields,
+    aggFields: (f: ODataFieldProxy<T>) => A,
+  ): ODataQuery<T, { [P in keyof TFields]: TFields[P] extends FieldRef<infer V> ? V : never } & { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number }>
+  groupby<TFields extends Record<string, FieldRef<any>>>(
+    selectFields: (f: ODataFieldProxy<T>) => TFields,
+  ): ODataQuery<T, { [P in keyof TFields]: TFields[P] extends FieldRef<infer V> ? V : never }>
+  groupby(
+    selectFields: (f: ODataFieldProxy<T>) => Record<string, any>,
+    aggFields?: (f: ODataFieldProxy<T>) => Record<string, Aggregation>,
+  ): ODataQuery<T, any> {
+    const groupByRecord = selectFields(this._proxy as any)
+    const groupByNames = Object.values(groupByRecord) as string[]
+    const aggStrings = aggFields
+      ? Object.entries(aggFields(this._proxy as any)).map(([alias, agg]) => agg.toOdata(alias))
+      : []
+    if (groupByNames.length > 0 && aggStrings.length > 0) {
+      this._apply = `groupby((${groupByNames.join(",")}),aggregate(${aggStrings.join(",")}))`
+    } else if (groupByNames.length > 0) {
+      this._apply = `groupby((${groupByNames.join(",")}))`
+    } else if (aggStrings.length > 0) {
+      this._apply = `aggregate(${aggStrings.join(",")})`
+    }
     return this
   }
 
-  /**
-   * Adds a `$apply` expression for server-side aggregation.
-   *
-   * @param expression A raw OData `$apply` expression.
-   *
-   * @example
-   * fetchOdata(Person).apply("groupby((person_age),aggregate(person_age with sum as total))");
-   */
-  apply(expression: string): this {
-    this._apply = expression
-    return this
-  }
-
-  /**
-   * Adds a `$expand` with `/$ref` to retrieve only the related record IDs
-   * instead of full expanded records. The navigation property is removed from
-   * the result type.
-   *
-   * @param key The navigation property key.
-   *
-   * @example
-   * const q = fetchOdata(Person).expandRef("primaryAddress");
-   * // query: "$expand=person_Address/$ref"
-   * // TResult no longer includes primaryAddress
-   */
-  expandRef<K extends string & NavKeys<T>>(
-    key: K,
-  ): ODataQuery<T, Omit<TResult, K & keyof TResult>> {
-    const prop = this._table.fields[key] as LookupProperty<any> | CollectionProperty<any>
-    this._expands.push({ name: prop.name, query: "", isRef: true })
-    return this as any
-  }
-
-  private _build(): string {
+  private _build(forExpand = false): string {
     const parts: string[] = []
+    const joinChar = forExpand ? ";" : "&"
     if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`)
     if (this._filters.length === 1) {
       parts.push(`$filter=${this._filters[0]}`)
@@ -323,14 +362,12 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     }
     if (this._expands.length) {
       parts.push(`$expand=${this._expands.map(e => {
-        if (e.isRef) return `${e.name}/$ref`
         return e.query ? `${e.name}(${e.query})` : e.name
       }).join(",")}`)
     }
     if (this._top !== undefined) parts.push(`$top=${this._top}`)
-    if (this._includeCount) parts.push(`$count=true`)
     if (this._apply) parts.push(`$apply=${this._apply}`)
-    return parts.join("&")
+    return parts.join(joinChar)
   }
 
   toString(): string {
@@ -345,6 +382,6 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   }
 }
 
-export function fetchOdata<T extends GenericProperties>(table: Table<T>): ODataQuery<T, Infer<T>> {
+export function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): ODataQuery<T, Infer<T>> {
   return new ODataQuery(table)
 }

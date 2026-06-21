@@ -18,7 +18,7 @@ import {
 } from "./fields";
 import { DateField } from "./fields";
 import { Schema } from "./schema";
-import { Table } from "./table";
+import { DataverseTable } from "./table";
 import { Etag } from "./util";
 
 export type Primitive = string | number | boolean | null;
@@ -79,7 +79,7 @@ export type NarrowKeysByValue<T extends object, V> = {
  *
  * @template T The Dataverse schema definition.
  */
-export type Infer<T> = T extends Table<infer U>
+export type Infer<T> = T extends DataverseTable<infer U>
   ? Infer<U> // If it's a Table, infer from its properties.
   : T extends GenericProperties
   ? {

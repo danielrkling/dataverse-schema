@@ -1,4 +1,4 @@
-import { Table } from "./table";
+import { DataverseTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { OrderSpec } from "./query";
 
@@ -39,7 +39,7 @@ type OrderDef = {
  * the query. Call `execute()` to run it or `toXml()` to get the raw XML.
  *
  * @example
- * const q = fetchXml(contactTable)
+ * const q = fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name, email: f.email }))
  *   .where(f => condition(f.status, "eq", 1))
  *   .orderby(f => desc(f.name))
@@ -51,7 +51,7 @@ type OrderDef = {
 export class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
     private _aliasCounter = 0;
 
-    private _table: Table<TProps>;
+    private _table: DataverseTable<TProps>;
     private _attributes: AttrDef[] = [];
     private _links: Array<{
         name: string;
@@ -78,8 +78,8 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     private _datasource?: string;
     private _options?: string;
 
-    /** @param table The Table definition to build the query against. */
-    constructor(table: Table<TProps>) {
+    /** @param table The DataverseTable definition to build the query against. */
+    constructor(table: DataverseTable<TProps>) {
         this._table = table;
         this._proxy = this._buildProxy();
     }
@@ -97,7 +97,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * The result type is narrowed to only include selected fields.
      *
      * @example
-     * fetchXml(contactTable)
+     * fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name, email: f.email }))
      */
     public select<TSelect extends Record<string, keyof TProps>>(
@@ -122,11 +122,11 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      *
      * @example
      * // With callback
-     * fetchXml(contactTable).where(f => condition(f.status, "eq", 1))
+     * fetchXml(contactDataverseTable).where(f => condition(f.status, "eq", 1))
      *
      * @example
      * // Raw filter string
-     * fetchXml(contactTable).where(condition("statuscode", "eq", "1"))
+     * fetchXml(contactDataverseTable).where(condition("statuscode", "eq", "1"))
      */
     public where(
         filter: string | ((f: FieldProxy<TProps>) => string),
@@ -141,22 +141,22 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * joined entity's selected fields.
      *
      * @example
-     * fetchXml(contactTable)
+     * fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name }))
-     *   .join("inner", accountTable, a => a.accountid, c => c.parentcustomerid,
+     *   .join("inner", accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
      *     q => q.select(a => ({ accountName: a.name })))
      */
     public join<
-        TTable extends Table<any>,
-        TFrom extends keyof TTable["fields"],
+        TDataverseTable extends DataverseTable<any>,
+        TFrom extends keyof TDataverseTable["fields"],
         TTo extends keyof TProps,
         TJoinResult extends Record<string, any>,
     >(
         linkType: FetchLinkType,
-        table: TTable,
+        table: TDataverseTable,
         from: TFrom,
         to: TTo,
-        subquery: (q: EntityQueryBuilder<TTable["fields"], {}>) => EntityQueryBuilder<TTable["fields"], TJoinResult>,
+        subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>> {
         const nestedBuilder = new EntityQueryBuilder(table);
@@ -184,21 +184,21 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
      *
      * @example
-     * fetchXml(contactTable)
+     * fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name }))
-     *   .innerJoin(accountTable, a => a.accountid, c => c.parentcustomerid,
+     *   .innerJoin(accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
      *     q => q.select(a => ({ accountName: a.name })))
      */
     public innerJoin<
-        TTable extends Table<any>,
-        TFrom extends keyof TTable["fields"],
+        TDataverseTable extends DataverseTable<any>,
+        TFrom extends keyof TDataverseTable["fields"],
         TTo extends keyof TProps,
         TJoinResult extends Record<string, any>,
     >(
-        table: TTable,
+        table: TDataverseTable,
         from: TFrom,
         to: TTo,
-        subquery: (q: EntityQueryBuilder<TTable["fields"], {}>) => EntityQueryBuilder<TTable["fields"], TJoinResult>,
+        subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ) {
         return this.join("inner", table, from, to, subquery, intersect);
@@ -275,15 +275,15 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
    *
    * @example
    * // With asc/desc helpers
-   * fetchXml(contactTable).orderby(f => desc(f.name))
+   * fetchXml(contactDataverseTable).orderby(f => desc(f.name))
    *
    * @example
    * // With record syntax
-   * fetchXml(contactTable).orderby(f => ({ name: 'asc', createdon: 'desc' }))
+   * fetchXml(contactDataverseTable).orderby(f => ({ name: 'asc', createdon: 'desc' }))
    *
    * @example
    * // With explicit entity name
-   * fetchXml(contactTable).orderby("contact", "createdon", "desc")
+   * fetchXml(contactDataverseTable).orderby("contact", "createdon", "desc")
    */
   public orderby(
       spec: ((f: FieldProxy<TProps>) => OrderSpec | OrderSpec[] | Record<string, 'asc' | 'desc'>)
@@ -397,7 +397,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * Returns the full FetchXML string.
      *
      * @example
-     * const xml = fetchXml(contactTable)
+     * const xml = fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name }))
      *   .toXml();
      * // <fetch version="1.0" mapping="logical">
@@ -495,7 +495,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * Returns the URL-encoded query string for use in the Dataverse API.
      *
      * @example
-     * fetchXml(contactTable).select(f => ({ name: f.name })).toString()
+     * fetchXml(contactDataverseTable).select(f => ({ name: f.name })).toString()
      * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
      */
     public toString(): string {
@@ -506,7 +506,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
    * Executes the FetchXML query against Dataverse and returns the parsed results.
    *
    * @example
-   * const contacts = await fetchXml(contactTable)
+   * const contacts = await fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
    *   .where(f => condition(f.status, "eq", 1))
    *   .execute();
@@ -565,11 +565,11 @@ export function filterOr(...conditions: string[]): string {
  * and narrows the result type as you chain methods.
  *
  * @example
- * const results = await fetchXml(contactTable)
+ * const results = await fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name }))
  *   .where(f => condition(f.statecode, "eq", 0))
  *   .execute();
  */
-export function fetchXml<TProps extends GenericProperties>(table: Table<TProps>): EntityQueryBuilder<TProps, Infer<TProps>> {
+export function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): EntityQueryBuilder<TProps, Infer<TProps>> {
     return new EntityQueryBuilder(table);
 }

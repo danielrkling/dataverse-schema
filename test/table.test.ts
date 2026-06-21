@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { table, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
+import { DataverseTable, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 import { http, HttpResponse } from "msw"
 import { server } from "./mocks/server"
@@ -8,25 +8,31 @@ import { server } from "./mocks/server"
 const client = new DataverseClient({ url: BASE_URL })
 const API = `${BASE_URL}/api/data/v9.2`
 
-const Address = table(client, "addresses", {
-  id: primaryKey("addressid"),
-  street: string("street_Address"),
-  zip: number("zip_code"),
+const Address = new DataverseTable({
+  client, entitySetName: "addresses", logicalName: "addresses",
+  fields: {
+    id: primaryKey("addressid"),
+    street: string("street_Address"),
+    zip: number("zip_code"),
+  },
 })
 
 type AddressType = Infer<typeof Address>
 
-const Person = table(client, "people", {
-  pk: primaryKey("personid"),
-  name: string("fullname"),
-  age: number("person_age"),
-  active: boolean("active"),
-  dob: date("person_dob"),
-  gender: list("gender", ["M", "F"] as const),
-  primaryAddressId: lookupId("person_Address", () => Address),
-  primaryAddress: lookup("person_Address", () => Address),
-  addressIds: collectionIds("person_Address_person", () => Address),
-  addresses: collection("person_Address_person", () => Address),
+const Person = new DataverseTable({
+  client, entitySetName: "people", logicalName: "people",
+  fields: {
+    pk: primaryKey("personid"),
+    name: string("fullname"),
+    age: number("person_age"),
+    active: boolean("active"),
+    dob: date("person_dob"),
+    gender: list("gender", ["M", "F"] as const),
+    primaryAddressId: lookupId("person_Address", () => Address),
+    primaryAddress: lookup("person_Address", () => Address),
+    addressIds: collectionIds("person_Address_person", () => Address),
+    addresses: collection("person_Address_person", () => Address),
+  },
 })
 
 // --- Schema definition tests ---

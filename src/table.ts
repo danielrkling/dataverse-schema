@@ -25,51 +25,59 @@ export type QueryForTable<T> = {
   top?: number;
 };
 
+export type DataverseTableOptions<TProperties extends GenericProperties> = {
+  client: DataverseClient;
+  entitySetName: string;
+  logicalName: string;
+  fields: TProperties;
+};
+
 /**
  * Represents a Dataverse table (entity) and provides methods for CRUD, querying,
  * navigation properties, actions, functions, and bulk operations.
  *
- * Use the {@link table} factory function to create instances. All API calls go
- * through the provided {@link DataverseClient}.
+ * Create instances via the constructor with an options object.
+ * All API calls go through the provided {@link DataverseClient}.
  *
  * @template TProperties An object mapping property names to their field definitions.
  *
  * @example
  * const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
  *
- * const Account = table(client, "accounts", {
- *   id: primaryKey("accountid"),
- *   name: string("name"),
- *   revenue: number("revenue"),
- *   primaryContact: lookup("primarycontactid", () => Contact),
+ * const Account = new DataverseTable({
+ *   client,
+ *   entitySetName: "accounts",
+ *   logicalName: "account",
+ *   fields: {
+ *     id: primaryKey("accountid"),
+ *     name: string("name"),
+ *     revenue: number("revenue"),
+ *     primaryContact: lookup("primarycontactid", () => Contact),
+ *   },
  * });
  *
  * // Type-safe queries
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-export class Table<TProperties extends GenericProperties> extends Schema<
+export class DataverseTable<TProperties extends GenericProperties> extends Schema<
   Infer<TProperties>
 > {
   client: DataverseClient;
   fields: TProperties;
+  logicalName: string;
   kind = "table" as const;
   type = "table" as const;
 
   /**
-   * @param client An instance of the DataverseClient for all API operations.
-   * @param entitySetName The logical collection name of the Dataverse table (e.g. `"accounts"`).
-   * @param props An object mapping property names to field definitions.
+   * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
    */
-  constructor(
-    client: DataverseClient,
-    entitySetName: string,
-    props: TProperties,
-  ) {
-    super(entitySetName, null as Infer<TProperties>);
-    this.client = client;
-    this.name = entitySetName;
-    this.fields = props;
+  constructor(options: DataverseTableOptions<TProperties>) {
+    super(options.entitySetName, null as Infer<TProperties>);
+    this.client = options.client;
+    this.name = options.entitySetName;
+    this.logicalName = options.logicalName;
+    this.fields = options.fields;
   }
 
   getIssues(value: any, path: PropertyKey[] = []): StandardSchemaV1.Issue[] {
@@ -106,7 +114,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   async getRecord(id: DataverseKey): Promise<Infer<TProperties> | null> {
     return this.client
-      .getRecord(this.name, id, buildQuery(this as unknown as Table<GenericProperties>))
+      .getRecord(this.name, id, buildQuery(this as unknown as DataverseTable<GenericProperties>))
       .then((v) => this.transformValueFromDataverse(v));
   }
 
@@ -132,7 +140,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
     queryOptions?: QueryForTable<TProperties>,
   ): Promise<Infer<TProperties>[]> {
     return this.client
-      .getRecords(this.name, buildQuery(this as unknown as Table<GenericProperties>, queryOptions as QueryForTable<GenericProperties>))
+      .getRecords(this.name, buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>))
       .then((values) => values.map((v) => this.transformValueFromDataverse(v)));
   }
 
@@ -163,7 +171,7 @@ export class Table<TProperties extends GenericProperties> extends Schema<
           this.name,
           id,
           prop.name,
-          buildQuery(prop.table as Table<GenericProperties>, queryOptions as QueryForTable<GenericProperties>), // Note: buildQuery needs to handle related table schema
+          buildQuery(prop.table as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>), // Note: buildQuery needs to handle related table schema
         )
         .then(
           (v) =>
@@ -621,30 +629,30 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   pickProperties<TKeys extends keyof TProperties>(
     ...keys: TKeys[]
-  ): Table<Pick<TProperties, TKeys>> {
+  ): DataverseTable<Pick<TProperties, TKeys>> {
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => keys.includes(v[0] as any)),
     ) as Pick<TProperties, TKeys>;
-    return new Table(this.client, this.name, properties);
+    return new DataverseTable({ client: this.client, entitySetName: this.name, logicalName: this.logicalName, fields: properties });
   }
 
   /**
-   * Creates a new `Table` with the specified properties excluded.
+   * Creates a new `DataverseTable` with the specified properties excluded.
    *
    * @example
    * const WithoutSensitive = Person.omitProperties("ssn");
    */
   omitProperties<TKeys extends keyof TProperties>(
     ...keys: TKeys[]
-  ): Table<Omit<TProperties, TKeys>> {
+  ): DataverseTable<Omit<TProperties, TKeys>> {
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => !keys.includes(v[0] as any)),
     ) as Omit<TProperties, TKeys>;
-    return new Table(this.client, this.name, properties);
+    return new DataverseTable({ client: this.client, entitySetName: this.name, logicalName: this.logicalName, fields: properties });
   }
 
   /**
-   * Creates a new `Table` with additional properties appended.
+   * Creates a new `DataverseTable` with additional properties appended.
    *
    * @example
    * const Extended = Account.appendProperties({
@@ -654,49 +662,21 @@ export class Table<TProperties extends GenericProperties> extends Schema<
    */
   appendProperties<TAppendedProperties extends GenericProperties>(
     properties: TAppendedProperties,
-  ): Table<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
-    return new Table(this.client, this.name, {
+  ): DataverseTable<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
+    return new DataverseTable({ client: this.client, entitySetName: this.name, logicalName: this.logicalName, fields: {
       ...this.fields,
       ...properties,
-    } as any);
+    } as any});
   }
 
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
   T!: Infer<TProperties>;
 }
 
-/**
- * Creates a new {@link Table} instance bound to a Dataverse entity set.
- * This is the primary entry point for defining table schemas.
- *
- * @param client The {@link DataverseClient} instance used for all API calls.
- * @param name The logical collection name of the entity (e.g. `"accounts"`).
- * @param properties An object mapping property names to field definitions (`primaryKey`, `string`, `number`, `lookup`, `collection`, etc.).
- *
- * @example
- * const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
- *
- * const Contact = table(client, "contacts", {
- *   id: primaryKey("contactid"),
- *   fullName: string("fullname"),
- *   email: string("emailaddress1"),
- *   age: number("age"),
- * });
- *
- * // Type-safe CRUD
- * const record = await Contact.getRecord("guid");
- * console.log(record.fullName); // string
- */
-export function table<TProperties extends GenericProperties>(
-  client: DataverseClient,
-  name: string,
-  properties: TProperties,
-): Table<TProperties> {
-  return new Table(client, name, properties);
-}
+
 
 function buildQuery(
-  table: Table<GenericProperties>,
+  table: DataverseTable<GenericProperties>,
   q?: QueryForTable<GenericProperties>,
 ): string {
   return query({
@@ -712,23 +692,23 @@ function buildQuery(
   });
 }
 
-function buildSelect(table: Table<GenericProperties>): string {
+function buildSelect(table: DataverseTable<GenericProperties>): string {
   return Object.values(table.fields)
-    .filter((v) => v.kind === "value" || v.type === "lookupId" || v.type==="file")
-    .map((v) =>v.fromDataverseName)
+    .filter((v: any) => v.kind === "value" || v.type === "lookupId" || v.type==="file")
+    .map((v: any) =>v.fromDataverseName)
     .join(",");
 }
 
-function buildExpand(table: Table<GenericProperties>, depth = 0): string {
+function buildExpand(table: DataverseTable<GenericProperties>, depth = 0): string {
   if (depth > 3) return "";
   return Object.values(table.fields)
     .filter(
-      (v) =>
+      (v: any) =>
         v.kind === "navigation" &&
         v.type !== "lookupId" &&
         v.type !== "collectionIds",
     )
-    .map((v) => {
+    .map((v: any) => {
       const navProp = v as CollectionProperty<any> | LookupProperty<any>;
       const innerSelect = buildSelect(navProp.table);
       const innerExpand = buildExpand(navProp.table, depth + 1);

@@ -1,5 +1,5 @@
 import { Schema } from "./schema";
-import { Table } from "./table";
+import { DataverseTable } from "./table";
 import { GenericProperties, GetTable, GUID, Infer } from "./types";
 import { parseDateOnly, toDateOnly } from "./util";
 import { isType } from "./validators";
@@ -191,7 +191,7 @@ export class FileField extends Schema<string> {
  * @param name The Dataverse logical name of the column (e.g. `"is_active"`).
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   isActive: boolean("is_active"),
  * });
  * // Infer<typeof table>["isActive"] → boolean
@@ -206,7 +206,7 @@ export function boolean(name: string) {
  * @param name The Dataverse logical name of the column (e.g. `"person_age"`).
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   age: number("person_age"),
  * });
  * // Infer<typeof table>["age"] → number
@@ -221,7 +221,7 @@ export function number(name: string) {
  * @param name The Dataverse logical name of the column.
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   age: nullableNumber("person_age"),
  * });
  * // Infer<typeof table>["age"] → number | null
@@ -236,7 +236,7 @@ export function nullableNumber(name: string) {
  * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   name: string("fullname"),
  * });
  * // Infer<typeof table>["name"] → string
@@ -251,7 +251,7 @@ export function string(name: string) {
  * @param name The Dataverse logical name of the column.
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   middleName: nullableString("middlename"),
  * });
  * // Infer<typeof table>["middleName"] → string | null
@@ -266,7 +266,7 @@ export function nullableString(name: string) {
  * @param name The Dataverse logical name of the primary key column (e.g. `"contactid"`).
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   id: primaryKey("contactid"),
  * });
  * // Infer<typeof table>["id"] → `${string}-${string}-${string}-${string}-${string}`
@@ -282,7 +282,7 @@ export function primaryKey(name: string) {
  * @param list The array of allowed string or numeric values.
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   gender: list("gendercode", [1, 2]),
  * });
  * // Infer<typeof table>["gender"] → 1 | 2 | null
@@ -297,7 +297,7 @@ export function list<T extends string | number>(name: string, list: Array<T>) {
  * @param name The Dataverse logical name of the column.
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   createdAt: datetime("createdon"),
  * });
  * // Infer<typeof table>["createdAt"] → Date
@@ -312,7 +312,7 @@ export function datetime(name: string) {
  * @param name The Dataverse logical name of the column.
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   birthDate: date("birthdate"),
  * });
  * // Infer<typeof table>["birthDate"] → Date
@@ -346,7 +346,7 @@ export function nullableDateTime(name: string){
  * @param name The Dataverse logical name of the column.
  *
  * @example
- * const table = defineTable({
+ * const table = new DataverseTable({
  *   statusLabel: formatted("statuscode"),
  * });
  */
@@ -376,7 +376,7 @@ export class LookupIdProperty extends Schema<GUID | null> {
   kind = "navigation" as const;
   type = "lookupId" as const;
   navigationName: string;
-  #getTable: GetTable<Table<GenericProperties>>;
+  #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable) {
     super(name, null);
@@ -386,12 +386,12 @@ export class LookupIdProperty extends Schema<GUID | null> {
     this.toDataverseName = `${this.name}@odata.bind`
   }
 
-  #table: Table<{ id: PrimaryKeyField }> | undefined;
-  get table(): Table<{ id: PrimaryKeyField }> {
+  #table: DataverseTable<{ id: PrimaryKeyField }> | undefined;
+  get table(): DataverseTable<{ id: PrimaryKeyField }> {
     if (!this.#table) {
       const table = this.#getTable();
       const { property } = table.getPrimaryKey();
-      this.#table = new Table(table.client, table.name, { id: property });
+      this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
   }
@@ -411,19 +411,19 @@ export class CollectionProperty<
 > extends Schema<Infer<TProperties>[]> {
   kind = "navigation" as const;
   type = "collection" as const;
-  #getTable: GetTable<Table<GenericProperties>>;
+  #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable<Table<TProperties>>) {
+  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>) {
     super(name, []);
-    this.#getTable = getTable as unknown as GetTable<Table<GenericProperties>>;
+    this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
     this.check((v) =>
       !Array.isArray(v) ? "value is not an array" : undefined,
     );
   }
 
-  #table: Table<GenericProperties> | undefined;
-  get table(): Table<TProperties> {
-    return (this.#table ??= this.#getTable()) as unknown as Table<TProperties>;
+  #table: DataverseTable<GenericProperties> | undefined;
+  get table(): DataverseTable<TProperties> {
+    return (this.#table ??= this.#getTable()) as unknown as DataverseTable<TProperties>;
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties>[] {
@@ -462,7 +462,7 @@ export class CollectionProperty<
  */
 export function collection<TProperties extends GenericProperties>(
   name: string,
-  getTable: GetTable<Table<TProperties>>,
+  getTable: GetTable<DataverseTable<TProperties>>,
 ) {
   return new CollectionProperty(name, getTable);
 }
@@ -470,7 +470,7 @@ export function collection<TProperties extends GenericProperties>(
 export class CollectionIdsProperty extends Schema<GUID[]> {
   kind = "navigation" as const;
   type = "collectionIds" as const;
-  #getTable: GetTable<Table<GenericProperties>>;
+  #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable) {
     super(name, []);
@@ -480,12 +480,12 @@ export class CollectionIdsProperty extends Schema<GUID[]> {
     );
   }
 
-  #table: Table<{ id: PrimaryKeyField }> | undefined;
-  get table(): Table<{ id: PrimaryKeyField }> {
+  #table: DataverseTable<{ id: PrimaryKeyField }> | undefined;
+  get table(): DataverseTable<{ id: PrimaryKeyField }> {
     if (!this.#table) {
       const table = this.#getTable();
       const { property } = table.getPrimaryKey();
-      this.#table = new Table(table.client, table.name, { id: property });
+      this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
   }
@@ -550,16 +550,16 @@ export class LookupProperty<
 > extends Schema<Infer<TProperties> | null> {
   kind = "navigation" as const;
   type = "lookup" as const;
-  #getTable: GetTable<Table<GenericProperties>>;
+  #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable<Table<TProperties>>) {
+  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>) {
     super(name, null);
-    this.#getTable = getTable as unknown as GetTable<Table<GenericProperties>>;
+    this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
   }
 
-  #table: Table<GenericProperties> | undefined;
-  get table(): Table<TProperties> {
-    return (this.#table ??= this.#getTable()) as unknown as Table<TProperties>;
+  #table: DataverseTable<GenericProperties> | undefined;
+  get table(): DataverseTable<TProperties> {
+    return (this.#table ??= this.#getTable()) as unknown as DataverseTable<TProperties>;
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties> | null {
@@ -592,7 +592,7 @@ export class LookupProperty<
  */
 export function lookup<TProperties extends GenericProperties>(
   name: string,
-  getTable: GetTable<Table<TProperties>>,
+  getTable: GetTable<DataverseTable<TProperties>>,
 ) {
   return new LookupProperty(name, getTable);
 }

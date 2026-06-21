@@ -2,13 +2,13 @@ import { expect, test } from "vitest"
 import {
   string, nullableString, number, nullableNumber, boolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted,
-  collection, collectionIds, lookupId, lookup, table,
+  collection, collectionIds, lookupId, lookup, DataverseTable,
 } from "../src"
 import { required } from "../src/validators"
 import { DataverseClient } from "../src/client"
 
 const testClient = new DataverseClient({ url: "https://test.crm.dynamics.com" })
-const testRefTable = table(testClient, "contacts", { id: primaryKey("contactid") })
+const testRefTable = new DataverseTable({ client: testClient, entitySetName: "contacts", logicalName: "contacts", fields: { id: primaryKey("contactid") } })
 
 test("string field type and defaults", () => {
   const f = string("fullname")

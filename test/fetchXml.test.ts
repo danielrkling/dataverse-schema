@@ -1,29 +1,38 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
 import { fetchXml, condition, filterAnd, filterOr, equals, greaterThan, and, asc, desc, Infer } from "../src"
-import { table, primaryKey, string, number, boolean } from "../src"
+import { DataverseTable, primaryKey, string, number, boolean } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 
 const client = new DataverseClient({ url: BASE_URL })
 
-const Address = table(client, "addresses", {
-  id: primaryKey("addressid"),
-  street: string("street_Address"),
-  zip: number("zip_code"),
+const Address = new DataverseTable({
+  client, entitySetName: "addresses", logicalName: "addresses",
+  fields: {
+    id: primaryKey("addressid"),
+    street: string("street_Address"),
+    zip: number("zip_code"),
+  },
 })
 
-const Person = table(client, "people", {
-  pk: primaryKey("personid"),
-  name: string("fullname"),
-  age: number("person_age"),
-  active: boolean("active"),
+const Person = new DataverseTable({
+  client, entitySetName: "people", logicalName: "people",
+  fields: {
+    pk: primaryKey("personid"),
+    name: string("fullname"),
+    age: number("person_age"),
+    active: boolean("active"),
+  },
 })
 
-const Account = table(client, "accounts", {
-  id: primaryKey("accountid"),
-  name: string("name"),
-  revenue: number("revenue"),
-  city: string("address1_city"),
+const Account = new DataverseTable({
+  client, entitySetName: "accounts", logicalName: "accounts",
+  fields: {
+    id: primaryKey("accountid"),
+    name: string("name"),
+    revenue: number("revenue"),
+    city: string("address1_city"),
+  },
 })
 
 // --- Type inference tests ---
@@ -131,9 +140,12 @@ test("[docs] between operator with values", () => {
 // --- MS Docs Example: Join tables ---
 
 test("[docs] join with link-entity", () => {
-  const Contact = table(client, "contacts", {
-    id: primaryKey("contactid"),
-    fullname: string("fullname"),
+  const Contact = new DataverseTable({
+    client, entitySetName: "contacts", logicalName: "contacts",
+    fields: {
+      id: primaryKey("contactid"),
+      fullname: string("fullname"),
+    },
   })
   const q = fetchXml(Account).top(5).select(f => ({ name: f.name }))
     .innerJoin(Contact, "id", "id", (sub) =>
