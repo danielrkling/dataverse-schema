@@ -1,4 +1,4 @@
-import { DataverseTable, DataverseInterestTable } from "./table";
+import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { OrderSpec } from "./util";
 import { FilterExpr } from "./filter";
@@ -216,7 +216,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     }
 
     /**
-     * Auto-joins through a DataverseInterestTable intersect table, detecting
+     * Auto-joins through a DataverseIntersectTable intersect table, detecting
      * which side matches the current query and which is the target.
      * Creates both join legs (source → intersect, intersect → target) so the
      * subquery receives the target table's builder directly.
@@ -229,28 +229,22 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      *   )
      */
     public through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        intersectTable: DataverseInterestTable<TProps, T2>,
+        intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: EntityQueryBuilder<T2, {}>) => EntityQueryBuilder<T2, TJoinResult>,
     ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
     public through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        intersectTable: DataverseInterestTable<T1, TProps>,
+        intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: EntityQueryBuilder<T1, {}>) => EntityQueryBuilder<T1, TJoinResult>,
     ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
     public through(
-        intersectTable: DataverseInterestTable<any, any>,
+        intersectTable: DataverseIntersectTable<any, any>,
         subquery: (q: EntityQueryBuilder<any, {}>) => EntityQueryBuilder<any, Record<string, any>>,
     ): EntityQueryBuilder<TProps, any> {
-        let sourceFrom: string;
-        let targetFrom: string;
         let targetTable: DataverseTable<any>;
 
         if (intersectTable.table1 === this._table) {
-            sourceFrom = "table1";
-            targetFrom = "table2";
             targetTable = intersectTable.table2;
         } else if (intersectTable.table2 === this._table) {
-            sourceFrom = "table2";
-            targetFrom = "table1";
             targetTable = intersectTable.table1;
         } else {
             throw new Error(
@@ -261,28 +255,24 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         const targetBuilder = new EntityQueryBuilder(targetTable);
         subquery(targetBuilder);
 
-        const targetToKey = targetTable.getPrimaryKey().key;
-        const targetFromFieldName = intersectTable.fields[targetFrom].name;
-        const targetToFieldName = targetTable.fields[targetToKey].name;
+        const pkName = this._table.getPrimaryKey().property.name;
+        const targetPkName = targetTable.getPrimaryKey().property.name;
 
-        const intersectBuilder = new EntityQueryBuilder(intersectTable);
+        const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
+        const intersectBuilder = new EntityQueryBuilder(stubTable);
         intersectBuilder._links.push({
             name: targetTable.name,
-            from: targetFromFieldName,
-            to: targetToFieldName,
+            from: targetPkName,
+            to: targetPkName,
             alias: `auto_link_${++this._aliasCounter}`,
             linkType: "inner",
             builder: targetBuilder,
         });
 
-        const sourceToKey = this._table.getPrimaryKey().key;
-        const sourceFromFieldName = intersectTable.fields[sourceFrom].name;
-        const sourceToFieldName = this._table.fields[sourceToKey].name;
-
         this._links.push({
             name: intersectTable.name,
-            from: sourceFromFieldName,
-            to: sourceToFieldName,
+            from: pkName,
+            to: pkName,
             alias: `auto_link_${++this._aliasCounter}`,
             linkType: "inner",
             builder: intersectBuilder,

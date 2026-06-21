@@ -1,6 +1,6 @@
 import { StandardSchemaV1 } from "@standard-schema/spec";
 import { DataverseClient } from "./client"; // Assuming this is the path to your client
-import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, primaryKey, lookupId } from "./fields";
+import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField } from "./fields";
 function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
   const params = new URLSearchParams()
   if (opts.select) params.set("$select", opts.select)
@@ -729,55 +729,43 @@ function buildExpand(table: DataverseTable<GenericProperties>, depth = 0): strin
 /**
  * Represents a Dataverse many-to-many intersect (association) table.
  *
- * Auto-generates a primary key and two lookup-id fields for the related tables.
- * When used in a FetchXML {@link EntityQueryBuilder.join join}, the `intersect="true"`
- * attribute is automatically applied.
+ * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.through through()}
+ * method. It does NOT extend {@link DataverseTable} — it is not a queryable entity on its own.
  *
  * @example
- * const AccountContact = new DataverseInterestTable("accountcontact", Account, Contact);
+ * const AccountContact = new DataverseIntersectTable("accountcontact", Account, Contact);
  *
- * // Use in FetchXML — intersect is auto-detected:
+ * // Use in FetchXML via through():
  * fetchXml(Account)
- *   .innerJoin(AccountContact, "table1", "id", sub =>
- *     sub.innerJoin(Contact, "id", "table2", sub2 =>
- *       sub2.select(f => ({ name: f.name }))
- *     )
+ *   .select(f => ({ name: f.name }))
+ *   .through(AccountContact, sub =>
+ *     sub.select(f => ({ accountName: f.name }))
  *   )
  */
-export class DataverseInterestTable<
+export class DataverseIntersectTable<
   T1 extends GenericProperties,
   T2 extends GenericProperties,
-> extends DataverseTable<any> {
+> {
   /** Marks this table as an intersect table for FetchXML joins. */
   readonly intersect = true
 
+  /** The intersect table entity set name. */
+  readonly name: string
+
   /** The first related table. */
-  table1: DataverseTable<T1>
+  readonly table1: DataverseTable<T1>
   /** The second related table. */
-  table2: DataverseTable<T2>
+  readonly table2: DataverseTable<T2>
 
   constructor(
     name: string,
     table1: DataverseTable<T1>,
     table2: DataverseTable<T2>,
   ) {
-    const pk1 = table1.getPrimaryKey().property
-    const pk2 = table2.getPrimaryKey().property
-
-    const fields: Record<string, any> = {
-      id: primaryKey(`${name}id`),
-      table1: lookupId(pk1.name, () => table1),
-      table2: lookupId(pk2.name, () => table2),
-    }
-
-    super({
-      client: table1.client,
-      entitySetName: name,
-      logicalName: name,
-      fields: fields as any,
-    })
-
+    this.name = name
     this.table1 = table1
     this.table2 = table2
   }
 }
+
+

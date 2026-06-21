@@ -1,7 +1,7 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
 import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, asc, desc, Infer } from "../src"
-import { DataverseTable, DataverseInterestTable, primaryKey, string, number, boolean } from "../src"
+import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 
 const client = new DataverseClient({ url: BASE_URL })
@@ -426,62 +426,20 @@ test("orderby raw entityname overload still works", () => {
   expect(xml).toContain(`<order entityname='parentaccount' attribute='name' />`)
 })
 
-// --- DataverseInterestTable (many-to-many intersect) ---
+// --- DataverseIntersectTable (many-to-many intersect) ---
 
-test("DataverseInterestTable basic properties", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
+test("DataverseIntersectTable basic properties", () => {
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   expect(PersonAccount.intersect).toBe(true)
   expect(PersonAccount.name).toBe("personaccount")
   expect(PersonAccount.table1).toBe(Person)
   expect(PersonAccount.table2).toBe(Account)
 })
 
-test("DataverseInterestTable join auto-sets intersect=true", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
-  const q = fetchXml(Person)
-    .select(f => ({ name: f.name }))
-    .innerJoin(PersonAccount, "table1", "pk", sub =>
-      sub.innerJoin(Account, "id", "table2", sub2 =>
-        sub2.select(f => ({ accountName: f.name }))
-      )
-    )
-  const xml = q.toXml()
-  expect(xml).toContain(`intersect="true"`)
-  expect(xml).toContain(`name="personaccount"`)
-  expect(xml).toContain(`from="personid"`)
-  expect(xml).toContain(`to="personid"`)
-  expect(xml).toContain(`link-type="inner"`)
-})
-
-test("DataverseInterestTable join with explicit intersect=false overrides", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
-  const q = fetchXml(Person)
-    .select(f => ({ name: f.name }))
-    .join("inner", PersonAccount, "table1", "pk", sub =>
-      sub.select(f => ({ addr: f.table1 }))
-    , false)
-  const xml = q.toXml()
-  expect(xml).not.toContain(`intersect="true"`)
-})
-
-test("DataverseInterestTable nested join through intersect table", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
-  const q = fetchXml(Person)
-    .select(f => ({ name: f.name }))
-    .innerJoin(PersonAccount, "table1", "pk", sub =>
-      sub.innerJoin(Account, "id", "table2", sub2 =>
-        sub2.select(f => ({ accountName: f.name }))
-      )
-    )
-  const xml = q.toXml()
-  expect(xml).toContain(`intersect="true"`)
-  expect(xml).toContain(`<attribute name="name" alias="accountName" />`)
-})
-
-// --- through() helper for DataverseInterestTable ---
+// --- through() helper ---
 
 test("through auto-joins intersect table with nested join", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Person)
     .select(f => ({ name: f.name }))
     .through(PersonAccount, sub =>
@@ -497,7 +455,7 @@ test("through auto-joins intersect table with nested join", () => {
 })
 
 test("through works when source table is table2 of intersect", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Account)
     .select(f => ({ name: f.name }))
     .through(PersonAccount, sub =>
@@ -515,14 +473,14 @@ test("through throws if table is not related to intersect", () => {
     client, entitySetName: "foo", logicalName: "foo",
     fields: { id: primaryKey("fooid") },
   })
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   expect(() =>
     fetchXml(unrelatedTable).through(PersonAccount, sub => sub)
   ).toThrow("not related")
 })
 
 test("through narrows result type to selected fields", () => {
-  const PersonAccount = new DataverseInterestTable("personaccount", Person, Account)
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Person)
     .select(f => ({ name: f.name }))
     .through(PersonAccount, sub =>
