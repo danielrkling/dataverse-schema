@@ -96,19 +96,19 @@ test("orderby preserves result type", () => {
 
 test("groupby merges grouped fields and aggregate types", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }), f => ({ total: sum(f.age), average: avg(f.age) }))
+    .groupby(f => [f.age], f => ({ total: sum(f.age), average: avg(f.age) }))
   expectTypeOf(q.execute).returns.resolves.items.toMatchTypeOf<{ age: number; total: number; average: number }>()
 })
 
 test("groupby typed max aggregate with grouped field", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ name: f.name }), f => ({ latest: max(f.age) }))
+    .groupby(f => [f.name], f => ({ latest: max(f.age) }))
   expectTypeOf(q.execute).returns.resolves.items.toMatchTypeOf<{ name: string; latest: number }>()
 })
 
 test("groupby without aggregate returns grouped fields only", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }))
+    .groupby(f => [f.age])
   expectTypeOf(q.execute).returns.resolves.items.toMatchTypeOf<{ age: number }>()
 })
 
@@ -264,56 +264,56 @@ test("multiple orderby calls accumulate", () => {
 
 test("groupby single field with sum aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }), f => ({ total: sum(f.age) }))
+    .groupby(f => [f.age], f => ({ total: sum(f.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with sum as total))")
 })
 
 test("groupby single field with avg aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }), f => ({ average: avg(f.age) }))
+    .groupby(f => [f.age], f => ({ average: avg(f.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with average as average))")
 })
 
 test("groupby single field with min aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }), f => ({ minimum: min(f.age) }))
+    .groupby(f => [f.age], f => ({ minimum: min(f.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with min as minimum))")
 })
 
 test("groupby single field with max aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }), f => ({ maximum: max(f.age) }))
+    .groupby(f => [f.age], f => ({ maximum: max(f.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with max as maximum))")
 })
 
 test("groupby with count aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }), f => ({ cnt: count() }))
+    .groupby(f => [f.age], f => ({ cnt: count() }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate($count as cnt))")
 })
 
 test("groupby multiple fields with sum aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age, name: f.name }), f => ({ total: sum(f.age) }))
+    .groupby(f => [f.age, f.name], f => ({ total: sum(f.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age,fullname),aggregate(person_age with sum as total))")
 })
 
 test("groupby multiple fields with multiple aggregates", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ name: f.name }), f => ({ total: sum(f.age), average: avg(f.age) }))
+    .groupby(f => [f.name], f => ({ total: sum(f.age), average: avg(f.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((fullname),aggregate(person_age with sum as total,person_age with average as average))")
 })
 
 test("groupby empty callback aggregates without grouping", () => {
   const q = fetchOdata(Person)
-    .groupby(() => ({}), f => ({ total: sum(f.age) }))
+    .groupby(() => [], f => ({ total: sum(f.age) }))
     .toString()
   expect(q).toContain("$apply=aggregate(person_age with sum as total)")
   expect(q).not.toContain("groupby")
@@ -321,9 +321,35 @@ test("groupby empty callback aggregates without grouping", () => {
 
 test("groupby without aggregate callback", () => {
   const q = fetchOdata(Person)
-    .groupby(f => ({ age: f.age }))
+    .groupby(f => [f.age])
     .toString()
   expect(q).toContain("$apply=groupby((person_age))")
+})
+
+test("groupby with nav property path and includeAnnotations", () => {
+  const Contact = new DataverseTable({
+    client, entitySetName: "contacts", logicalName: "contact",
+    fields: {
+      id: primaryKey("contactid"),
+      fullname: string("fullname"),
+    },
+  })
+
+  const Account = new DataverseTable({
+    client, entitySetName: "accounts", logicalName: "account",
+    fields: {
+      id: primaryKey("accountid"),
+      name: string("name"),
+      revenue: number("revenue"),
+      primaryContactId: lookupId("primarycontactid", () => Contact),
+      primaryContact: lookup("primarycontactid", () => Contact),
+    },
+  })
+
+  const q = fetchOdata(Account)
+    .groupby(f => [f.primaryContact.fullname], f => ({ total: sum(f.revenue) }))
+    .toString()
+  expect(q).toContain("$apply=groupby((primarycontactid/fullname),aggregate(revenue with sum as total))")
 })
 
 // --- Filter helpers ---

@@ -9,7 +9,7 @@ import { getName } from "./util"
  * Phantom branded string that carries the inferred TypeScript type of a Dataverse field.
  * At runtime it is just a string (the OData field name).
  */
-export type FieldRef<T> = string & { __fieldType: T }
+export type FieldRef<T, K extends string = string> = string & { __fieldType: T; __key: K }
 
 /**
  * Represents a server-side aggregation expression usable in OData `$apply` and FetchXML.
@@ -113,7 +113,13 @@ type ODataLookupNavProxy<P extends GenericProperties> = {
 type ODataFieldProxy<T extends GenericProperties> = {
   [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P>
     : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P>
-    : FieldRef<Infer<T[K]>>
+    : FieldRef<Infer<T[K]>, K extends string ? K : never>
+}
+
+/** Extract a record type from an array of `FieldRef` values, using their phantom keys. */
+type GroupByFields<TFields extends FieldRef<any, string>[]> = {
+  [P in TFields[number] as P extends FieldRef<any, infer K> ? K : never]:
+    P extends FieldRef<infer V, any> ? V : never
 }
 
 /**
@@ -301,40 +307,39 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   /**
    * Adds a `$apply` expression with optional grouping and aggregations.
    *
-   * @param selectFields Callback returning a record of field aliases → field refs to group by.
-   *   Pass `() => ({})` to aggregate the whole table without grouping.
+   * @param selectFields Callback returning the field refs to group by.
+   *   Pass `() => []` to aggregate the whole table without grouping.
    * @param aggFields Optional callback returning a record of alias → Aggregation.
    *
    * @example
    * fetchOdata(Person).groupby(
-   *   f => ({ age: f.age }),
+   *   f => [f.age],
    *   f => ({ total: sum(f.age) }),
    * );
    *
    * @example
    * // Aggregate without grouping:
    * fetchOdata(Person).groupby(
-   *   () => ({}),
+   *   () => [],
    *   f => ({ total: sum(f.age) }),
    * );
    *
    * @example
    * // Just groupby without aggregates:
-   * fetchOdata(Person).groupby(f => ({ age: f.age }));
+   * fetchOdata(Person).groupby(f => [f.age]);
    */
-  groupby<TFields extends Record<string, FieldRef<any>>, A extends Record<string, Aggregation>>(
+  groupby<const TFields extends FieldRef<any, string>[], A extends Record<string, Aggregation>>(
     selectFields: (f: ODataFieldProxy<T>) => TFields,
     aggFields: (f: ODataFieldProxy<T>) => A,
-  ): ODataQuery<T, { [P in keyof TFields]: TFields[P] extends FieldRef<infer V> ? V : never } & { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number }>
-  groupby<TFields extends Record<string, FieldRef<any>>>(
+  ): ODataQuery<T, GroupByFields<TFields> & { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number }>
+  groupby<const TFields extends FieldRef<any, string>[]>(
     selectFields: (f: ODataFieldProxy<T>) => TFields,
-  ): ODataQuery<T, { [P in keyof TFields]: TFields[P] extends FieldRef<infer V> ? V : never }>
+  ): ODataQuery<T, GroupByFields<TFields>>
   groupby(
-    selectFields: (f: ODataFieldProxy<T>) => Record<string, any>,
+    selectFields: (f: ODataFieldProxy<T>) => any[],
     aggFields?: (f: ODataFieldProxy<T>) => Record<string, Aggregation>,
   ): ODataQuery<T, any> {
-    const groupByRecord = selectFields(this._proxy as any)
-    const groupByNames = Object.values(groupByRecord) as string[]
+    const groupByNames = selectFields(this._proxy as any) as string[]
     const aggStrings = aggFields
       ? Object.entries(aggFields(this._proxy as any)).map(([alias, agg]) => agg.toOdata(alias))
       : []
