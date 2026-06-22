@@ -605,7 +605,46 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
    */
   public async execute(): Promise<TResult[]> {
       const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+      const aliasMap = this._buildAliasMap();
+      if (aliasMap.size > 0) {
+        return raw.map((v: any) => {
+            const result: Record<string, any> = {};
+            for (const [alias, transform] of aliasMap) {
+                if (alias in v) {
+                    result[alias] = transform(v[alias]);
+                }
+            }
+            return result as TResult;
+        });
+      }
       return raw.map((v: any) => this._table.transformValueFromDataverse(v)) as TResult[];
+  }
+
+  private _buildAliasMap(): Map<string, (val: any) => any> {
+      const map = new Map<string, (val: any) => any>();
+      this._collectAliases(this, map);
+      return map;
+  }
+
+  private _collectAliases(
+      builder: EntityQueryBuilder<any, any>,
+      map: Map<string, (val: any) => any>,
+  ): void {
+      for (const attr of builder._attributes) {
+          const fields = builder._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any }>;
+          const entry = Object.entries(fields).find(
+              ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
+          );
+          if (entry) {
+              const fieldDef = entry[1];
+              map.set(attr.alias, (val: any) => fieldDef.transformValueFromDataverse(val));
+          } else {
+              map.set(attr.alias, (val: any) => val);
+          }
+      }
+      for (const link of builder._links) {
+          this._collectAliases(link.builder, map);
+      }
   }
 }
 

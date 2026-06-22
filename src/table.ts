@@ -750,7 +750,13 @@ export class DataverseIntersectTable<
   /** Marks this table as an intersect table for FetchXML joins. */
   readonly intersect = true
 
-  /** The intersect table entity set name. */
+  /**
+   * The intersect table name used in FetchXML `<link-entity name="...">`.
+   * This is the Dataverse entity logical name (e.g. `"accountcontact"`).
+   * It is NOT an entity set name (no pluralization) — unlike {@link DataverseTable.entitySetName}
+   * and {@link DataverseTable.logicalName}, this single `name` serves both roles
+   * for intersect table references in FetchXML join syntax.
+   */
   readonly name: string
 
   /** The first related table. */

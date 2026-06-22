@@ -250,15 +250,20 @@ test("table.deletePropertyValue deletes a value property", async () => {
   expect(id).toBe("test-id")
 })
 
-test.skip("table.transformValueFromDataverse maps field names", () => {
+test("table.transformValueFromDataverse maps field names", () => {
   const result = Person.transformValueFromDataverse({
     personid: "id-1",
     fullname: "Alice",
     person_age: 28,
+    person_dob: "2024-01-15",
   })
   expect(result.pk).toBe("id-1")
   expect(result.name).toBe("Alice")
   expect(result.age).toBe(28)
+  expect(result.dob).toBeInstanceOf(Date)
+  expect(result.dob?.getUTCFullYear()).toBe(2024)
+  expect(result.dob?.getUTCMonth()).toBe(0)
+  expect(result.dob?.getUTCDate()).toBe(15)
 })
 
 test("table.transformValueFromDataverse handles null", () => {

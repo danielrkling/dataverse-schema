@@ -10,8 +10,10 @@ import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, Infer,
   ThisFiscalPeriod, ThisFiscalYear, InFiscalPeriodAndYear,
   LastXHours, LastXMonths, LastXWeeks, LastXYears,
 } from "../src"
-import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean } from "../src"
+import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, datetime } from "../src"
 import { BASE_URL } from "./mocks/handlers"
+import { server } from "./mocks/server"
+import { http, HttpResponse } from "msw"
 
 const client = new DataverseClient({ url: BASE_URL })
 
@@ -564,4 +566,81 @@ test("orderby in innerJoin subquery stays inside link-entity", () => {
   expect(xml).toContain(`<link-entity name="address"`)
   expect(xml).toContain(`<order attribute='zip_code' descending='true' />`)
   expect(xml).not.toContain(`entityname='auto_link_1'`)
+})
+
+test("execute returns transformed records (no select)", async () => {
+  const q = fetchXml(Account)
+  const results = await q.execute()
+  expect(results).toHaveLength(2)
+  expect(results[0].name).toBe("Test Corp")
+  expect(results[0].revenue).toBe(1000000)
+  expect(results[0]).toHaveProperty("id")
+})
+
+test("execute with select returns transformed records", async () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name, revenue: f.revenue }))
+  const results = await q.execute()
+  expect(results).toHaveLength(2)
+  expect(results[0].name).toBe("Test Corp")
+  expect(results[0].revenue).toBe(1000000)
+})
+
+test("execute transforms date fields via alias map", async () => {
+  const Log = new DataverseTable({
+    client, entitySetName: "logs", logicalName: "log",
+    fields: {
+      id: primaryKey("logid"),
+      message: string("log_message"),
+      entryDate: datetime("log_entrydate"),
+    },
+  })
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/logs`, () =>
+      HttpResponse.json({
+        value: [{ logid: "id-1", msg: "Test entry", date: "2024-06-15T12:00:00Z" }],
+      })
+    ),
+  )
+  const q = fetchXml(Log).select(f => ({ msg: f.message, date: f.entryDate }))
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(results[0].msg).toBe("Test entry")
+  expect(results[0].date).toBeInstanceOf(Date)
+  expect(results[0].date?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
+})
+
+test("execute transforms joined date fields via alias map", async () => {
+  const Order = new DataverseTable({
+    client, entitySetName: "orders", logicalName: "order",
+    fields: {
+      id: primaryKey("orderid"),
+      orderDate: datetime("order_date"),
+      total: number("total_amount"),
+    },
+  })
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/accounts`, () =>
+      HttpResponse.json({
+        value: [{
+          accountid: "a1",
+          name: "Acme",
+          date: "2024-06-15T12:00:00Z",
+          total: 500,
+        }],
+      })
+    ),
+  )
+  const q = fetchXml(Account)
+    .select(f => ({ name: f.name }))
+    .join("inner", Order, "id", "id", sub =>
+      sub.select(f => ({ date: f.orderDate, total: f.total }))
+    )
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(results[0].name).toBe("Acme")
+  expect(results[0].date).toBeInstanceOf(Date)
+  expect(results[0].date?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
+  expect(results[0].total).toBe(500)
 })

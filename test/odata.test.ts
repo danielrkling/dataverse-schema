@@ -3,6 +3,8 @@ import { DataverseClient } from "../src/client"
 import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, sum, avg, min, max, count } from "../src"
 import { DataverseTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection, Infer } from "../src"
 import { BASE_URL } from "./mocks/handlers"
+import { server } from "./mocks/server"
+import { http, HttpResponse } from "msw"
 
 const client = new DataverseClient({ url: BASE_URL })
 
@@ -649,5 +651,32 @@ test("TripPin: compare age with column comparison", () => {
     .where(f => compare(f.age, "gt", f.firstName))
     .toString()
   expect(q).toContain("(person_age gt firstname)")
+})
+
+// --- Execute tests ---
+
+test("execute transforms datetime fields", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          active: true,
+          createdon: "2024-06-15T12:00:00Z",
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person).select("name", "age", "active", "createdOn")
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(results[0].name).toBe("John")
+  expect(results[0].age).toBe(30)
+  expect(results[0].active).toBe(true)
+  expect(results[0].createdOn).toBeInstanceOf(Date)
+  expect(results[0].createdOn?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
 })
 
