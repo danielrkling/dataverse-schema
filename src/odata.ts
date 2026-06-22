@@ -75,9 +75,17 @@ export function max(name: any, alias?: string): Aggregation<number> {
   return new Aggregation<number>("max", name, alias)
 }
 
-/** Count aggregation. `count()` or `count("myCount")`. */
-export function count(alias?: string): Aggregation<number> {
-  return new Aggregation<number>("count", undefined, alias)
+/** Count aggregation. `count()` for OData, `count(field)` or `count(field, alias)` for FetchXML. */
+export function count(alias?: string): Aggregation<number>
+export function count(field: string, alias?: string): Aggregation<number>
+export function count(fieldOrAlias?: string, alias?: string): Aggregation<number> {
+  if (fieldOrAlias === undefined) {
+    return new Aggregation<number>("count", undefined, alias)
+  }
+  if (alias !== undefined) {
+    return new Aggregation<number>("count", fieldOrAlias, alias)
+  }
+  return new Aggregation<number>("count", fieldOrAlias)
 }
 
 // --- OData Query Types ---

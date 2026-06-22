@@ -1,6 +1,7 @@
 import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { FilterExpr } from "./filter";
+import { Aggregation } from "./odata";
 
 type Simplify<T> = { [Key in keyof T]: T[Key] } & {};
 
@@ -378,75 +379,76 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
       return this;
   }
 
-    /** Adds a SUM aggregate. Marks the query as aggregate. */
-    public sum(field: keyof TProps, alias: string): this {
+    /**
+     * Adds grouping and aggregation to the FetchXML query.
+     * Mirrors the OData `groupby()` API using the same `sum()`, `avg()`, `min()`, `max()`, `count()` factory functions.
+     *
+     * @example
+     * // With grouping and aggregates:
+     * fetchXml(Account).groupby(
+     *   f => [f.city],
+     *   f => ({ total: sum(f.revenue), cnt: count(f.id) })
+     * )
+     *
+     * @example
+     * // Without grouping (aggregate all rows):
+     * fetchXml(Account).groupby(
+     *   () => [],
+     *   f => ({ total: sum(f.revenue) })
+     * )
+     *
+     * @example
+     * // Just grouping without aggregates:
+     * fetchXml(Account).groupby(f => [f.city])
+     */
+    public groupby<
+        const TFields extends (keyof TProps)[],
+        A extends Record<string, Aggregation>,
+    >(
+        selectFields: (f: { [K in keyof TProps]: K }) => TFields,
+        aggFields: (f: FieldProxy<TProps>) => A,
+    ): EntityQueryBuilder<TProps,
+        { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number } &
+        { [P in TFields[number]]: Infer<TProps[P]> }
+    >
+    public groupby<
+        const TFields extends (keyof TProps)[],
+    >(
+        selectFields: (f: { [K in keyof TProps]: K }) => TFields,
+    ): EntityQueryBuilder<TProps, { [P in TFields[number]]: Infer<TProps[P]> }>
+    public groupby(
+        selectFields: (f: any) => string[],
+        aggFields?: (f: any) => Record<string, Aggregation>,
+    ): EntityQueryBuilder<TProps, any> {
         this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, aggregate: 'sum' });
-        return this;
-    }
 
-    /** Adds an AVG aggregate. Marks the query as aggregate. */
-    public avg(field: keyof TProps, alias: string): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, aggregate: 'avg' });
-        return this;
-    }
+        const keyProxy = {} as Record<string, string>;
+        for (const key of Object.keys(this._table.fields)) {
+            keyProxy[key] = key;
+        }
+        const groupByKeys = selectFields(keyProxy);
 
-    /** Adds a MIN aggregate. Marks the query as aggregate. */
-    public min(field: keyof TProps, alias: string): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, aggregate: 'min' });
-        return this;
-    }
+        for (const key of groupByKeys) {
+            const fieldDef = (this._table.fields as Record<string, any>)[key];
+            if (fieldDef) {
+                this._attributes.push({ name: fieldDef.name, alias: key, groupby: true });
+            }
+        }
 
-    /** Adds a MAX aggregate. Marks the query as aggregate. */
-    public max(field: keyof TProps, alias: string): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, aggregate: 'max' });
-        return this;
-    }
+        if (aggFields) {
+            const aggs = aggFields(this._proxy);
+            for (const [alias, agg] of Object.entries(aggs)) {
+                if (agg.field) {
+                    this._attributes.push({
+                        name: agg.field,
+                        alias: alias,
+                        aggregate: agg.operation,
+                    });
+                }
+            }
+        }
 
-    /** Adds a COUNT aggregate. Marks the query as aggregate. */
-    public count(field: keyof TProps, alias: string): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, aggregate: 'count' });
-        return this;
-    }
-
-    /** Adds a COUNTCOLUMN aggregate with optional distinct flag. Marks the query as aggregate. */
-    public countColumn(field: keyof TProps, alias: string, distinct?: boolean): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, aggregate: 'countcolumn', distinct });
-        return this;
-    }
-
-    /** Adds a custom row aggregate. */
-    public rowAggregate(field: keyof TProps, alias: string, rowaggregate: string): this {
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, rowaggregate });
-        return this;
-    }
-
-    /** Adds a GROUP BY on a field. Marks the query as aggregate. */
-    public groupBy(field: keyof TProps, alias: string): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, groupby: true });
-        return this;
-    }
-
-    /** Adds a GROUP BY with date grouping (e.g. "day", "month", "year"). Marks the query as aggregate. */
-    public groupByDate(field: keyof TProps, alias: string, dategrouping: string): this {
-        this._isAggregate = true;
-        const fieldDef = this._table.fields[field];
-        this._attributes.push({ name: fieldDef.name, alias, groupby: true, dategrouping });
-        return this;
+        return this as any;
     }
 
     /** Sets the paging cookie for navigating paginated results. */

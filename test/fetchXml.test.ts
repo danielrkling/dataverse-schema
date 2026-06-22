@@ -9,6 +9,7 @@ import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, Infer,
   Between, NotBetween, On, Under, Above,
   ThisFiscalPeriod, ThisFiscalYear, InFiscalPeriodAndYear,
   LastXHours, LastXMonths, LastXWeeks, LastXYears,
+  sum, avg, min, max, count,
 } from "../src"
 import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, datetime } from "../src"
 import { BASE_URL } from "./mocks/handlers"
@@ -235,64 +236,42 @@ test("[docs] distinct results", () => {
 // --- MS Docs Example: Aggregate data ---
 
 test("[docs] aggregate functions on a column", () => {
-  const q = fetchXml(Account).aggregate()
-    .sum("revenue", "Total")
-    .count("revenue", "Count")
-    .countColumn("revenue", "ColumnCount")
-    .max("revenue", "Maximum")
-    .min("revenue", "Minimum")
-    .avg("revenue", "Average")
+  const q = fetchXml(Account).groupby(
+    () => [],
+    f => ({
+      Total: sum(f.revenue),
+      Count: count(f.revenue),
+      Maximum: max(f.revenue),
+      Minimum: min(f.revenue),
+      Average: avg(f.revenue),
+    })
+  )
   const xml = q.toXml()
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`aggregate='sum'`)
   expect(xml).toContain(`aggregate='count'`)
-  expect(xml).toContain(`aggregate='countcolumn'`)
   expect(xml).toContain(`aggregate='max'`)
   expect(xml).toContain(`aggregate='min'`)
-  expect(xml).toContain(`aggregate='avg'`)
+  expect(xml).toContain(`aggregate='average'`)
   expect(xml).toContain(`alias="Total"`)
   expect(xml).toContain(`alias="Count"`)
-  expect(xml).toContain(`alias="ColumnCount"`)
   expect(xml).toContain(`alias="Maximum"`)
   expect(xml).toContain(`alias="Minimum"`)
   expect(xml).toContain(`alias="Average"`)
 })
 
-test("[docs] countcolumn with distinct", () => {
-  const q = fetchXml(Account).aggregate()
-    .countColumn("revenue", "UniqueCount", true)
-  const xml = q.toXml()
-  expect(xml).toContain(`aggregate='countcolumn'`)
-  expect(xml).toContain(`distinct='true'`)
-})
-
 // --- MS Docs Example: Grouping ---
 
 test("[docs] groupby with sum and count", () => {
-  const q = fetchXml(Account).aggregate()
-    .sum("revenue", "Total")
-    .count("city", "Count")
-    .groupBy("city", "City")
-    .orderby("City", "City")
+  const q = fetchXml(Account).groupby(
+    f => [f.city],
+    f => ({ Total: sum(f.revenue), Count: count(f.city) })
+  ).orderby(f => f.city)
   const xml = q.toXml()
   expect(xml).toContain(`aggregate='sum'`)
   expect(xml).toContain(`aggregate='count'`)
   expect(xml).toContain(`groupby='true'`)
-  expect(xml).toContain(`alias="City"`)
-})
-
-// --- MS Docs Example: Date grouping ---
-
-test("[docs] dategrouping", () => {
-  const q = fetchXml(Account).aggregate()
-    .sum("revenue", "Total")
-    .groupByDate("city", "Day", "day")
-    .groupByDate("city", "Month", "month")
-    .groupByDate("city", "Year", "year")
-  const xml = q.toXml()
-  expect(xml).toContain(`dategrouping='day'`)
-  expect(xml).toContain(`dategrouping='month'`)
-  expect(xml).toContain(`dategrouping='year'`)
+  expect(xml).toContain(`alias="city"`)
 })
 
 // --- MS Docs Example: returntotalrecordcount ---
@@ -301,16 +280,6 @@ test("[docs] returnTotalRecordCount", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
     .returnTotalRecordCount()
   expect(q.toXml()).toContain(`returntotalrecordcount="true"`)
-})
-
-// --- MS Docs Example: Row aggregate (hierarchical) ---
-
-test("[docs] rowaggregate", () => {
-  const q = fetchXml(Account).top(5).select(f => ({ name: f.name }))
-    .rowAggregate("id", "numberOfChildren", "CountChildren")
-  const xml = q.toXml()
-  expect(xml).toContain(`rowaggregate='CountChildren'`)
-  expect(xml).toContain(`alias="numberOfChildren"`)
 })
 
 // --- MS Docs Example: useraworderby ---
@@ -324,9 +293,10 @@ test("[docs] useRawOrderBy", () => {
 // --- MS Docs Example: aggregatelimit ---
 
 test("[docs] aggregateLimit", () => {
-  const q = fetchXml(Account).aggregate()
-    .aggregateLimit(5)
-    .count("name", "account_count")
+  const q = fetchXml(Account).groupby(
+    () => [],
+    f => ({ cnt: count(f.name) })
+  ).aggregateLimit(5)
   const xml = q.toXml()
   expect(xml).toContain(`aggregatelimit='5'`)
   expect(xml).toContain(`aggregate="true"`)
@@ -644,3 +614,5 @@ test("execute transforms joined date fields via alias map", async () => {
   expect(results[0].date?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
   expect(results[0].total).toBe(500)
 })
+
+fetchXml(Account).

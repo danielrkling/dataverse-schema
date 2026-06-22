@@ -1,4 +1,59 @@
 const Etag = Symbol("etag");
+const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
+const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+function wrapString(value) {
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    if (rxGUID.test(value) || rxDateOnly.test(value)) {
+      return value;
+    }
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  return String(value);
+}
+function select(...values) {
+  return values.map(getName).filter(isNonEmptyString).join(",");
+}
+function orderby(values) {
+  if (Array.isArray(values)) return values.filter(isNonEmptyString).join(",");
+  return Object.entries(values).filter(([, v]) => isNonEmptyString(v)).map(([k, v]) => `${k} ${v}`).join(",");
+}
+class OrderSpec {
+  constructor(fields, direction) {
+    this.fields = fields;
+    this.direction = direction;
+  }
+  toString() {
+    return this.fields.map((f) => `${f} ${this.direction}`).join(",");
+  }
+}
+function asc(...fields) {
+  return new OrderSpec(fields.map(getName), "asc");
+}
+function desc(...fields) {
+  return new OrderSpec(fields.map(getName), "desc");
+}
+function keys(keyValues) {
+  return Object.entries(keyValues).filter(([, v]) => isNonEmptyString(String(v))).map(([k, v]) => `${k}=${wrapString(v)}`).join(",");
+}
+function expand(values) {
+  if (typeof values === "string") return values;
+  return Object.entries(values).map(([name, v]) => {
+    if (typeof v === "string") return v;
+    const expandParts = [];
+    if (v.select)
+      expandParts.push(
+        `$select=${select(...Array.isArray(v.select) ? v.select : [v.select])}`
+      );
+    if (v.filter) expandParts.push(`$filter=${v.filter}`);
+    if (v.orderby) expandParts.push(`$orderby=${orderby(v.orderby)}`);
+    if (v.expand) expandParts.push(`$expand=${expand(v.expand)}`);
+    return `${name}(${expandParts.join(";")})`;
+  }).join(",");
+}
 function attachEtag(v) {
   if (v && typeof v === "object")
     v[Etag] = v["@odata.etag"];
@@ -62,226 +117,6 @@ function getName(name) {
   if ("name" in name) return name.name;
   if (typeof name.toString === "function") return name.toString();
   return String(name);
-}
-
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.length > 0;
-}
-const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
-const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
-function wrapString(value) {
-  if (value === null) return "null";
-  if (typeof value === "string") {
-    if (rxGUID.test(value) || rxDateOnly.test(value)) {
-      return value;
-    }
-    return `'${value.replace(/'/g, "''")}'`;
-  }
-  return String(value);
-}
-function query(queryObj) {
-  const params = new URLSearchParams();
-  if (queryObj.select) params.set("$select", queryObj.select);
-  if (queryObj.expand) params.set("$expand", queryObj.expand);
-  if (queryObj.orderby) params.set("$orderby", queryObj.orderby);
-  if (queryObj.filter) params.set("$filter", queryObj.filter);
-  if (queryObj.top) params.set("$top", queryObj.top.toFixed(0));
-  if (queryObj.apply) params.set("$apply", queryObj.apply);
-  return params.toString();
-}
-function fetchXML(xml) {
-  return `fetchXml=${xml.trim().replace(/>\s+</g, "><")}`;
-}
-function select(...values) {
-  return values.map(getName).filter(isNonEmptyString).join(",");
-}
-function orderby(values) {
-  if (Array.isArray(values)) return values.filter(isNonEmptyString).join(",");
-  return Object.entries(values).filter(([, v]) => isNonEmptyString(v)).map(([k, v]) => `${k} ${v}`).join(",");
-}
-class OrderSpec {
-  constructor(fields, direction) {
-    this.fields = fields;
-    this.direction = direction;
-  }
-  toString() {
-    return this.fields.map((f) => `${f} ${this.direction}`).join(",");
-  }
-}
-function asc(...fields) {
-  return new OrderSpec(fields.map(getName), "asc");
-}
-function desc(...fields) {
-  return new OrderSpec(fields.map(getName), "desc");
-}
-function keys(keyValues) {
-  return Object.entries(keyValues).filter(([, v]) => isNonEmptyString(String(v))).map(([k, v]) => `${k}=${wrapString(v)}`).join(",");
-}
-function expand(values) {
-  if (typeof values === "string") return values;
-  return Object.entries(values).map(([name, v]) => {
-    if (typeof v === "string") return v;
-    const expandParts = [];
-    if (v.select)
-      expandParts.push(
-        `$select=${select(...Array.isArray(v.select) ? v.select : [v.select])}`
-      );
-    if (v.filter) expandParts.push(`$filter=${v.filter}`);
-    if (v.orderby) expandParts.push(`$orderby=${orderby(v.orderby)}`);
-    if (v.expand) expandParts.push(`$expand=${expand(v.expand)}`);
-    return `${name}(${expandParts.join(";")})`;
-  }).join(",");
-}
-function and(...conditions) {
-  const valid = conditions.filter(isNonEmptyString);
-  return valid.length === 0 ? "" : `(${valid.join(" and ")})`;
-}
-function or(...conditions) {
-  const valid = conditions.filter(isNonEmptyString);
-  return valid.length === 0 ? "" : `(${valid.join(" or ")})`;
-}
-function not(condition) {
-  return isNonEmptyString(condition) ? `not(${condition})` : "";
-}
-function contains(field, value) {
-  return `contains(${getName(field)},${wrapString(value)})`;
-}
-function startsWith(field, value) {
-  return `startswith(${getName(field)},${wrapString(value)})`;
-}
-function endsWith(field, value) {
-  return `endswith(${getName(field)},${wrapString(value)})`;
-}
-function equals(field, value) {
-  return `(${getName(field)} eq ${wrapString(value)})`;
-}
-function notEquals(field, value) {
-  return `(${getName(field)} ne ${wrapString(value)})`;
-}
-function greaterThan(field, value) {
-  return `(${getName(field)} gt ${wrapString(value)})`;
-}
-function greaterThanOrEqual(field, value) {
-  return `(${getName(field)} ge ${wrapString(value)})`;
-}
-function lessThan(field, value) {
-  return `(${getName(field)} lt ${wrapString(value)})`;
-}
-function lessThanOrEqual(field, value) {
-  return `(${getName(field)} le ${wrapString(value)})`;
-}
-function isActive() {
-  return "statecode eq 0";
-}
-function isInactive() {
-  return "statecode eq 1";
-}
-function isNull(field) {
-  return `${getName(field)} eq null`;
-}
-function isNotNull(field) {
-  return `${getName(field)} ne null`;
-}
-function groupby(values, aggregations) {
-  return `groupby((${values.map(getName).filter(isNonEmptyString).join(",")})${aggregations ? "," + aggregations : ""})`;
-}
-function aggregate(...values) {
-  return `aggregate(${values.filter(isNonEmptyString).join(",")})`;
-}
-function average(field, alias) {
-  const name = getName(field);
-  return `${name} with average as ${alias ?? name}`;
-}
-function sum(field, alias) {
-  const name = getName(field);
-  return `${name} with sum as ${alias ?? name}`;
-}
-function min(field, alias) {
-  const name = getName(field);
-  return `${name} with min as ${alias ?? name}`;
-}
-function max(field, alias) {
-  const name = getName(field);
-  return `${name} with max as ${alias ?? name}`;
-}
-function count(alias = "count") {
-  return `$count as ${alias}`;
-}
-const Above = (field, value) => `Microsoft.Dynamics.CRM.Above(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const AboveOrEqual = (field, value) => `Microsoft.Dynamics.CRM.AboveOrEqual(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const Between = (field, value1, value2) => `Microsoft.Dynamics.CRM.Between(PropertyName=${getName(field)},PropertyValues=[${wrapString(value1)},${wrapString(value2)}])`;
-const ContainsValues = (field, values) => `Microsoft.Dynamics.CRM.ContainsValues(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-const DoesNotContainValues = (field, values) => `Microsoft.Dynamics.CRM.DoesNotContainValues(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-const EqualBusinessId = (field) => `Microsoft.Dynamics.CRM.EqualBusinessId(PropertyName=${getName(field)})`;
-const EqualUserId = (field) => `Microsoft.Dynamics.CRM.EqualUserId(PropertyName=${wrapString(getName(field))})`;
-const EqualUserLanguage = (field) => `Microsoft.Dynamics.CRM.EqualUserLanguage(PropertyName=${getName(field)})`;
-const EqualUserOrUserHierarchy = (field) => `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy(PropertyName=${getName(field)})`;
-const EqualUserOrUserHierarchyAndTeams = (field) => `Microsoft.Dynamics.CRM.EqualUserOrUserHierarchyAndTeams(PropertyName=${getName(field)})`;
-const EqualUserOrUserTeams = (field) => `Microsoft.Dynamics.CRM.EqualUserOrUserTeams(PropertyName=${getName(field)})`;
-const In = (field, values) => `Microsoft.Dynamics.CRM.In(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-const InFiscalPeriod = (field, value) => `Microsoft.Dynamics.CRM.InFiscalPeriod(PropertyName=${getName(field)},PropertyValue=${value})`;
-const InFiscalPeriodAndYear = (field, fiscalPeriod, fiscalYear) => `Microsoft.Dynamics.CRM.InFiscalPeriodAndYear(PropertyName=${getName(field)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
-const InFiscalYear = (field, value) => `Microsoft.Dynamics.CRM.InFiscalYear(PropertyName=${getName(field)},PropertyValue=${value})`;
-const InOrAfterFiscalPeriodAndYear = (field, fiscalPeriod, fiscalYear) => `Microsoft.Dynamics.CRM.InOrAfterFiscalPeriodAndYear(PropertyName=${getName(field)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
-const InOrBeforeFiscalPeriodAndYear = (field, fiscalPeriod, fiscalYear) => `Microsoft.Dynamics.CRM.InOrBeforeFiscalPeriodAndYear(PropertyName=${getName(field)},PropertyValue1=${fiscalPeriod},PropertyValue2=${fiscalYear})`;
-const Last7Days = (field) => `Microsoft.Dynamics.CRM.Last7Days(PropertyName=${getName(field)})`;
-const LastFiscalPeriod = (field) => `Microsoft.Dynamics.CRM.LastFiscalPeriod(PropertyName=${getName(field)})`;
-const LastFiscalYear = (field) => `Microsoft.Dynamics.CRM.LastFiscalYear(PropertyName=${getName(field)})`;
-const LastMonth = (field) => `Microsoft.Dynamics.CRM.LastMonth(PropertyName=${getName(field)})`;
-const LastWeek = (field) => `Microsoft.Dynamics.CRM.LastWeek(PropertyName=${getName(field)})`;
-const LastXDays = (field, value) => `Microsoft.Dynamics.CRM.LastXDays(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastXFiscalPeriods = (field, value) => `Microsoft.Dynamics.CRM.LastXFiscalPeriods(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastXFiscalYears = (field, value) => `Microsoft.Dynamics.CRM.LastXFiscalYears(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastXHours = (field, value) => `Microsoft.Dynamics.CRM.LastXHours(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastXMonths = (field, value) => `Microsoft.Dynamics.CRM.LastXMonths(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastXWeeks = (field, value) => `Microsoft.Dynamics.CRM.LastXWeeks(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastXYears = (field, value) => `Microsoft.Dynamics.CRM.LastXYears(PropertyName=${getName(field)},PropertyValue=${value})`;
-const LastYear = (field) => `Microsoft.Dynamics.CRM.LastYear(PropertyName=${getName(field)})`;
-const Next7Days = (field) => `Microsoft.Dynamics.CRM.Next7Days(PropertyName=${getName(field)})`;
-const NextFiscalPeriod = (field) => `Microsoft.Dynamics.CRM.NextFiscalPeriod(PropertyName=${getName(field)})`;
-const NextFiscalYear = (field) => `Microsoft.Dynamics.CRM.NextFiscalYear(PropertyName=${getName(field)})`;
-const NextMonth = (field) => `Microsoft.Dynamics.CRM.NextMonth(PropertyName=${getName(field)})`;
-const NextWeek = (field) => `Microsoft.Dynamics.CRM.NextWeek(PropertyName=${getName(field)})`;
-const NextXDays = (field, value) => `Microsoft.Dynamics.CRM.NextXDays(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextXFiscalPeriods = (field, value) => `Microsoft.Dynamics.CRM.NextXFiscalPeriods(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextXFiscalYears = (field, value) => `Microsoft.Dynamics.CRM.NextXFiscalYears(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextXHours = (field, value) => `Microsoft.Dynamics.CRM.NextXHours(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextXMonths = (field, value) => `Microsoft.Dynamics.CRM.NextXMonths(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextXWeeks = (field, value) => `Microsoft.Dynamics.CRM.NextXWeeks(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextXYears = (field, value) => `Microsoft.Dynamics.CRM.NextXYears(PropertyName=${getName(field)},PropertyValue=${value})`;
-const NextYear = (field) => `Microsoft.Dynamics.CRM.NextYear(PropertyName=${getName(field)})`;
-const NotBetween = (field, value1, value2) => `Microsoft.Dynamics.CRM.NotBetween(PropertyName=${getName(field)},PropertyValues=[${wrapString(value1)},${wrapString(value2)}])`;
-const NotEqualBusinessId = (field) => `Microsoft.Dynamics.CRM.NotEqualBusinessId(PropertyName=${getName(field)})`;
-const NotEqualUserId = (field) => `Microsoft.Dynamics.CRM.NotEqualUserId(PropertyName=${getName(field)})`;
-const NotIn = (field, values) => `Microsoft.Dynamics.CRM.NotIn(PropertyName=${getName(field)},PropertyValues=[${values.map(wrapString).join(",")}])`;
-const NotUnder = (field, value) => `Microsoft.Dynamics.CRM.NotUnder(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const OlderThanXDays = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXDays(PropertyName=${getName(field)},PropertyValue=${value})`;
-const OlderThanXHours = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXHours(PropertyName=${getName(field)},PropertyValue=${value})`;
-const OlderThanXMinutes = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXMinutes(PropertyName=${getName(field)},PropertyValue=${value})`;
-const OlderThanXMonths = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXMonths(PropertyName=${getName(field)},PropertyValue=${value})`;
-const OlderThanXWeeks = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXWeeks(PropertyName=${getName(field)},PropertyValue=${value})`;
-const OlderThanXYears = (field, value) => `Microsoft.Dynamics.CRM.OlderThanXYears(PropertyName=${getName(field)},PropertyValue=${value})`;
-const On = (field, value) => `Microsoft.Dynamics.CRM.On(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const OnOrAfter = (field, value) => `Microsoft.Dynamics.CRM.OnOrAfter(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const OnOrBefore = (field, value) => `Microsoft.Dynamics.CRM.OnOrBefore(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const ThisFiscalPeriod = (field) => `Microsoft.Dynamics.CRM.ThisFiscalPeriod(PropertyName=${getName(field)})`;
-const ThisFiscalYear = (field) => `Microsoft.Dynamics.CRM.ThisFiscalYear(PropertyName=${getName(field)})`;
-const ThisMonth = (field) => `Microsoft.Dynamics.CRM.ThisMonth(PropertyName=${getName(field)})`;
-const ThisWeek = (field) => `Microsoft.Dynamics.CRM.ThisWeek(PropertyName=${getName(field)})`;
-const ThisYear = (field) => `Microsoft.Dynamics.CRM.ThisYear(PropertyName=${getName(field)})`;
-const Today = (field) => `Microsoft.Dynamics.CRM.Today(PropertyName=${getName(field)})`;
-const Tomorrow = (field) => `Microsoft.Dynamics.CRM.Tomorrow(PropertyName=${getName(field)})`;
-const Under = (field, value) => `Microsoft.Dynamics.CRM.Under(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const UnderOrEqual = (field, value) => `Microsoft.Dynamics.CRM.UnderOrEqual(PropertyName=${getName(field)},PropertyValue=${wrapString(value)})`;
-const Yesterday = (field) => `Microsoft.Dynamics.CRM.Yesterday(PropertyName=${getName(field)})`;
-function any(collectionProperty, alias, condition) {
-  return `${getName(collectionProperty)}/any(${alias}: ${condition})`;
-}
-function all(collectionProperty, alias, condition) {
-  return `${getName(collectionProperty)}/all(${alias}: ${condition})`;
-}
-function compare(field, operator, otherField) {
-  return `(${getName(field)} ${operator} ${getName(otherField)})`;
 }
 
 const parenthesesRegEx = /\(([^)]+)\)/;
@@ -1167,21 +1002,31 @@ class Schema {
   }
 }
 
-class Table extends Schema {
+function queryString(opts) {
+  const params = new URLSearchParams();
+  if (opts.select) params.set("$select", opts.select);
+  if (opts.top !== void 0) params.set("$top", opts.top.toFixed(0));
+  if (opts.filter) params.set("$filter", opts.filter);
+  if (opts.orderby) params.set("$orderby", opts.orderby);
+  if (opts.expand) params.set("$expand", opts.expand);
+  return params.toString();
+}
+class DataverseTable extends Schema {
   client;
   fields;
+  logicalName;
+  entitySetName;
   kind = "table";
   type = "table";
   /**
-   * @param client An instance of the DataverseClient for all API operations.
-   * @param entitySetName The logical collection name of the Dataverse table (e.g. `"accounts"`).
-   * @param props An object mapping property names to field definitions.
+   * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
    */
-  constructor(client, entitySetName, props) {
-    super(entitySetName, null);
-    this.client = client;
-    this.name = entitySetName;
-    this.fields = props;
+  constructor(options) {
+    super(options.entitySetName, null);
+    this.client = options.client;
+    this.entitySetName = options.entitySetName;
+    this.logicalName = options.logicalName;
+    this.fields = options.fields;
   }
   getIssues(value, path = []) {
     const issues = super.getIssues(value, path);
@@ -1214,7 +1059,7 @@ class Table extends Schema {
    * if (account) console.log(account.name);
    */
   async getRecord(id) {
-    return this.client.getRecord(this.name, id, buildQuery(this)).then((v) => this.transformValueFromDataverse(v));
+    return this.client.getRecord(this.entitySetName, id, buildQuery(this)).then((v) => this.transformValueFromDataverse(v));
   }
   getAlternateKeys(value) {
     return Object.entries(value).map((kv) => `${this.fields[kv[0]].name}=${kv[1]}`).join(",");
@@ -1232,7 +1077,7 @@ class Table extends Schema {
    * });
    */
   async getRecords(queryOptions) {
-    return this.client.getRecords(this.name, buildQuery(this, queryOptions)).then((values) => values.map((v) => this.transformValueFromDataverse(v)));
+    return this.client.getRecords(this.entitySetName, buildQuery(this, queryOptions)).then((values) => values.map((v) => this.transformValueFromDataverse(v)));
   }
   /**
    * Retrieves the value of a single property for a record by ID.
@@ -1245,11 +1090,11 @@ class Table extends Schema {
   async getPropertyValue(key, id, queryOptions) {
     const prop = this.fields[key];
     if (prop.kind === "value" || prop.type === "lookupId") {
-      return this.client.getPropertyValue(this.name, id, prop.name).then((v) => prop.transformValueFromDataverse(v));
+      return this.client.getPropertyValue(this.entitySetName, id, prop.name).then((v) => prop.transformValueFromDataverse(v));
     }
     if (prop.type === "collection" || prop.type === "collectionIds") {
       return this.client.getAssociatedRecords(
-        this.name,
+        this.entitySetName,
         id,
         prop.name,
         buildQuery(prop.table, queryOptions)
@@ -1260,7 +1105,7 @@ class Table extends Schema {
     }
     if (prop.type === "lookup") {
       return this.client.getAssociatedRecord(
-        this.name,
+        this.entitySetName,
         id,
         prop.name,
         buildQuery(prop.table, queryOptions)
@@ -1283,7 +1128,7 @@ class Table extends Schema {
       await this.updateNavigationProperty(prop, id, value);
     } else {
       await this.client.updatePropertyValue(
-        this.name,
+        this.entitySetName,
         id,
         this.fields[key].name,
         prop.transformValueToDataverse(value)
@@ -1298,10 +1143,10 @@ class Table extends Schema {
           value.map((v) => property.table.upsertRecord(void 0, v))
         ) : value;
         return this.client.associateRecordToList(
-          this.name,
+          this.entitySetName,
           id,
           property.name,
-          property.table.name,
+          property.table.entitySetName,
           property.table.getPrimaryKey().property.name,
           ids
         );
@@ -1310,14 +1155,14 @@ class Table extends Schema {
     if (property.type === "lookup" || property.type == "lookupId") {
       const name = property.type === "lookup" ? property.name : property.navigationName;
       if (value === null) {
-        return this.client.dissociateRecord(this.name, id, name);
+        return this.client.dissociateRecord(this.entitySetName, id, name);
       } else {
         const childId = property.type === "lookup" ? await property.table.upsertRecord(void 0, value) : value;
         return this.client.associateRecord(
-          this.name,
+          this.entitySetName,
           id,
           name,
-          property.table.name,
+          property.table.entitySetName,
           childId
         );
       }
@@ -1333,10 +1178,10 @@ class Table extends Schema {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
       return this.client.associateRecord(
-        this.name,
+        this.entitySetName,
         id,
         prop.name,
-        prop.table.name,
+        prop.table.entitySetName,
         childId
       );
     } else {
@@ -1346,7 +1191,7 @@ class Table extends Schema {
   async dissociateRecord(key, id, childId) {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
-      return this.client.dissociateRecord(this.name, id, prop.name, childId);
+      return this.client.dissociateRecord(this.entitySetName, id, prop.name, childId);
     } else {
       throw new Error("Can only dissociate navigation properties");
     }
@@ -1362,9 +1207,9 @@ class Table extends Schema {
   async insertRecord(value) {
     const pkName = this.getPrimaryKey().property.name;
     const record = await this.client.postRecord(
-      this.name,
+      this.entitySetName,
       this.transformValueToDataverse(value),
-      query({ select: pkName })
+      queryString({ select: pkName })
     );
     return record?.[pkName];
   }
@@ -1383,7 +1228,7 @@ class Table extends Schema {
   async updateRecord(id, value, etag) {
     if (!id) throw new Error("No ID provided");
     await this.client.patchRecord(
-      this.name,
+      this.entitySetName,
       id,
       this.transformValueToDataverse(value),
       "",
@@ -1412,18 +1257,18 @@ class Table extends Schema {
     if (id) {
       promises.push(
         this.client.patchRecord(
-          this.name,
+          this.entitySetName,
           id,
           this.transformValueToDataverse(value),
-          query({ select: pkName }),
+          queryString({ select: pkName }),
           etag
         )
       );
     } else {
       const record = await this.client.postRecord(
-        this.name,
+        this.entitySetName,
         this.transformValueToDataverse(value),
-        query({ select: pkName })
+        queryString({ select: pkName })
       );
       id = record[pkName];
     }
@@ -1452,7 +1297,7 @@ class Table extends Schema {
    * await Person.deleteRecord("some-guid");
    */
   async deleteRecord(id, etag) {
-    return this.client.deleteRecord(this.name, id, etag);
+    return this.client.deleteRecord(this.entitySetName, id, etag);
   }
   /**
    * Activates a record by setting its `statecode` to 0.
@@ -1461,7 +1306,7 @@ class Table extends Schema {
    * await Person.activateRecord("some-guid");
    */
   async activateRecord(id) {
-    return this.client.activateRecord(this.name, id);
+    return this.client.activateRecord(this.entitySetName, id);
   }
   /**
    * Deactivates a record by setting its `statecode` to 1.
@@ -1470,7 +1315,7 @@ class Table extends Schema {
    * await Person.deactivateRecord("some-guid");
    */
   async deactivateRecord(id) {
-    return this.client.deactivateRecord(this.name, id);
+    return this.client.deactivateRecord(this.entitySetName, id);
   }
   /**
    * Deletes (clears) the value of a value property for a record. Cannot be used
@@ -1482,7 +1327,7 @@ class Table extends Schema {
   async deletePropertyValue(key, id) {
     const prop = this.fields[key];
     if (prop.kind === "value") {
-      return this.client.deletePropertyValue(this.name, id, prop.name);
+      return this.client.deletePropertyValue(this.entitySetName, id, prop.name);
     }
     throw new Error("Cannot delete navigation property values");
   }
@@ -1505,9 +1350,9 @@ class Table extends Schema {
    */
   async executeAction(actionName, params, id) {
     if (id) {
-      return this.client.executeBoundAction(this.name, actionName, params, id);
+      return this.client.executeBoundAction(this.entitySetName, actionName, params, id);
     }
-    return this.client.executeBoundAction(this.name, actionName, params);
+    return this.client.executeBoundAction(this.entitySetName, actionName, params);
   }
   /**
    * Executes a bound Dataverse function on a record.
@@ -1524,7 +1369,7 @@ class Table extends Schema {
    * );
    */
   async executeFunction(functionName, id, params) {
-    return this.client.executeBoundFunction(this.name, id, functionName, params);
+    return this.client.executeBoundFunction(this.entitySetName, id, functionName, params);
   }
   //
   // --- BULK OPERATIONS ---
@@ -1542,7 +1387,7 @@ class Table extends Schema {
    */
   async createMultiple(records) {
     return this.client.createMultiple(
-      this.name,
+      this.entitySetName,
       records.map((r) => this.transformValueToDataverse(r))
     );
   }
@@ -1559,7 +1404,7 @@ class Table extends Schema {
    */
   async updateMultiple(records) {
     return this.client.updateMultiple(
-      this.name,
+      this.entitySetName,
       records.map((r) => this.transformValueToDataverse(r))
     );
   }
@@ -1572,7 +1417,7 @@ class Table extends Schema {
    * await Account.deleteMultiple(["guid-1", "guid-2"]);
    */
   async deleteMultiple(ids) {
-    return this.client.deleteMultiple(this.name, ids);
+    return this.client.deleteMultiple(this.entitySetName, ids);
   }
   /**
    * Returns the primary key field definition for this table.
@@ -1638,10 +1483,10 @@ class Table extends Schema {
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => keys.includes(v[0]))
     );
-    return new Table(this.client, this.name, properties);
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
   }
   /**
-   * Creates a new `Table` with the specified properties excluded.
+   * Creates a new `DataverseTable` with the specified properties excluded.
    *
    * @example
    * const WithoutSensitive = Person.omitProperties("ssn");
@@ -1650,10 +1495,10 @@ class Table extends Schema {
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => !keys.includes(v[0]))
     );
-    return new Table(this.client, this.name, properties);
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
   }
   /**
-   * Creates a new `Table` with additional properties appended.
+   * Creates a new `DataverseTable` with additional properties appended.
    *
    * @example
    * const Extended = Account.appendProperties({
@@ -1662,32 +1507,29 @@ class Table extends Schema {
    * // Extended has all original fields plus `customField`
    */
   appendProperties(properties) {
-    return new Table(this.client, this.name, {
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: {
       ...this.fields,
       ...properties
-    });
+    } });
   }
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
   T;
 }
-function table(client, name, properties) {
-  return new Table(client, name, properties);
-}
-function buildQuery(table2, q) {
-  return query({
+function buildQuery(table, q) {
+  return queryString({
     top: q?.top,
     filter: q?.filter,
-    orderby: q?.orderby ? Object.entries(q?.orderby ?? {}).map(([key, value]) => `${table2.fields[key].name} ${value}`).join(",") : void 0,
-    select: buildSelect(table2),
-    expand: buildExpand(table2)
+    orderby: q?.orderby ? Object.entries(q?.orderby ?? {}).map(([key, value]) => `${table.fields[key].name} ${value}`).join(",") : void 0,
+    select: buildSelect(table),
+    expand: buildExpand(table)
   });
 }
-function buildSelect(table2) {
-  return Object.values(table2.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file").map((v) => v.fromDataverseName).join(",");
+function buildSelect(table) {
+  return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file").map((v) => v.fromDataverseName).join(",");
 }
-function buildExpand(table2, depth = 0) {
+function buildExpand(table, depth = 0) {
   if (depth > 3) return "";
-  return Object.values(table2.fields).filter(
+  return Object.values(table.fields).filter(
     (v) => v.kind === "navigation" && v.type !== "lookupId" && v.type !== "collectionIds"
   ).map((v) => {
     const navProp = v;
@@ -1699,6 +1541,27 @@ function buildExpand(table2, depth = 0) {
     }
     return `${navProp.name}(${expandQuery})`;
   }).join(",");
+}
+class DataverseIntersectTable {
+  /** Marks this table as an intersect table for FetchXML joins. */
+  intersect = true;
+  /**
+   * The intersect table name used in FetchXML `<link-entity name="...">`.
+   * This is the Dataverse entity logical name (e.g. `"accountcontact"`).
+   * It is NOT an entity set name (no pluralization) — unlike {@link DataverseTable.entitySetName}
+   * and {@link DataverseTable.logicalName}, this single `name` serves both roles
+   * for intersect table references in FetchXML join syntax.
+   */
+  name;
+  /** The first related table. */
+  table1;
+  /** The second related table. */
+  table2;
+  constructor(name, table1, table2) {
+    this.name = name;
+    this.table1 = table1;
+    this.table2 = table2;
+  }
 }
 
 class BooleanField extends Schema {
@@ -1920,7 +1783,7 @@ class LookupIdProperty extends Schema {
     if (!this.#table) {
       const table = this.#getTable();
       const { property } = table.getPrimaryKey();
-      this.#table = new Table(table.client, table.name, { id: property });
+      this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
   }
@@ -1981,7 +1844,7 @@ class CollectionIdsProperty extends Schema {
     if (!this.#table) {
       const table = this.#getTable();
       const { property } = table.getPrimaryKey();
-      this.#table = new Table(table.client, table.name, { id: property });
+      this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
   }
@@ -2031,6 +1894,417 @@ function lookup(name, getTable) {
   return new LookupProperty(name, getTable);
 }
 
+class FilterExpr {
+  constructor(node) {
+    this.node = node;
+  }
+  toString() {
+    return this.toOdata();
+  }
+  toOdata() {
+    return serializeOdata(this.node);
+  }
+  toFetchXml() {
+    return serializeFetchXml(this.node);
+  }
+}
+function serializeOdata(node) {
+  switch (node.type) {
+    case "comparison":
+      return `(${node.field} ${node.operator} ${wrapString(node.value)})`;
+    case "null":
+      return `${node.field} ${node.positive ? "eq" : "ne"} null`;
+    case "contains":
+      return `contains(${node.field},${wrapString(node.value)})`;
+    case "startsWith":
+      return `startswith(${node.field},${wrapString(node.value)})`;
+    case "endsWith":
+      return `endswith(${node.field},${wrapString(node.value)})`;
+    case "compare":
+      return `(${node.field} ${node.operator} ${node.otherField})`;
+    case "lambda":
+      return `${node.field}/${node.operator}(${node.alias}: ${node.condition})`;
+    case "fn": {
+      const field = wrapString(node.field);
+      const vals = node.values.map(wrapString);
+      if (vals.length === 0) {
+        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field})`;
+      }
+      if (vals.length === 1) {
+        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue=${vals[0]})`;
+      }
+      if (node.fnName === "Between" || node.fnName === "NotBetween") {
+        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+      }
+      if (node.fnName === "InFiscalPeriodAndYear" || node.fnName === "InOrAfterFiscalPeriodAndYear" || node.fnName === "InOrBeforeFiscalPeriodAndYear") {
+        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue1=${vals[0]},PropertyValue2=${vals[1]})`;
+      }
+      return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+    }
+    case "raw":
+      return node.value;
+    case "and":
+      if (node.conditions.length === 0) return "";
+      return `(${node.conditions.map((c) => c.toOdata()).join(" and ")})`;
+    case "or":
+      if (node.conditions.length === 0) return "";
+      return `(${node.conditions.map((c) => c.toOdata()).join(" or ")})`;
+    case "not":
+      return `not(${node.condition.toOdata()})`;
+  }
+}
+function escapeXml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function serializeFetchXml(node) {
+  switch (node.type) {
+    case "comparison": {
+      const value = node.value === null ? "" : escapeXml(String(node.value));
+      return `<condition attribute="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" value="${value}" />`;
+    }
+    case "null":
+      return `<condition attribute="${escapeXml(node.field)}" operator="${node.positive ? "null" : "not-null"}" />`;
+    case "contains":
+      return `<condition attribute="${escapeXml(node.field)}" operator="like" value="%${escapeXml(node.value)}%" />`;
+    case "startsWith":
+      return `<condition attribute="${escapeXml(node.field)}" operator="begins-with" value="${escapeXml(node.value)}" />`;
+    case "endsWith":
+      return `<condition attribute="${escapeXml(node.field)}" operator="ends-with" value="${escapeXml(node.value)}" />`;
+    case "compare":
+      return `<condition attribute="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(node.otherField)}" />`;
+    case "lambda":
+      return `<condition entityname="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" value="${escapeXml(`${node.alias}: ${node.condition}`)}" />`;
+    case "fn": {
+      const attr = escapeXml(node.field);
+      const op = escapeXml(node.operator);
+      if (node.values.length === 0) {
+        return `<condition attribute="${attr}" operator="${op}" />`;
+      }
+      if (node.values.length === 1) {
+        return `<condition attribute="${attr}" operator="${op}" value="${escapeXml(String(node.values[0]))}" />`;
+      }
+      return `<condition attribute="${attr}" operator="${op}">${node.values.map((v) => `<value>${escapeXml(String(v))}</value>`).join("")}</condition>`;
+    }
+    case "raw":
+      return node.value;
+    case "and":
+      if (node.conditions.length === 0) return "";
+      return `<filter type="and">${node.conditions.map((c) => c.toFetchXml()).join("")}</filter>`;
+    case "or":
+      if (node.conditions.length === 0) return "";
+      return `<filter type="or">${node.conditions.map((c) => c.toFetchXml()).join("")}</filter>`;
+    case "not":
+      return `<filter type="and"><filter type="or">${node.condition.toFetchXml()}</filter></filter>`;
+  }
+}
+function fn(field, fnName, operator, values) {
+  return new FilterExpr({ type: "fn", field: getName(field), fnName, operator, values });
+}
+function eq(field, value) {
+  return new FilterExpr({ type: "comparison", field, operator: "eq", value });
+}
+function ne(field, value) {
+  return new FilterExpr({ type: "comparison", field, operator: "ne", value });
+}
+function gt(field, value) {
+  return new FilterExpr({ type: "comparison", field, operator: "gt", value });
+}
+function ge(field, value) {
+  return new FilterExpr({ type: "comparison", field, operator: "ge", value });
+}
+function lt(field, value) {
+  return new FilterExpr({ type: "comparison", field, operator: "lt", value });
+}
+function le(field, value) {
+  return new FilterExpr({ type: "comparison", field, operator: "le", value });
+}
+function isNull(field) {
+  return new FilterExpr({ type: "null", field, positive: true });
+}
+function isNotNull(field) {
+  return new FilterExpr({ type: "null", field, positive: false });
+}
+function contains(field, value) {
+  return new FilterExpr({ type: "contains", field, value });
+}
+function startsWith(field, value) {
+  return new FilterExpr({ type: "startsWith", field, value });
+}
+function endsWith(field, value) {
+  return new FilterExpr({ type: "endsWith", field, value });
+}
+function compare(field, operator, otherField) {
+  return new FilterExpr({ type: "compare", field, operator, otherField });
+}
+function and(...conditions) {
+  const valid = conditions.filter((c) => c != null && c !== "");
+  const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
+  return new FilterExpr({ type: "and", conditions: exprs });
+}
+function or(...conditions) {
+  const valid = conditions.filter((c) => c != null && c !== "");
+  const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
+  return new FilterExpr({ type: "or", conditions: exprs });
+}
+function not(condition) {
+  const c = typeof condition === "string" ? new FilterExpr({ type: "raw", value: condition }) : condition;
+  return new FilterExpr({ type: "not", condition: c });
+}
+function isActive() {
+  return eq("statecode", 0);
+}
+function isInactive() {
+  return eq("statecode", 1);
+}
+function Above(field, value) {
+  return fn(field, "Above", "above", [value]);
+}
+function AboveOrEqual(field, value) {
+  return fn(field, "AboveOrEqual", "above-or-equal", [value]);
+}
+function Between(field, value1, value2) {
+  return fn(field, "Between", "between", [value1, value2]);
+}
+function ContainsValues(field, values) {
+  return fn(field, "ContainsValues", "in", values);
+}
+function DoesNotContainValues(field, values) {
+  return fn(field, "DoesNotContainValues", "not-in", values);
+}
+function EqualBusinessId(field) {
+  return fn(field, "EqualBusinessId", "eq-businessid", []);
+}
+function EqualUserId(field) {
+  return fn(field, "EqualUserId", "eq-userid", []);
+}
+function EqualUserLanguage(field) {
+  return fn(field, "EqualUserLanguage", "eq-userlanguage", []);
+}
+function EqualUserOrUserHierarchy(field) {
+  return fn(field, "EqualUserOrUserHierarchy", "eq-useroruserhierarchy", []);
+}
+function EqualUserOrUserHierarchyAndTeams(field) {
+  return fn(field, "EqualUserOrUserHierarchyAndTeams", "eq-useroruserhierarchyandteams", []);
+}
+function EqualUserOrUserTeams(field) {
+  return fn(field, "EqualUserOrUserTeams", "eq-useroruserteams", []);
+}
+function In(field, values) {
+  return fn(field, "In", "in", values);
+}
+function InFiscalPeriod(field, value) {
+  return fn(field, "InFiscalPeriod", "in-fiscal-period", [value]);
+}
+function InFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
+  return fn(field, "InFiscalPeriodAndYear", "in-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
+}
+function InFiscalYear(field, value) {
+  return fn(field, "InFiscalYear", "in-fiscal-year", [value]);
+}
+function InOrAfterFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
+  return fn(field, "InOrAfterFiscalPeriodAndYear", "in-or-after-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
+}
+function InOrBeforeFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
+  return fn(field, "InOrBeforeFiscalPeriodAndYear", "in-or-before-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
+}
+function Last7Days(field) {
+  return fn(field, "Last7Days", "last-seven-days", []);
+}
+function LastFiscalPeriod(field) {
+  return fn(field, "LastFiscalPeriod", "last-fiscal-period", []);
+}
+function LastFiscalYear(field) {
+  return fn(field, "LastFiscalYear", "last-fiscal-year", []);
+}
+function LastMonth(field) {
+  return fn(field, "LastMonth", "last-month", []);
+}
+function LastWeek(field) {
+  return fn(field, "LastWeek", "last-week", []);
+}
+function LastXDays(field, value) {
+  return fn(field, "LastXDays", "last-x-days", [value]);
+}
+function LastXFiscalPeriods(field, value) {
+  return fn(field, "LastXFiscalPeriods", "last-x-fiscal-periods", [value]);
+}
+function LastXFiscalYears(field, value) {
+  return fn(field, "LastXFiscalYears", "last-x-fiscal-years", [value]);
+}
+function LastXHours(field, value) {
+  return fn(field, "LastXHours", "last-x-hours", [value]);
+}
+function LastXMonths(field, value) {
+  return fn(field, "LastXMonths", "last-x-months", [value]);
+}
+function LastXWeeks(field, value) {
+  return fn(field, "LastXWeeks", "last-x-weeks", [value]);
+}
+function LastXYears(field, value) {
+  return fn(field, "LastXYears", "last-x-years", [value]);
+}
+function LastYear(field) {
+  return fn(field, "LastYear", "last-year", []);
+}
+function Next7Days(field) {
+  return fn(field, "Next7Days", "next-seven-days", []);
+}
+function NextFiscalPeriod(field) {
+  return fn(field, "NextFiscalPeriod", "next-fiscal-period", []);
+}
+function NextFiscalYear(field) {
+  return fn(field, "NextFiscalYear", "next-fiscal-year", []);
+}
+function NextMonth(field) {
+  return fn(field, "NextMonth", "next-month", []);
+}
+function NextWeek(field) {
+  return fn(field, "NextWeek", "next-week", []);
+}
+function NextXDays(field, value) {
+  return fn(field, "NextXDays", "next-x-days", [value]);
+}
+function NextXFiscalPeriods(field, value) {
+  return fn(field, "NextXFiscalPeriods", "next-x-fiscal-periods", [value]);
+}
+function NextXFiscalYears(field, value) {
+  return fn(field, "NextXFiscalYears", "next-x-fiscal-years", [value]);
+}
+function NextXHours(field, value) {
+  return fn(field, "NextXHours", "next-x-hours", [value]);
+}
+function NextXMonths(field, value) {
+  return fn(field, "NextXMonths", "next-x-months", [value]);
+}
+function NextXWeeks(field, value) {
+  return fn(field, "NextXWeeks", "next-x-weeks", [value]);
+}
+function NextXYears(field, value) {
+  return fn(field, "NextXYears", "next-x-years", [value]);
+}
+function NextYear(field) {
+  return fn(field, "NextYear", "next-year", []);
+}
+function NotBetween(field, value1, value2) {
+  return fn(field, "NotBetween", "not-between", [value1, value2]);
+}
+function NotEqualBusinessId(field) {
+  return fn(field, "NotEqualBusinessId", "neq-businessid", []);
+}
+function NotEqualUserId(field) {
+  return fn(field, "NotEqualUserId", "neq-userid", []);
+}
+function NotIn(field, values) {
+  return fn(field, "NotIn", "not-in", values);
+}
+function NotUnder(field, value) {
+  return fn(field, "NotUnder", "not-under", [value]);
+}
+function OlderThanXDays(field, value) {
+  return fn(field, "OlderThanXDays", "olderthan-x-days", [value]);
+}
+function OlderThanXHours(field, value) {
+  return fn(field, "OlderThanXHours", "olderthan-x-hours", [value]);
+}
+function OlderThanXMinutes(field, value) {
+  return fn(field, "OlderThanXMinutes", "olderthan-x-minutes", [value]);
+}
+function OlderThanXMonths(field, value) {
+  return fn(field, "OlderThanXMonths", "olderthan-x-months", [value]);
+}
+function OlderThanXWeeks(field, value) {
+  return fn(field, "OlderThanXWeeks", "olderthan-x-weeks", [value]);
+}
+function OlderThanXYears(field, value) {
+  return fn(field, "OlderThanXYears", "olderthan-x-years", [value]);
+}
+function On(field, value) {
+  return fn(field, "On", "on", [value]);
+}
+function OnOrAfter(field, value) {
+  return fn(field, "OnOrAfter", "on-or-after", [value]);
+}
+function OnOrBefore(field, value) {
+  return fn(field, "OnOrBefore", "on-or-before", [value]);
+}
+function ThisFiscalPeriod(field) {
+  return fn(field, "ThisFiscalPeriod", "this-fiscal-period", []);
+}
+function ThisFiscalYear(field) {
+  return fn(field, "ThisFiscalYear", "this-fiscal-year", []);
+}
+function ThisMonth(field) {
+  return fn(field, "ThisMonth", "this-month", []);
+}
+function ThisWeek(field) {
+  return fn(field, "ThisWeek", "this-week", []);
+}
+function ThisYear(field) {
+  return fn(field, "ThisYear", "this-year", []);
+}
+function Today(field) {
+  return fn(field, "Today", "today", []);
+}
+function Tomorrow(field) {
+  return fn(field, "Tomorrow", "tomorrow", []);
+}
+function Under(field, value) {
+  return fn(field, "Under", "under", [value]);
+}
+function UnderOrEqual(field, value) {
+  return fn(field, "UnderOrEqual", "under-or-equal", [value]);
+}
+function Yesterday(field) {
+  return fn(field, "Yesterday", "yesterday", []);
+}
+
+const proxyTableMap = /* @__PURE__ */ new WeakMap();
+class Aggregation {
+  constructor(operation, field, alias) {
+    this.operation = operation;
+    this.field = field;
+    this.alias = alias;
+  }
+  /** OData format (e.g. `"title with average as avg_title"`). */
+  toOdata(alias) {
+    const a = alias ?? this.alias;
+    if (this.operation === "count" || this.operation === "countdistinct") {
+      return a ? `$count as ${a}` : `$count`;
+    }
+    const resolvedAlias = a ?? this.field;
+    return `${this.field} with ${this.operation} as ${resolvedAlias}`;
+  }
+  /** FetchXML format (e.g. `name="title" alias="avg_title" aggregate="avg"`). */
+  toXml(alias) {
+    if (!this.field) return "";
+    const a = alias ?? this.alias ?? this.field;
+    return `name="${this.field}" alias="${a}" aggregate="${this.operation}"`;
+  }
+  toString() {
+    return this.toOdata();
+  }
+}
+function avg(name, alias) {
+  return new Aggregation("average", name, alias);
+}
+function sum(name, alias) {
+  return new Aggregation("sum", name, alias);
+}
+function min(name, alias) {
+  return new Aggregation("min", name, alias);
+}
+function max(name, alias) {
+  return new Aggregation("max", name, alias);
+}
+function count(fieldOrAlias, alias) {
+  if (fieldOrAlias === void 0) {
+    return new Aggregation("count", void 0, alias);
+  }
+  if (alias !== void 0) {
+    return new Aggregation("count", fieldOrAlias, alias);
+  }
+  return new Aggregation("count", fieldOrAlias);
+}
 class ODataQuery {
   _table;
   _fields = [];
@@ -2038,56 +2312,42 @@ class ODataQuery {
   _expands = [];
   _orderby = [];
   _top;
-  _includeCount = false;
   _apply = "";
-  _lambdaAliasIndex = 0;
   _proxy;
   constructor(table) {
     this._table = table;
     this._proxy = this._buildProxy();
+    this._selectDefaults();
+  }
+  _selectDefaults() {
+    for (const prop of Object.values(this._table.fields)) {
+      if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
+        this._fields.push(prop.fromDataverseName ?? prop.name);
+      }
+    }
   }
   _buildProxy() {
-    return this._buildProxyForTable(this._table);
+    return this._buildProxyForDataverseTable(this._table);
   }
-  _buildProxyForTable(table, prefix) {
+  _buildProxyForDataverseTable(table, prefix) {
     const proxy = {};
     const fields = table.fields;
     for (const [key, prop] of Object.entries(fields)) {
       const dataverseName = prop.fromDataverseName ?? prop.name;
-      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
+      const isCollection = prop.kind === "navigation" && prop.type === "collection";
+      const isLookup = prop.kind === "navigation" && prop.type === "lookup";
+      if (isCollection || isLookup) {
         const navProp = prop;
         const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName;
         let cached;
         Object.defineProperty(proxy, key, {
           get: () => {
             if (!cached) {
-              const sub = this._buildProxyForTable(navProp.table, currentPrefix);
+              const sub = this._buildProxyForDataverseTable(navProp.table, currentPrefix);
               sub.toString = () => dataverseName;
-              const lambdaMap = {};
-              const navFields = navProp.table.fields;
-              for (const [lk, lp] of Object.entries(navFields)) {
-                lambdaMap[lk] = lp.fromDataverseName ?? lp.name;
+              if (isCollection) {
+                proxyTableMap.set(sub, navProp.table);
               }
-              const buildLambdaProxy = (alias) => {
-                const lp = {};
-                for (const [k, n] of Object.entries(lambdaMap)) lp[k] = `${alias}/${n}`;
-                return lp;
-              };
-              const resolveAliasAndCallback = (a, b) => {
-                if (typeof a === "function") {
-                  const alias = String.fromCharCode(97 + this._lambdaAliasIndex++ % 26);
-                  return { alias, cb: a };
-                }
-                return { alias: a, cb: b };
-              };
-              sub.any = (a, b) => {
-                const { alias, cb } = resolveAliasAndCallback(a, b);
-                return `${getName(sub)}/any(${alias}: ${cb(buildLambdaProxy(alias))})`;
-              };
-              sub.all = (a, b) => {
-                const { alias, cb } = resolveAliasAndCallback(a, b);
-                return `${getName(sub)}/all(${alias}: ${cb(buildLambdaProxy(alias))})`;
-              };
               cached = sub;
             }
             return cached;
@@ -2103,30 +2363,32 @@ class ODataQuery {
   }
   /**
    * Restricts the returned columns to the specified fields.
-   * This narrows the result type to only the selected properties.
+   * By default, all value columns are selected.
    *
    * @param keys One or more value-field keys (navigation properties are excluded).
    *
    * @example
-   * const q = fetchOdata(Person).select("name", "age");
-   * // TResult → { name: string; age: number }
+   * fetchOdata(Person).select("name", "age");
    */
   select(...keys) {
     this._fields = keys.map((k) => this._proxy[k]);
     return this;
   }
   where(filter) {
-    const str = typeof filter === "string" ? filter : filter(this._proxy);
+    let str;
+    if (filter instanceof FilterExpr) {
+      str = filter.toOdata();
+    } else if (typeof filter === "function") {
+      const result = filter(this._proxy);
+      str = result instanceof FilterExpr ? result.toOdata() : result;
+    } else {
+      str = filter;
+    }
     this._filters.push(str);
     return this;
   }
   /**
-   * Adds a `$expand` clause for a navigation property. The callback receives a
-   * nested {@link ODataQuery} scoped to the related table for further `.select()`,
-   * `.where()`, `.expand()`, etc.
-   *
-   * @param key The navigation property key.
-   * @param sub A callback to configure the nested query.
+   * Adds a `$expand` clause for a navigation property.
    *
    * @example
    * fetchOdata(Person)
@@ -2145,76 +2407,41 @@ class ODataQuery {
     const child = new ODataQuery(prop.table);
     const result = sub(child);
     const q = result ?? child;
-    this._expands.push({ name: prop.name, query: q._build() });
-    return this;
-  }
-  orderby(arg) {
-    if (typeof arg === "function") {
-      const result = arg(this._proxy);
-      if (result instanceof OrderSpec) {
-        this._orderby = result.fields.map((f) => ({ name: f, dir: result.direction }));
-      } else if (Array.isArray(result)) {
-        this._orderby = result.flatMap((s) => s.fields.map((f) => ({ name: f, dir: s.direction })));
-      } else {
-        this._orderby = Object.entries(result).filter(([, v]) => v).map(([k, v]) => ({ name: k, dir: v }));
-      }
-      return this;
-    }
-    this._orderby = Object.entries(arg).filter(([, v]) => v).map(([k, v]) => ({ name: this._proxy[k], dir: v }));
+    this._expands.push({ name: prop.name, query: q._build(true) });
     return this;
   }
   /**
-   * Limits the number of returned records (`$top`).
+   * Adds a `$orderby` clause. The callback receives a field proxy to select
+   * a field. Direction defaults to `"asc"`. Multiple calls accumulate.
    *
    * @example
-   * fetchOdata(Person).top(10);
+   * fetchOdata(Person).orderby(f => f.name);
+   * fetchOdata(Person).orderby(f => f.age, "desc");
    */
+  orderby(fieldSelector, direction = "asc") {
+    this._orderby.push({ name: fieldSelector(this._proxy), dir: direction });
+    return this;
+  }
+  /** Limits the number of returned records (`$top`). */
   top(n) {
     this._top = n;
     return this;
   }
-  /**
-   * Includes the total record count in the response (`$count=true`).
-   *
-   * @example
-   * const q = fetchOdata(Person).includeCount();
-   * // query string: "$count=true"
-   */
-  includeCount() {
-    this._includeCount = true;
+  groupby(selectFields, aggFields) {
+    const groupByNames = selectFields(this._proxy);
+    const aggStrings = aggFields ? Object.entries(aggFields(this._proxy)).map(([alias, agg]) => agg.toOdata(alias)) : [];
+    if (groupByNames.length > 0 && aggStrings.length > 0) {
+      this._apply = `groupby((${groupByNames.join(",")}),aggregate(${aggStrings.join(",")}))`;
+    } else if (groupByNames.length > 0) {
+      this._apply = `groupby((${groupByNames.join(",")}))`;
+    } else if (aggStrings.length > 0) {
+      this._apply = `aggregate(${aggStrings.join(",")})`;
+    }
     return this;
   }
-  /**
-   * Adds a `$apply` expression for server-side aggregation.
-   *
-   * @param expression A raw OData `$apply` expression.
-   *
-   * @example
-   * fetchOdata(Person).apply("groupby((person_age),aggregate(person_age with sum as total))");
-   */
-  apply(expression) {
-    this._apply = expression;
-    return this;
-  }
-  /**
-   * Adds a `$expand` with `/$ref` to retrieve only the related record IDs
-   * instead of full expanded records. The navigation property is removed from
-   * the result type.
-   *
-   * @param key The navigation property key.
-   *
-   * @example
-   * const q = fetchOdata(Person).expandRef("primaryAddress");
-   * // query: "$expand=person_Address/$ref"
-   * // TResult no longer includes primaryAddress
-   */
-  expandRef(key) {
-    const prop = this._table.fields[key];
-    this._expands.push({ name: prop.name, query: "", isRef: true });
-    return this;
-  }
-  _build() {
+  _build(forExpand = false) {
     const parts = [];
+    const joinChar = forExpand ? ";" : "&";
     if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
     if (this._filters.length === 1) {
       parts.push(`$filter=${this._filters[0]}`);
@@ -2226,14 +2453,12 @@ class ODataQuery {
     }
     if (this._expands.length) {
       parts.push(`$expand=${this._expands.map((e) => {
-        if (e.isRef) return `${e.name}/$ref`;
         return e.query ? `${e.name}(${e.query})` : e.name;
       }).join(",")}`);
     }
     if (this._top !== void 0) parts.push(`$top=${this._top}`);
-    if (this._includeCount) parts.push(`$count=true`);
     if (this._apply) parts.push(`$apply=${this._apply}`);
-    return parts.join("&");
+    return parts.join(joinChar);
   }
   toString() {
     return this._build();
@@ -2241,9 +2466,31 @@ class ODataQuery {
   async execute() {
     const qs = this.toString();
     if (!qs) return this._table.getRecords();
-    const raw = await this._table.client.getRecords(this._table.name, qs);
+    const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
     return raw.map((v) => this._table.transformValueFromDataverse(v));
   }
+}
+function buildLambdaProxy(alias, table) {
+  const fields = table.fields;
+  const proxy = {};
+  for (const [key, prop] of Object.entries(fields)) {
+    proxy[key] = `${alias}/${prop.fromDataverseName ?? prop.name}`;
+  }
+  return proxy;
+}
+function any(proxy, condition) {
+  const alias = "x";
+  const table = proxyTableMap.get(proxy);
+  if (!table) throw new Error("any() requires a collection navigation proxy");
+  const result = condition(buildLambdaProxy(alias, table));
+  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "any", alias, condition: result instanceof FilterExpr ? result.toOdata() : result });
+}
+function all(proxy, condition) {
+  const alias = "x";
+  const table = proxyTableMap.get(proxy);
+  if (!table) throw new Error("all() requires a collection navigation proxy");
+  const result = condition(buildLambdaProxy(alias, table));
+  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "all", alias, condition: result instanceof FilterExpr ? result.toOdata() : result });
 }
 function fetchOdata(table) {
   return new ODataQuery(table);
@@ -2269,7 +2516,7 @@ class EntityQueryBuilder {
   _pagingCookie;
   _datasource;
   _options;
-  /** @param table The Table definition to build the query against. */
+  /** @param table The DataverseTable definition to build the query against. */
   constructor(table) {
     this._table = table;
     this._proxy = this._buildProxy();
@@ -2286,7 +2533,7 @@ class EntityQueryBuilder {
    * The result type is narrowed to only include selected fields.
    *
    * @example
-   * fetchXml(contactTable)
+   * fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
    */
   select(selector) {
@@ -2308,14 +2555,22 @@ class EntityQueryBuilder {
    *
    * @example
    * // With callback
-   * fetchXml(contactTable).where(f => condition(f.status, "eq", 1))
+   * fetchXml(contactDataverseTable).where(f => condition(f.status, "eq", 1))
    *
    * @example
    * // Raw filter string
-   * fetchXml(contactTable).where(condition("statuscode", "eq", "1"))
+   * fetchXml(contactDataverseTable).where(condition("statuscode", "eq", "1"))
    */
   where(filter) {
-    const str = typeof filter === "function" ? filter(this._proxy) : filter;
+    let str;
+    if (filter instanceof FilterExpr) {
+      str = filter.toFetchXml();
+    } else if (typeof filter === "function") {
+      const result = filter(this._proxy);
+      str = result instanceof FilterExpr ? result.toFetchXml() : result;
+    } else {
+      str = filter;
+    }
     this._filters.push(str);
     return this;
   }
@@ -2324,9 +2579,9 @@ class EntityQueryBuilder {
    * joined entity's selected fields.
    *
    * @example
-   * fetchXml(contactTable)
+   * fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name }))
-   *   .join("inner", accountTable, a => a.accountid, c => c.parentcustomerid,
+   *   .join("inner", accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
    *     q => q.select(a => ({ accountName: a.name })))
    */
   join(linkType, table, from, to, subquery, intersect) {
@@ -2335,14 +2590,15 @@ class EntityQueryBuilder {
     const fromFieldName = table.fields[from].name;
     const toFieldName = this._table.fields[to].name;
     const autoAlias = `auto_link_${++this._aliasCounter}`;
+    const isIntersect = intersect ?? table.intersect === true;
     this._links.push({
-      name: table.name,
+      name: table.logicalName,
       from: fromFieldName,
       to: toFieldName,
       alias: autoAlias,
       linkType,
       builder: nestedBuilder,
-      intersect
+      intersect: isIntersect
     });
     return this;
   }
@@ -2350,13 +2606,49 @@ class EntityQueryBuilder {
    * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
    *
    * @example
-   * fetchXml(contactTable)
+   * fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name }))
-   *   .innerJoin(accountTable, a => a.accountid, c => c.parentcustomerid,
+   *   .innerJoin(accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
    *     q => q.select(a => ({ accountName: a.name })))
    */
   innerJoin(table, from, to, subquery, intersect) {
     return this.join("inner", table, from, to, subquery, intersect);
+  }
+  through(intersectTable, subquery) {
+    let targetTable;
+    if (intersectTable.table1 === this._table) {
+      targetTable = intersectTable.table2;
+    } else if (intersectTable.table2 === this._table) {
+      targetTable = intersectTable.table1;
+    } else {
+      throw new Error(
+        `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
+      );
+    }
+    const targetBuilder = new EntityQueryBuilder(targetTable);
+    subquery(targetBuilder);
+    const pkName = this._table.getPrimaryKey().property.name;
+    const targetPkName = targetTable.getPrimaryKey().property.name;
+    const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
+    const intersectBuilder = new EntityQueryBuilder(stubTable);
+    intersectBuilder._links.push({
+      name: targetTable.logicalName,
+      from: targetPkName,
+      to: targetPkName,
+      alias: `auto_link_${++this._aliasCounter}`,
+      linkType: "inner",
+      builder: targetBuilder
+    });
+    this._links.push({
+      name: intersectTable.name,
+      from: pkName,
+      to: pkName,
+      alias: `auto_link_${++this._aliasCounter}`,
+      linkType: "inner",
+      builder: intersectBuilder,
+      intersect: true
+    });
+    return this;
   }
   /** Enables distinct (deduplicated) results. */
   distinct() {
@@ -2415,22 +2707,9 @@ class EntityQueryBuilder {
   }
   orderby(...args) {
     if (typeof args[0] === "function") {
-      const result = args[0](this._proxy);
-      if (result instanceof OrderSpec) {
-        for (const attr of result.fields) {
-          this._orders.push({ attribute: attr, descending: result.direction === "desc" });
-        }
-      } else if (Array.isArray(result)) {
-        for (const spec of result) {
-          for (const attr of spec.fields) {
-            this._orders.push({ attribute: attr, descending: spec.direction === "desc" });
-          }
-        }
-      } else {
-        for (const [attr, dir] of Object.entries(result)) {
-          this._orders.push({ attribute: attr, descending: dir === "desc" });
-        }
-      }
+      const name = args[0](this._proxy);
+      const dir = args[1] ?? "asc";
+      this._orders.push({ attribute: name, descending: dir === "desc" });
     } else {
       const entityname = args[0];
       const attribute = args[1];
@@ -2439,66 +2718,31 @@ class EntityQueryBuilder {
     }
     return this;
   }
-  /** Adds a SUM aggregate. Marks the query as aggregate. */
-  sum(field, alias) {
+  groupby(selectFields, aggFields) {
     this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, aggregate: "sum" });
-    return this;
-  }
-  /** Adds an AVG aggregate. Marks the query as aggregate. */
-  avg(field, alias) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, aggregate: "avg" });
-    return this;
-  }
-  /** Adds a MIN aggregate. Marks the query as aggregate. */
-  min(field, alias) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, aggregate: "min" });
-    return this;
-  }
-  /** Adds a MAX aggregate. Marks the query as aggregate. */
-  max(field, alias) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, aggregate: "max" });
-    return this;
-  }
-  /** Adds a COUNT aggregate. Marks the query as aggregate. */
-  count(field, alias) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, aggregate: "count" });
-    return this;
-  }
-  /** Adds a COUNTCOLUMN aggregate with optional distinct flag. Marks the query as aggregate. */
-  countColumn(field, alias, distinct) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, aggregate: "countcolumn", distinct });
-    return this;
-  }
-  /** Adds a custom row aggregate. */
-  rowAggregate(field, alias, rowaggregate) {
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, rowaggregate });
-    return this;
-  }
-  /** Adds a GROUP BY on a field. Marks the query as aggregate. */
-  groupBy(field, alias) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, groupby: true });
-    return this;
-  }
-  /** Adds a GROUP BY with date grouping (e.g. "day", "month", "year"). Marks the query as aggregate. */
-  groupByDate(field, alias, dategrouping) {
-    this._isAggregate = true;
-    const fieldDef = this._table.fields[field];
-    this._attributes.push({ name: fieldDef.name, alias, groupby: true, dategrouping });
+    const keyProxy = {};
+    for (const key of Object.keys(this._table.fields)) {
+      keyProxy[key] = key;
+    }
+    const groupByKeys = selectFields(keyProxy);
+    for (const key of groupByKeys) {
+      const fieldDef = this._table.fields[key];
+      if (fieldDef) {
+        this._attributes.push({ name: fieldDef.name, alias: key, groupby: true });
+      }
+    }
+    if (aggFields) {
+      const aggs = aggFields(this._proxy);
+      for (const [alias, agg] of Object.entries(aggs)) {
+        if (agg.field) {
+          this._attributes.push({
+            name: agg.field,
+            alias,
+            aggregate: agg.operation
+          });
+        }
+      }
+    }
     return this;
   }
   /** Sets the paging cookie for navigating paginated results. */
@@ -2510,7 +2754,7 @@ class EntityQueryBuilder {
    * Returns the full FetchXML string.
    *
    * @example
-   * const xml = fetchXml(contactTable)
+   * const xml = fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name }))
    *   .toXml();
    * // <fetch version="1.0" mapping="logical">
@@ -2535,7 +2779,7 @@ class EntityQueryBuilder {
     if (this._datasource) fetchAttrs.push(`datasource='${this._datasource}'`);
     if (this._options) fetchAttrs.push(`options='${this._options}'`);
     lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
-    lines.push(`  <entity name="${this._table.name}">`);
+    lines.push(`  <entity name="${this._table.logicalName}">`);
     for (const attr of this._attributes) {
       const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
       if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
@@ -2560,43 +2804,57 @@ class EntityQueryBuilder {
       lines.push(`    </filter>`);
     }
     for (const link of this._links) {
-      const linkAttrs = [
-        `name="${link.name}"`,
-        `from="${link.from}"`,
-        `to="${link.to}"`,
-        `alias="${link.alias}"`,
-        `link-type="${link.linkType}"`
-      ];
-      if (link.intersect) linkAttrs.push(`intersect="true"`);
-      lines.push(`    <link-entity ${linkAttrs.join(" ")}>`);
-      if (link.builder._filters.length > 0) {
-        lines.push(`      <filter type="and">`);
-        for (const c of link.builder._filters) {
-          const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
-          lines.push(`        ${entityScoped}`);
-        }
-        lines.push(`      </filter>`);
-      }
-      for (const nestedAttr of link.builder._attributes) {
-        const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
-        if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
-        if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
-        if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
-        if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
-        if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
-        lines.push(`      <attribute ${attrParts.join(" ")} />`);
-      }
-      lines.push(`    </link-entity>`);
+      lines.push(...this._renderLinkEntity(link, "    "));
     }
     lines.push(`  </entity>`);
     lines.push(`</fetch>`);
     return lines.join("\n");
   }
+  _renderLinkEntity(link, indent) {
+    const lines = [];
+    const linkAttrs = [
+      `name="${link.name}"`,
+      `from="${link.from}"`,
+      `to="${link.to}"`,
+      `alias="${link.alias}"`,
+      `link-type="${link.linkType}"`
+    ];
+    if (link.intersect) linkAttrs.push(`intersect="true"`);
+    lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
+    const childIndent = `${indent}  `;
+    if (link.builder._filters.length > 0) {
+      lines.push(`${childIndent}<filter type="and">`);
+      for (const c of link.builder._filters) {
+        const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
+        lines.push(`${childIndent}  ${entityScoped}`);
+      }
+      lines.push(`${childIndent}</filter>`);
+    }
+    for (const nestedAttr of link.builder._attributes) {
+      const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
+      if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
+      if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
+      if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
+      if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
+      if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
+      lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
+    }
+    for (const order of link.builder._orders) {
+      const parts = [`attribute='${order.attribute}'`];
+      if (order.descending) parts.push(`descending='true'`);
+      lines.push(`${childIndent}<order ${parts.join(" ")} />`);
+    }
+    for (const nestedLink of link.builder._links) {
+      lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+    }
+    lines.push(`${indent}</link-entity>`);
+    return lines;
+  }
   /**
    * Returns the URL-encoded query string for use in the Dataverse API.
    *
    * @example
-   * fetchXml(contactTable).select(f => ({ name: f.name })).toString()
+   * fetchXml(contactDataverseTable).select(f => ({ name: f.name })).toString()
    * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
    */
   toString() {
@@ -2606,15 +2864,49 @@ class EntityQueryBuilder {
    * Executes the FetchXML query against Dataverse and returns the parsed results.
    *
    * @example
-   * const contacts = await fetchXml(contactTable)
+   * const contacts = await fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
    *   .where(f => condition(f.status, "eq", 1))
    *   .execute();
    * // contacts: Array<{ name: string; email: string }>
    */
   async execute() {
-    const raw = await this._table.client.getRecords(this._table.name, this.toString());
+    const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+    const aliasMap = this._buildAliasMap();
+    if (aliasMap.size > 0) {
+      return raw.map((v) => {
+        const result = {};
+        for (const [alias, transform] of aliasMap) {
+          if (alias in v) {
+            result[alias] = transform(v[alias]);
+          }
+        }
+        return result;
+      });
+    }
     return raw.map((v) => this._table.transformValueFromDataverse(v));
+  }
+  _buildAliasMap() {
+    const map = /* @__PURE__ */ new Map();
+    this._collectAliases(this, map);
+    return map;
+  }
+  _collectAliases(builder, map) {
+    for (const attr of builder._attributes) {
+      const fields = builder._table.fields;
+      const entry = Object.entries(fields).find(
+        ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name
+      );
+      if (entry) {
+        const fieldDef = entry[1];
+        map.set(attr.alias, (val) => fieldDef.transformValueFromDataverse(val));
+      } else {
+        map.set(attr.alias, (val) => val);
+      }
+    }
+    for (const link of builder._links) {
+      this._collectAliases(link.builder, map);
+    }
   }
 }
 function condition(attribute, operator, value) {
@@ -2630,4 +2922,4 @@ function fetchXml(table) {
   return new EntityQueryBuilder(table);
 }
 
-export { Above, AboveOrEqual, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FormattedField, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, Table, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, aggregate, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, compare, condition, contains, count, date, datetime, desc, email, endsWith, equals, expand, fetchOdata, fetchXML, fetchXml, file, filterAnd, filterOr, formatted, getEtag, getImageUrl, getName, greaterThan, greaterThanOrEqual, groupby, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, lessThan, lessThanOrEqual, list, lookup, lookupId, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, not, notEquals, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, query, required, select, startsWith, string, sum, table, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FilterExpr, FormattedField, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, avg, base64ImageToURL, boolean, collection, collectionIds, compare, condition, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, filterAnd, filterOr, formatted, ge, getEtag, getImageUrl, getName, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
