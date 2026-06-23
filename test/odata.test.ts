@@ -1,7 +1,8 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, sum, avg, min, max, count } from "../src"
+import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, isNull, isNotNull, sum, avg, min, max, count } from "../src"
 import { DataverseTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection, Infer } from "../src"
+import { Etag, getEtag } from "../src/util"
 import { BASE_URL } from "./mocks/handlers"
 import { server } from "./mocks/server"
 import { http, HttpResponse } from "msw"
@@ -678,5 +679,194 @@ test("execute transforms datetime fields", async () => {
   expect(results[0].active).toBe(true)
   expect(results[0].createdOn).toBeInstanceOf(Date)
   expect(results[0].createdOn?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
+})
+
+// --- Bug 1: groupby excludes select, orderby, expand from query string ---
+
+test("groupby excludes select, orderby, expand from query string", () => {
+  const q = fetchOdata(Person)
+    .select("name", "age")
+    .orderby(f => f.name)
+    .expand("primaryAddress", sub => sub.select("street"))
+    .groupby(f => [f.age], f => ({ total: sum(f.age) }))
+    .toString()
+  expect(q).not.toContain("$select=")
+  expect(q).not.toContain("$orderby=")
+  expect(q).not.toContain("$expand=")
+  expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with sum as total))")
+})
+
+test("groupby runtime guard throws on select after groupby", () => {
+  const q = fetchOdata(Person).groupby(f => [f.age])
+  expect(() => (q as any).select("name")).toThrow("select() is not supported after groupby()")
+})
+
+test("groupby runtime guard throws on orderby after groupby", () => {
+  const q = fetchOdata(Person).groupby(f => [f.age])
+  expect(() => (q as any).orderby((f: any) => f.name)).toThrow("orderby() is not supported after groupby()")
+})
+
+test("groupby runtime guard throws on expand after groupby", () => {
+  const q = fetchOdata(Person).groupby(f => [f.age])
+  expect(() => (q as any).expand("primaryAddress")).toThrow("expand() is not supported after groupby()")
+})
+
+test("groupby runtime guard throws on double groupby", () => {
+  const q = fetchOdata(Person).groupby(f => [f.age])
+  expect(() => (q as any).groupby((f: any) => [f.name])).toThrow("groupby() can only be called once")
+})
+
+// --- Bug 2: select partial transform ---
+
+test("execute with select only returns selected fields", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          active: true,
+          createdon: "2024-06-15T12:00:00Z",
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person).select("name", "age")
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(results[0]).toHaveProperty("name", "John")
+  expect(results[0]).toHaveProperty("age", 30)
+  expect(results[0]).not.toHaveProperty("active")
+  expect(results[0]).not.toHaveProperty("createdOn")
+  expect(results[0]).not.toHaveProperty("pk")
+})
+
+// --- Bug 3: etag ---
+
+test("execute carries etag from response", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          active: true,
+          "@odata.etag": 'W/"123456"',
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person)
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(getEtag(results[0])).toBe('W/"123456"')
+})
+
+test("execute with select carries etag", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          "@odata.etag": 'W/"789012"',
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person).select("name", "age")
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(getEtag(results[0])).toBe('W/"789012"')
+})
+
+// --- Bug 4: filter function types accept field proxies ---
+
+test("isNull filter with field proxy", () => {
+  const q = fetchOdata(Person)
+    .where(f => isNull(f.name))
+    .toString()
+  expect(q).toContain("fullname eq null")
+})
+
+test("isNotNull filter with field proxy", () => {
+  const q = fetchOdata(Person)
+    .where(f => isNotNull(f.age))
+    .toString()
+  expect(q).toContain("person_age ne null")
+})
+
+test("isNull with lookup nav proxy at parent level", () => {
+  const q = fetchOdata(Person)
+    .where(f => isNull(f.primaryAddress))
+    .toString()
+  expect(q).toContain("person_Address eq null")
+})
+
+// --- Bug 6: expand optional sub-query ---
+
+test("expand without sub-query callback generates simple expand", () => {
+  const q = fetchOdata(Person)
+    .expand("primaryAddress")
+    .toString()
+  expect(q).toContain("$expand=person_Address")
+})
+
+test("expand without sub-query on collection nav property", () => {
+  const q = fetchOdata(Person)
+    .expand("addresses")
+    .toString()
+  expect(q).toContain("$expand=person_Address_person")
+})
+
+// --- Bug 7: collection expand sub-query restrictions ---
+
+test("collection expand allows lookup expand in sub-query", () => {
+  const q = fetchOdata(Person)
+    .expand("addresses", sub =>
+      sub.expand("location", sub2 => sub2.select("name"))
+    )
+    .toString()
+  expect(q).toContain("person_Address_person")
+  expect(q).toContain("address_Location")
+  expect(q).toContain("$select=location_name")
+})
+
+// --- Bug 8: lookup expand sub-query restrictions ---
+
+test("lookup expand throws on orderby", () => {
+  expect(() => {
+    fetchOdata(Person)
+      .expand("primaryAddress", sub =>
+        (sub as any).orderby((f: any) => f.street)
+      )
+      .toString()
+  }).toThrow("orderby() is not supported in lookup expands")
+})
+
+test("lookup expand throws on top", () => {
+  expect(() => {
+    fetchOdata(Person)
+      .expand("primaryAddress", sub =>
+        (sub as any).top(5)
+      )
+      .toString()
+  }).toThrow("top() is not supported in lookup expands")
+})
+
+test("groupby is not supported in expand sub-queries", () => {
+  expect(() => {
+    fetchOdata(Person)
+      .expand("primaryAddress", sub =>
+        (sub as any).groupby((f: any) => [f.street])
+      )
+      .toString()
+  }).toThrow("groupby() is not supported in expand sub-queries")
 })
 

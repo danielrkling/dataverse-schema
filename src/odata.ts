@@ -1,7 +1,7 @@
 import { DataverseTable } from "./table"
 import { GenericProperties, Infer } from "./types"
 import { LookupProperty, CollectionProperty } from "./fields"
-import { getName } from "./util"
+import { getName, Etag } from "./util"
 import { FilterExpr } from "./filter"
 
 const proxyTableMap = new WeakMap<object, DataverseTable<any>>()
@@ -94,6 +94,14 @@ type NavKeys<T> = {
   [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? K : never
 }[keyof T]
 
+type CollectionKeys<T> = {
+  [K in keyof T]: T[K] extends CollectionProperty<any> ? K : never
+}[keyof T]
+
+type LookupKeys<T> = {
+  [K in keyof T]: T[K] extends LookupProperty<any> ? K : never
+}[keyof T]
+
 type ValueKeys<T> = {
   [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? never : K
 }[keyof T]
@@ -146,11 +154,14 @@ type GroupByFields<TFields extends FieldRef<any, string>[]> = {
 export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _table: DataverseTable<T>
   private _fields: string[] = []
+  private _selectedKeys: string[] = []
   private _filters: string[] = []
-  private _expands: Array<{ name: string; query: string }> = []
+  private _expands: Array<{ name: string; key: string; query: string }> = []
   private _orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
   private _top?: number
   private _apply = ""
+  private _hasGroupby = false
+  private _expandMode: "full" | "collection" | "lookup" = "full"
   private _proxy: ODataFieldProxy<T>
 
   constructor(table: DataverseTable<T>) {
@@ -214,7 +225,9 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
    * fetchOdata(Person).select("name", "age");
    */
   select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, { [P in K]: Infer<T[P]> }> {
+    if (this._hasGroupby) throw new Error("select() is not supported after groupby()")
     this._fields = keys.map(k => this._proxy[k] as string)
+    this._selectedKeys = keys as string[]
     return this as any
   }
 
@@ -263,16 +276,30 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
    *     sub.expand("location", sub2 => sub2.select("name"))
    *   );
    */
+  expand<K extends CollectionKeys<T>, R>(
+    key: K,
+    sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'groupby'>) => ODataQuery<RelatedProps<T, K>, R>,
+  ): ODataQuery<T, Omit<TResult, K & keyof TResult> & { [P in K]: ExpandResult<T, P, R> }>
+  expand<K extends LookupKeys<T>, R>(
+    key: K,
+    sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'groupby'>) => ODataQuery<RelatedProps<T, K>, R>,
+  ): ODataQuery<T, Omit<TResult, K & keyof TResult> & { [P in K]: ExpandResult<T, P, R> }>
   expand<K extends string & NavKeys<T>, R>(
     key: K,
-    sub: (q: ODataQuery<RelatedProps<T, K>>) => ODataQuery<RelatedProps<T, K>, R>,
-  ): ODataQuery<T, Omit<TResult, K & keyof TResult> & { [P in K]: ExpandResult<T, P, R> }> {
+    sub?: (q: any) => any,
+  ): any {
+    if (this._hasGroupby) throw new Error("expand() is not supported after groupby()")
     const prop = this._table.fields[key] as LookupProperty<any> | CollectionProperty<any>
+    const isCollection = prop.type === "collection"
+    if (this._expandMode === "collection" && isCollection) {
+      throw new Error("expand() within a collection expand only supports lookup navigation properties")
+    }
     const child = new ODataQuery(prop.table) as unknown as ODataQuery<RelatedProps<T, K>>
-    const result = sub(child)
+    child._expandMode = isCollection ? "collection" : "lookup"
+    const result = sub?.(child)
     const q = result ?? child
-    this._expands.push({ name: prop.name, query: q._build(true) })
-    return this as any
+    this._expands.push({ name: prop.name, key, query: q._build(true) })
+    return this
   }
 
   /**
@@ -284,12 +311,15 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
    * fetchOdata(Person).orderby(f => f.age, "desc");
    */
   orderby(fieldSelector: (f: ODataFieldProxy<T>) => string, direction: "asc" | "desc" = "asc"): this {
+    if (this._hasGroupby) throw new Error("orderby() is not supported after groupby()")
+    if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands")
     this._orderby.push({ name: fieldSelector(this._proxy), dir: direction })
     return this
   }
 
   /** Limits the number of returned records (`$top`). */
   top(n: number): this {
+    if (this._expandMode === "lookup") throw new Error("top() is not supported in lookup expands")
     this._top = n
     return this
   }
@@ -321,14 +351,17 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   groupby<const TFields extends FieldRef<any, string>[], A extends Record<string, Aggregation>>(
     selectFields: (f: ODataFieldProxy<T>) => TFields,
     aggFields: (f: ODataFieldProxy<T>) => A,
-  ): ODataQuery<T, GroupByFields<TFields> & { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number }>
+  ): Omit<ODataQuery<T, GroupByFields<TFields> & { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number }>, 'select' | 'orderby' | 'expand' | 'groupby'>
   groupby<const TFields extends FieldRef<any, string>[]>(
     selectFields: (f: ODataFieldProxy<T>) => TFields,
-  ): ODataQuery<T, GroupByFields<TFields>>
+  ): Omit<ODataQuery<T, GroupByFields<TFields>>, 'select' | 'orderby' | 'expand' | 'groupby'>
   groupby(
     selectFields: (f: ODataFieldProxy<T>) => any[],
     aggFields?: (f: ODataFieldProxy<T>) => Record<string, Aggregation>,
-  ): ODataQuery<T, any> {
+  ): any {
+    if (this._hasGroupby) throw new Error("groupby() can only be called once")
+    if (this._expandMode !== "full") throw new Error("groupby() is not supported in expand sub-queries")
+    this._hasGroupby = true
     const groupByNames = selectFields(this._proxy as any) as string[]
     const aggStrings = aggFields
       ? Object.entries(aggFields(this._proxy as any)).map(([alias, agg]) => agg.toOdata(alias))
@@ -346,19 +379,21 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _build(forExpand = false): string {
     const parts: string[] = []
     const joinChar = forExpand ? ";" : "&"
-    if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`)
+    if (!this._hasGroupby) {
+      if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`)
+      if (this._orderby.length) {
+        parts.push(`$orderby=${this._orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
+      }
+      if (this._expands.length) {
+        parts.push(`$expand=${this._expands.map(e => {
+          return e.query ? `${e.name}(${e.query})` : e.name
+        }).join(",")}`)
+      }
+    }
     if (this._filters.length === 1) {
       parts.push(`$filter=${this._filters[0]}`)
     } else if (this._filters.length > 1) {
       parts.push(`$filter=${this._filters.join(" and ")}`)
-    }
-    if (this._orderby.length) {
-      parts.push(`$orderby=${this._orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
-    }
-    if (this._expands.length) {
-      parts.push(`$expand=${this._expands.map(e => {
-        return e.query ? `${e.name}(${e.query})` : e.name
-      }).join(",")}`)
     }
     if (this._top !== undefined) parts.push(`$top=${this._top}`)
     if (this._apply) parts.push(`$apply=${this._apply}`)
@@ -369,10 +404,29 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     return this._build()
   }
 
+  private _partialTransform(value: any): Record<string, any> {
+    const result: Record<string | symbol, any> = {}
+    for (const key of this._selectedKeys) {
+      const prop = this._table.fields[key]
+      result[key] = prop.transformValueFromDataverse(value[prop.fromDataverseName])
+    }
+    for (const expand of this._expands) {
+      const prop = this._table.fields[expand.key]
+      if (prop && value[expand.name] !== undefined) {
+        result[expand.key] = (prop as any).transformValueFromDataverse(value[expand.name])
+      }
+    }
+    result[Etag] = value["@odata.etag"]
+    return result
+  }
+
   async execute(): Promise<TResult[]> {
     const qs = this.toString()
     if (!qs) return this._table.getRecords() as Promise<TResult[]>
     const raw = await this._table.client.getRecords(this._table.entitySetName, qs)
+    if (this._selectedKeys.length > 0) {
+      return raw.map((v: unknown) => this._partialTransform(v)) as TResult[]
+    }
     return raw.map((v: unknown) => this._table.transformValueFromDataverse(v)) as TResult[]
   }
 }

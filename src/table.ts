@@ -604,7 +604,7 @@ export class DataverseTable<TProperties extends GenericProperties> extends Schem
     for (const [key, property] of Object.entries(this.fields)) {
       result[key] = property.transformValueFromDataverse(value[property.fromDataverseName]);
     }
-    result[Etag] = value[Etag];
+    result[Etag] = value["@odata.etag"];
     return result as Infer<TProperties>;
   }
 

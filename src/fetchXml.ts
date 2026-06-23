@@ -2,6 +2,21 @@ import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { FilterExpr } from "./filter";
 import { Aggregation } from "./odata";
+import { Etag } from "./util";
+
+type AliasInfo = {
+    transform: (val: any) => any;
+    getDefault: () => any;
+    name: string;
+};
+
+type ExecuteOptions = {
+    datasource?: string;
+    lateMaterialize?: boolean;
+    aggregateLimit?: number;
+    useRawOrderBy?: boolean;
+    options?: string;
+};
 
 type Simplify<T> = { [Key in keyof T]: T[Key] } & {};
 
@@ -39,6 +54,10 @@ type OrderDef = {
  * Use `fetchXml(table)` to create a builder, then chain methods to construct
  * the query. Call `execute()` to run it or `toXml()` to get the raw XML.
  *
+ * When `select()` is not called, all value/lookupId/file fields are
+ * automatically included. Each result from `execute()` includes an `Etag`
+ * symbol property for optimistic concurrency.
+ *
  * @example
  * const q = fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name, email: f.email }))
@@ -50,7 +69,7 @@ type OrderDef = {
  * const results = await q.execute();
  */
 export class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
-    private _aliasCounter = 0;
+    private _linkAlias: { value: number };
 
     private _table: DataverseTable<TProps>;
     private _attributes: AttrDef[] = [];
@@ -67,22 +86,31 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     private _filters: string[] = [];
     private _proxy: FieldProxy<TProps>;
     private _top?: number;
-    private _page?: number;
-    private _pageSize?: number;
     private _isAggregate: boolean = false;
-    private _returnTotalRecordCount: boolean = false;
     private _useRawOrderBy: boolean = false;
     private _lateMaterialize: boolean = false;
     private _aggregateLimit?: number;
     private _orders: OrderDef[] = [];
-    private _pagingCookie?: string;
     private _datasource?: string;
     private _options?: string;
 
     /** @param table The DataverseTable definition to build the query against. */
-    constructor(table: DataverseTable<TProps>) {
+    constructor(table: DataverseTable<TProps>, _linkAlias?: { value: number }) {
         this._table = table;
+        this._linkAlias = _linkAlias ?? { value: 0 };
         this._proxy = this._buildProxy();
+    }
+
+    private _getEffectiveAttributes(): AttrDef[] {
+        if (this._attributes.length > 0) return this._attributes;
+        const attrs: AttrDef[] = [];
+        for (const [key, prop] of Object.entries(this._table.fields)) {
+            const p = prop as any;
+            if (p.kind === "value" || p.type === "lookupId" || p.type === "file") {
+                attrs.push({ name: p.fromDataverseName ?? p.name, alias: key });
+            }
+        }
+        return attrs;
     }
 
     private _buildProxy(): FieldProxy<TProps> {
@@ -96,6 +124,8 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     /**
      * Selects specific fields to include in the FetchXML query.
      * The result type is narrowed to only include selected fields.
+     * When this method is not called, all value/lookupId/file fields
+     * are automatically included via `_getEffectiveAttributes()`.
      *
      * @example
      * fetchXml(contactDataverseTable)
@@ -149,6 +179,10 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * Adds a link-entity join to another table. The result type merges the
      * joined entity's selected fields.
      *
+     * For filter-only link types (`any`, `not any`, `all`, `not all`,
+     * `exists`, `in`), only filters are rendered inside `<link-entity>`;
+     * `<attribute>` and `<order>` elements are skipped.
+     *
      * @example
      * fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name }))
@@ -168,13 +202,13 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>> {
-        const nestedBuilder = new EntityQueryBuilder(table);
+        const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias);
         subquery(nestedBuilder);
 
         const fromFieldName = table.fields[from].name;
         const toFieldName = this._table.fields[to].name;
 
-        const autoAlias = `auto_link_${++this._aliasCounter}`;
+        const autoAlias = `auto_link_${++this._linkAlias.value}`;
 
         const isIntersect = intersect ?? ((table as any).intersect === true);
 
@@ -252,19 +286,19 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
             );
         }
 
-        const targetBuilder = new EntityQueryBuilder(targetTable);
+        const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
         subquery(targetBuilder);
 
         const pkName = this._table.getPrimaryKey().property.name;
         const targetPkName = targetTable.getPrimaryKey().property.name;
 
         const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
-        const intersectBuilder = new EntityQueryBuilder(stubTable);
+        const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
         intersectBuilder._links.push({
             name: targetTable.logicalName,
             from: targetPkName,
             to: targetPkName,
-            alias: `auto_link_${++this._aliasCounter}`,
+            alias: `auto_link_${++this._linkAlias.value}`,
             linkType: "inner",
             builder: targetBuilder,
         });
@@ -273,7 +307,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
             name: intersectTable.name,
             from: pkName,
             to: pkName,
-            alias: `auto_link_${++this._aliasCounter}`,
+            alias: `auto_link_${++this._linkAlias.value}`,
             linkType: "inner",
             builder: intersectBuilder,
             intersect: true,
@@ -291,54 +325,6 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     /** Limits the number of returned records. */
     public top(n: number): this {
         this._top = n;
-        return this;
-    }
-
-    /** Sets the page number for paginated results. */
-    public page(n: number): this {
-        this._page = n;
-        return this;
-    }
-
-    /** Sets the number of records per page. */
-    public pageSize(n: number): this {
-        this._pageSize = n;
-        return this;
-    }
-
-    /** Requests the server to include the total record count. */
-    public returnTotalRecordCount(): this {
-        this._returnTotalRecordCount = true;
-        return this;
-    }
-
-    /** Instructs the server to use the raw order-by string. */
-    public useRawOrderBy(): this {
-        this._useRawOrderBy = true;
-        return this;
-    }
-
-    /** Enables late materialization for better performance on large datasets. */
-    public lateMaterialize(): this {
-        this._lateMaterialize = true;
-        return this;
-    }
-
-    /** Sets the aggregate limit for grouped results. */
-    public aggregateLimit(n: number): this {
-        this._aggregateLimit = n;
-        return this;
-    }
-
-    /** Sets custom query options. */
-    public options(value: string): this {
-        this._options = value;
-        return this;
-    }
-
-    /** Sets an alternate datasource (e.g. for federated queries). */
-    public datasource(value: string): this {
-        this._datasource = value;
         return this;
     }
 
@@ -451,12 +437,6 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this as any;
     }
 
-    /** Sets the paging cookie for navigating paginated results. */
-    public pagingCookie(cookie: string): this {
-        this._pagingCookie = cookie;
-        return this;
-    }
-
     /**
      * Returns the full FetchXML string.
      *
@@ -476,21 +456,17 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 
         if (this._top !== undefined) fetchAttrs.push(`top='${this._top}'`);
         if (this._isDistinct) fetchAttrs.push(`distinct="true"`);
-        if (this._page !== undefined) fetchAttrs.push(`page='${this._page}'`);
-        if (this._pageSize !== undefined) fetchAttrs.push(`count='${this._pageSize}'`);
         if (this._isAggregate) fetchAttrs.push(`aggregate="true"`);
-        if (this._returnTotalRecordCount) fetchAttrs.push(`returntotalrecordcount="true"`);
         if (this._useRawOrderBy) fetchAttrs.push(`useraworderby="true"`);
         if (this._lateMaterialize) fetchAttrs.push(`latematerialize="true"`);
         if (this._aggregateLimit !== undefined) fetchAttrs.push(`aggregatelimit='${this._aggregateLimit}'`);
-        if (this._pagingCookie) fetchAttrs.push(`paging-cookie='${this._pagingCookie}'`);
         if (this._datasource) fetchAttrs.push(`datasource='${this._datasource}'`);
         if (this._options) fetchAttrs.push(`options='${this._options}'`);
 
         lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
         lines.push(`  <entity name="${this._table.logicalName}">`);
 
-        for (const attr of this._attributes) {
+        for (const attr of this._getEffectiveAttributes()) {
             const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
             if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
             if (attr.groupby) attrParts.push(`groupby='true'`);
@@ -525,6 +501,10 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return lines.join("\n");
     }
 
+    private static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean {
+        return linkType === "any" || linkType === "not any" || linkType === "all" || linkType === "not all" || linkType === "exists" || linkType === "in";
+    }
+
     private _renderLinkEntity(
         link: {
             name: string;
@@ -550,30 +530,32 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
 
         const childIndent = `${indent}  `;
+        const filterOnly = EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
 
         if (link.builder._filters.length > 0) {
             lines.push(`${childIndent}<filter type="and">`);
             for (const c of link.builder._filters) {
-                const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
-                lines.push(`${childIndent}  ${entityScoped}`);
+                lines.push(`${childIndent}  ${c}`);
             }
             lines.push(`${childIndent}</filter>`);
         }
 
-        for (const nestedAttr of link.builder._attributes) {
-            const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
-            if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
-            if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
-            if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
-            if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
-            if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
-            lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
-        }
+        if (!filterOnly) {
+            for (const nestedAttr of link.builder._getEffectiveAttributes()) {
+                const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
+                if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
+                if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
+                if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
+                if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
+                if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
+                lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
+            }
 
-        for (const order of link.builder._orders) {
-            const parts = [`attribute='${order.attribute}'`];
-            if (order.descending) parts.push(`descending='true'`);
-            lines.push(`${childIndent}<order ${parts.join(" ")} />`);
+            for (const order of link.builder._orders) {
+                const parts = [`attribute='${order.attribute}'`];
+                if (order.descending) parts.push(`descending='true'`);
+                lines.push(`${childIndent}<order ${parts.join(" ")} />`);
+            }
         }
 
         for (const nestedLink of link.builder._links) {
@@ -598,54 +580,87 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
   /**
    * Executes the FetchXML query against Dataverse and returns the parsed results.
    *
+   * Each result object includes an `Etag` symbol property (import from
+   * `dataverse-schema`) holding the `@odata.etag` value for optimistic
+   * concurrency. When `select()` is not called, value/lookupId/file fields
+   * are auto-included; missing API fields fall back to the field default.
+   *
    * @example
    * const contacts = await fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
    *   .where(f => condition(f.status, "eq", 1))
    *   .execute();
    * // contacts: Array<{ name: string; email: string }>
+   *
+   * @example
+   * // With optional execute parameters
+   * const contacts = await fetchXml(contactDataverseTable)
+   *   .select(f => ({ name: f.name }))
+   *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
    */
-  public async execute(): Promise<TResult[]> {
+  public async execute(options?: ExecuteOptions): Promise<TResult[]> {
+      if (options?.datasource) this._datasource = options.datasource;
+      if (options?.lateMaterialize) this._lateMaterialize = true;
+      if (options?.aggregateLimit !== undefined) this._aggregateLimit = options.aggregateLimit;
+      if (options?.useRawOrderBy) this._useRawOrderBy = true;
+      if (options?.options) this._options = options.options;
       const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
-      const aliasMap = this._buildAliasMap();
-      if (aliasMap.size > 0) {
+      const aliasInfo = this._buildAliasInfo();
+      if (aliasInfo.size > 0) {
         return raw.map((v: any) => {
-            const result: Record<string, any> = {};
-            for (const [alias, transform] of aliasMap) {
-                if (alias in v) {
-                    result[alias] = transform(v[alias]);
+            const result: Record<string | symbol, any> = {};
+            for (const [alias, info] of aliasInfo) {
+                if (info.name in v) {
+                    result[alias] = info.transform(v[info.name]);
+                } else {
+                    result[alias] = info.getDefault();
                 }
             }
+            result[Etag] = v["@odata.etag"];
             return result as TResult;
         });
       }
-      return raw.map((v: any) => this._table.transformValueFromDataverse(v)) as TResult[];
+      return raw.map((v: any) => {
+          const r = this._table.transformValueFromDataverse(v);
+          return r;
+      }) as TResult[];
   }
 
-  private _buildAliasMap(): Map<string, (val: any) => any> {
-      const map = new Map<string, (val: any) => any>();
+  private _buildAliasInfo(): Map<string, AliasInfo> {
+      const map = new Map<string, AliasInfo>();
       this._collectAliases(this, map);
       return map;
   }
 
   private _collectAliases(
       builder: EntityQueryBuilder<any, any>,
-      map: Map<string, (val: any) => any>,
+      map: Map<string, AliasInfo>,
   ): void {
-      for (const attr of builder._attributes) {
-          const fields = builder._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any }>;
+      for (const attr of builder._getEffectiveAttributes()) {
+          const fields = builder._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any; getDefault?: () => any }>;
           const entry = Object.entries(fields).find(
               ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
           );
           if (entry) {
               const fieldDef = entry[1];
-              map.set(attr.alias, (val: any) => fieldDef.transformValueFromDataverse(val));
+              const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+              map.set(attr.alias, {
+                  transform: (val: any) => fieldDef.transformValueFromDataverse(val),
+                  getDefault: () => fieldDef.getDefault?.(),
+                  name: dataverseName,
+              });
           } else {
-              map.set(attr.alias, (val: any) => val);
+              map.set(attr.alias, {
+                  transform: (val: any) => val,
+                  getDefault: () => undefined,
+                  name: attr.name,
+              });
           }
       }
       for (const link of builder._links) {
-          this._collectAliases(link.builder, map);
+          if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
+              this._collectAliases(link.builder, map);
+          }
       }
   }
 }
@@ -653,24 +668,57 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
 // --- Helpers ---
 
 /**
- * Creates a FetchXML condition element string.
+ * Creates a FetchXML condition element string for a literal value comparison.
+ *
+ * @deprecated Use typed filter functions (`eq`, `neq`, `gt`, `lt`, etc.)
+ * instead — they generate the same FetchXML via `toFetchXml()` and provide
+ * type-safe field references.
  *
  * @example
- * condition("statuscode", "eq", 1)
- * // '<condition attribute="statuscode" operator="eq" value="1" />'
+ * // Preferred:
+ * .where(f => eq(f.statuscode, 1))
+ *
+ * // Legacy:
+ * .where(condition("statuscode", "eq", 1))
  */
 export function condition(attribute: string, operator: string, value: unknown): string {
     return `<condition attribute="${attribute}" operator="${operator}" value="${value}" />`;
 }
 
 /**
- * Combines conditions with a logical AND.
+ * Creates a FetchXML condition element string for field-to-field comparison.
+ * Uses the `valueof` attribute instead of `value`.
+ *
+ * @deprecated Use `compare()` from filter.ts instead — it generates the same
+ * FetchXML via `toFetchXml()` and provides type-safe field references.
  *
  * @example
- * filterAnd(
- *   condition("statecode", "eq", 0),
- *   condition("statuscode", "eq", 1),
- * )
+ * // Preferred:
+ * .where(f => compare(f.field1, "eq", f.field2))
+ *
+ * // Legacy:
+ * .where(conditionCompare("field1", "eq", "field2"))
+ *
+ * @example
+ * // Cross-entity alias (still requires raw string):
+ * conditionCompare("fullname", "eq", "auto_link_1.name")
+ */
+export function conditionCompare(attribute: string, operator: string, otherAttribute: string): string {
+    return `<condition attribute="${attribute}" operator="${operator}" valueof="${otherAttribute}" />`;
+}
+
+/**
+ * Combines conditions with a logical AND.
+ *
+ * @deprecated Use `and()` from filter.ts instead — it accepts both
+ * `FilterExpr` objects and raw strings, works for both OData and FetchXML.
+ *
+ * @example
+ * // Preferred:
+ * .where(and(condition("a", "eq", "1"), condition("b", "eq", "2")))
+ *
+ * // Legacy:
+ * .where(filterAnd(condition("a", "eq", "1"), condition("b", "eq", "2")))
  */
 export function filterAnd(...conditions: string[]): string {
     return `<filter type="and">${conditions.join("")}</filter>`;
@@ -679,11 +727,15 @@ export function filterAnd(...conditions: string[]): string {
 /**
  * Combines conditions with a logical OR.
  *
+ * @deprecated Use `or()` from filter.ts instead — it accepts both
+ * `FilterExpr` objects and raw strings, works for both OData and FetchXML.
+ *
  * @example
- * filterOr(
- *   condition("statecode", "eq", 0),
- *   condition("statecode", "eq", 1),
- * )
+ * // Preferred:
+ * .where(or(condition("statecode", "eq", 0), condition("statecode", "eq", 1)))
+ *
+ * // Legacy:
+ * .where(filterOr(condition("statecode", "eq", 0), condition("statecode", "eq", 1)))
  */
 export function filterOr(...conditions: string[]): string {
     return `<filter type="or">${conditions.join("")}</filter>`;

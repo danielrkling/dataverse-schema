@@ -187,18 +187,96 @@ const results = await from(Person)
 ### Option 3: FetchXML Builder
 
 ```typescript
-import { fetchXml } from "dataverse-schema";
+import { fetchXml, and, or, eq, gt, compare } from "dataverse-schema";
 
-const results = await fetchXml((q) =>
-  q.from(Person)
-    .select((f) => ({ full_name: f.name, person_age: f.age }))
-    .where((f) => `age gt 21`)
-    .innerJoin(Address, (f) => f.primaryAddressId, (f) => f.id, (q) =>
-      q.where((f) => contains(f.street, "Main"))
-    )
-    .orderby((f) => desc(f.name))
-    .top(50)
-).execute();
+// Basic query with typed filter functions
+const results = await fetchXml(Person)
+  .select((f) => ({ full_name: f.name, person_age: f.age }))
+  .where((f) => gt(f.age, 21))
+  .innerJoin(Address, "id", "primaryAddressId", (q) =>
+    q.select((f) => ({ street: f.street })).where((f) => eq(f.zip, 98052))
+  )
+  .orderby((f) => f.fullname, "desc")
+  .top(50)
+  .execute();
+
+// With execute options
+const results2 = await fetchXml(Person)
+  .select((f) => ({ name: f.name }))
+  .execute({ useRawOrderBy: true, aggregateLimit: 50000 });
+```
+
+### FetchXML Conditions
+
+```typescript
+// Typed filter functions (recommended) — type-safe, work for OData and FetchXML
+eq(field, value)         // equality
+ne(field, value)         // not equal
+gt(field, value)         // greater than
+ge(field, value)         // greater than or equal
+lt(field, value)         // less than
+le(field, value)         // less than or equal
+isNull(field)            // null check
+isNotNull(field)         // not null check
+contains(field, value)   // string contains
+startsWith(field, value) // string starts with
+endsWith(field, value)   // string ends with
+
+// Field-to-field comparison
+compare(field, operator, otherField)
+
+// All produce FilterExpr objects that serialize to FetchXML via toFetchXml():
+// eq(f.statuscode, 1) → '<condition attribute="statuscode" operator="eq" value="1" />'
+// compare(f.field1, "eq", f.field2) → '<condition attribute="field1" operator="eq" valueof="field2" />'
+
+// Logical combinations (accept FilterExpr or raw strings)
+and(eq(statuscode, 0), eq(statuscode, 1))
+or(eq(statuscode, 0), eq(statuscode, 1))
+```
+
+### FetchXML Raw Strings
+
+For operators not covered by the typed functions (e.g. `between`, `in`, `eq-userid`), or for cross-entity alias references, raw XML strings can be passed to `where()`:
+
+```typescript
+.where(`<condition attribute="numberofemployees" operator="between"><value>6</value><value>20</value></condition>`)
+
+.where(`<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
+  <filter type='and'>
+    <condition attribute='name' operator='eq' value='Contoso' />
+  </filter>
+</link-entity>`)
+```
+
+The deprecated `condition()` and `conditionCompare()` helpers still work but are superseded by the typed filter functions above.
+
+### FetchXML Execute Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `datasource` | `string` | Sets the `datasource` attribute on `<fetch>` |
+| `lateMaterialize` | `boolean` | Sets `latematerialize="true"` |
+| `aggregateLimit` | `number` | Sets `aggregatelimit` attribute |
+| `useRawOrderBy` | `boolean` | Sets `useraworderby="true"` |
+| `options` | `string` | Sets `options` attribute |
+
+### FetchXML Auto-Selection
+
+When `select()` is not called, the builder automatically includes all value fields (`string`, `number`, `boolean`, etc.), lookup ID fields, and file fields. Each result row includes an `Etag` symbol property (import `Etag` from `dataverse-schema`) for optimistic concurrency.
+
+### Filter-Only Link Types
+
+Link types `any`, `not any`, `all`, `not all`, `exists`, and `in` only render filters inside `<link-entity>` — they skip `<attribute>` and `<order>` elements:
+
+```typescript
+fetchXml(Contact).where(or(
+  condition("statecode", "eq", "1"),
+  `<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
+    <filter type='and'>
+      <condition attribute='name' operator='eq' value='Contoso' />
+    </filter>
+  </link-entity>`,
+))
 ```
 
 ## Validation

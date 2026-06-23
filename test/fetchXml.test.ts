@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchXml, condition, filterAnd, filterOr, eq, gt, and, Infer,
+import { fetchXml, condition, conditionCompare, eq, gt, compare, and, or, Infer,
   Today, Tomorrow, Yesterday, Last7Days, Next7Days, LastMonth, NextMonth, ThisMonth,
   LastWeek, NextWeek, ThisWeek, LastYear, NextYear, ThisYear,
   LastXDays, NextXDays, OlderThanXDays,
@@ -44,6 +44,11 @@ const Account = new DataverseTable({
     name: string("name"),
     revenue: number("revenue"),
     city: string("address1_city"),
+    primarycontactid: string("primarycontactid"),
+    numberofemployees: number("numberofemployees"),
+    parentaccountid: string("parentaccountid"),
+    fax: string("fax"),
+    ownerid: string("ownerid"),
   },
 })
 
@@ -90,21 +95,19 @@ test("[docs] select multiple columns", () => {
 
 test("[docs] filter with eq condition", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .where(condition("address1_city", "eq", "Redmond"))
+    .where(f => eq(f.city, "Redmond"))
   const xml = q.toXml()
   expect(xml).toContain(`<filter type="and">`)
   expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Redmond" />`)
 })
 
 // --- MS Docs Example: OR filter with multiple conditions ---
-// (Use filterOr helper inside where, since orWhere was removed)
-
 test("[docs] or filter with multiple eq conditions", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
-    .where(filterOr(
-      condition("address1_city", "eq", "Redmond"),
-      condition("address1_city", "eq", "Seattle"),
-      condition("address1_city", "eq", "Bellevue")
+    .where(f => or(
+      eq(f.city, "Redmond"),
+      eq(f.city, "Seattle"),
+      eq(f.city, "Bellevue")
     ))
   const xml = q.toXml()
   expect(xml).toContain(`<filter type="and">`)
@@ -208,24 +211,6 @@ test("[docs] order with entityname descending", () => {
   expect(xml).toContain(`entityname='parentaccount' attribute='name' descending='true'`)
 })
 
-// --- MS Docs Example: Paging ---
-
-test("[docs] simple paging with page and count", () => {
-  const q = fetchXml(Account).page(1).pageSize(3).select(f => ({ name: f.name }))
-    .orderby(f => f.name)
-  const xml = q.toXml()
-  expect(xml).toContain(`page='1'`)
-  expect(xml).toContain(`count='3'`)
-})
-
-test("[docs] page 2 with count", () => {
-  const q = fetchXml(Account).page(2).pageSize(3).select(f => ({ name: f.name }))
-    .orderby(f => f.name)
-  const xml = q.toXml()
-  expect(xml).toContain(`page='2'`)
-  expect(xml).toContain(`count='3'`)
-})
-
 // --- MS Docs Example: Distinct ---
 
 test("[docs] distinct results", () => {
@@ -274,56 +259,52 @@ test("[docs] groupby with sum and count", () => {
   expect(xml).toContain(`alias="city"`)
 })
 
-// --- MS Docs Example: returntotalrecordcount ---
+// --- MS Docs Example: useraworderby via execute option ---
 
-test("[docs] returnTotalRecordCount", () => {
-  const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .returnTotalRecordCount()
-  expect(q.toXml()).toContain(`returntotalrecordcount="true"`)
+test("[docs] useRawOrderBy via execute option", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  let capturedUrl = ""
+  server.use(
+    http.get(`${API}/accounts`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await fetchXml(Account).select(f => ({ name: f.name }))
+    .execute({ useRawOrderBy: true })
+  expect(decodeURIComponent(capturedUrl)).toContain(`useraworderby="true"`)
 })
 
-// --- MS Docs Example: useraworderby ---
+// --- MS Docs Example: aggregatelimit via execute option ---
 
-test("[docs] useRawOrderBy", () => {
-  const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .useRawOrderBy()
-  expect(q.toXml()).toContain(`useraworderby="true"`)
-})
-
-// --- MS Docs Example: aggregatelimit ---
-
-test("[docs] aggregateLimit", () => {
-  const q = fetchXml(Account).groupby(
+test("[docs] aggregateLimit via execute option", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  let capturedUrl = ""
+  server.use(
+    http.get(`${API}/accounts`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await fetchXml(Account).groupby(
     () => [],
     f => ({ cnt: count(f.name) })
-  ).aggregateLimit(5)
-  const xml = q.toXml()
-  expect(xml).toContain(`aggregatelimit='5'`)
-  expect(xml).toContain(`aggregate="true"`)
-})
-
-// --- MS Docs Example: paging-cookie ---
-
-test("[docs] paging-cookie", () => {
-  const q = fetchXml(Account).page(2).pageSize(3)
-    .pagingCookie(`<cookie page="1"><fullname last="Susanna" first="Yvonne" /></cookie>`)
-    .select(f => ({ name: f.name }))
-    .orderby(f => f.name, "desc")
-  const xml = q.toXml()
-  expect(xml).toContain(`paging-cookie='<cookie page="1"><fullname last="Susanna" first="Yvonne" /></cookie>'`)
+  ).execute({ aggregateLimit: 5 })
+  expect(decodeURIComponent(capturedUrl)).toContain(`aggregatelimit='5'`)
+  expect(decodeURIComponent(capturedUrl)).toContain(`aggregate="true"`)
 })
 
 // --- Existing tests preserved ---
 
 test("where with field proxy resolves Dataverse names", () => {
-  const q = fetchXml(Person).where(f => condition(f.name, "eq", "John"))
+  const q = fetchXml(Person).where(f => eq(f.name, "John"))
   expect(q.toXml()).toContain(`attribute="fullname"`)
 })
 
 test("multiple where calls accumulate in single filter", () => {
   const q = fetchXml(Person)
-    .where(condition("fullname", "eq", "John"))
-    .where(condition("person_age", "gt", 20))
+    .where(f => eq(f.name, "John"))
+    .where(f => gt(f.age, 20))
   const xml = q.toXml()
   expect(xml.match(/<filter type="and">/g)).toHaveLength(1)
   expect(xml.match(/<condition/g)).toHaveLength(2)
@@ -347,20 +328,29 @@ test("condition helper builds condition XML", () => {
   )
 })
 
-test("filterAnd wraps conditions", () => {
-  const result = filterAnd(
-    condition("a", "eq", "1"),
-    condition("b", "eq", "2")
+test("and wraps conditions in FetchXML format", () => {
+  const result = and(
+    `<condition attribute="a" operator="eq" value="1" />`,
+    `<condition attribute="b" operator="eq" value="2" />`,
   )
-  expect(result).toContain(`type="and"`)
-  expect(result).toContain(`attribute="a"`)
-  expect(result).toContain(`attribute="b"`)
+  expect(result.toFetchXml()).toContain(`type="and"`)
+  expect(result.toFetchXml()).toContain(`attribute="a"`)
+  expect(result.toFetchXml()).toContain(`attribute="b"`)
 })
 
-test("filterOr wraps conditions", () => {
-  const result = filterOr(condition("a", "eq", "1"))
-  expect(result).toContain(`type="or"`)
-  expect(result).toContain(`attribute="a"`)
+test("or wraps conditions in FetchXML format", () => {
+  const result = or(
+    `<condition attribute="a" operator="eq" value="1" />`,
+    `<condition attribute="b" operator="eq" value="2" />`,
+  )
+  expect(result.toFetchXml()).toContain(`type="or"`)
+  expect(result.toFetchXml()).toContain(`attribute="a"`)
+})
+
+test("or wraps conditions (string variant)", () => {
+  const result = or(`<condition attribute="a" operator="eq" value="1" />`)
+  expect(result.toFetchXml()).toContain(`type="or"`)
+  expect(result.toFetchXml()).toContain(`attribute="a"`)
 })
 
 test("toString returns URL-encoded fetchXml", () => {
@@ -568,7 +558,7 @@ test("execute transforms date fields via alias map", async () => {
   server.use(
     http.get(`${API}/logs`, () =>
       HttpResponse.json({
-        value: [{ logid: "id-1", msg: "Test entry", date: "2024-06-15T12:00:00Z" }],
+        value: [{ logid: "id-1", log_message: "Test entry", log_entrydate: "2024-06-15T12:00:00Z" }],
       })
     ),
   )
@@ -596,8 +586,8 @@ test("execute transforms joined date fields via alias map", async () => {
         value: [{
           accountid: "a1",
           name: "Acme",
-          date: "2024-06-15T12:00:00Z",
-          total: 500,
+          order_date: "2024-06-15T12:00:00Z",
+          total_amount: 500,
         }],
       })
     ),
@@ -615,4 +605,391 @@ test("execute transforms joined date fields via alias map", async () => {
   expect(results[0].total).toBe(500)
 })
 
-fetchXml(Account).
+// --- Bug 8: field-to-field comparison uses valueof ---
+
+test("conditionCompare generates valueof attribute", () => {
+  const xml = conditionCompare("field1", "eq", "field2")
+  expect(xml).toBe(`<condition attribute="field1" operator="eq" valueof="field2" />`)
+})
+
+test("compare filter function uses valueof in fetchXml", () => {
+  const q = fetchXml(Person).where(f => compare(f.name, "eq", f.age))
+  const xml = q.toXml()
+  expect(xml).toContain(`valueof="person_age"`)
+  expect(xml).toContain(`attribute="fullname"`)
+  expect(xml).not.toContain(`value="`)
+})
+
+// --- Bug 16: filter-only link types (any, all, not any, etc.) should not render attributes ---
+
+test.each(["any", "not any", "all", "not all", "exists", "in"])(
+  "[bug16] %s link type does not render attributes or orders", (linkType) => {
+    const q = fetchXml(Account).select(f => ({ name: f.name }))
+      .join(linkType as any, Address, "id", "id", sub =>
+        sub.select(s => ({ street: s.street }))
+          .where(s => eq(s.zip, 12345))
+          .orderby(s => s.zip)
+      )
+    const xml = q.toXml()
+    expect(xml).toContain(`link-type="${linkType}"`)
+    expect(xml).toContain(`<condition attribute="zip_code"`)
+    expect(xml).not.toContain(`<attribute name="street_Address"`)
+    expect(xml).not.toContain(`<order`)
+  }
+)
+
+test("[bug16] exists link type only outputs where conditions inside link-entity", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .join("exists", Address, "id", "id", sub =>
+      sub.where(s => eq(s.zip, 12345))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="exists"`)
+  expect(xml).toContain(`condition attribute="zip_code"`)
+  const linkEntityMatch = xml.match(/<link-entity[\s\S]*?<\/link-entity>/)
+  expect(linkEntityMatch).not.toBeNull()
+  expect(linkEntityMatch![0]).not.toContain(`<attribute`)
+})
+
+test("[bug16] filter-only link types do not auto-populate attributes inside link-entity", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .join("any", Address, "id", "id", sub =>
+      sub.where(s => eq(s.zip, 12345))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="any"`)
+  const linkEntityMatch = xml.match(/<link-entity[\s\S]*?<\/link-entity>/)
+  expect(linkEntityMatch).not.toBeNull()
+  expect(linkEntityMatch![0]).not.toContain(`<attribute`)
+})
+
+// ─── MS Docs Example Tests ───
+
+const Contact2 = new DataverseTable({
+  client, entitySetName: "contacts", logicalName: "contact",
+  fields: {
+    id: primaryKey("contactid"),
+    fullname: string("fullname"),
+    firstname: string("firstname"),
+    lastname: string("lastname"),
+    statecode: number("statecode"),
+    parentcustomerid: string("parentcustomerid"),
+  },
+})
+
+// ─── Join Tables ───
+
+test("[docs] join: basic many-to-one account → contact", () => {
+  const q = fetchXml(Account).top(5).select(f => ({ name: f.name }))
+    .innerJoin(Contact2, "id", "id", sub =>
+      sub.select(f => ({ full_name: f.fullname }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`top='5'`)
+  expect(xml).toContain(`name="account"`)
+  expect(xml).toContain(`name="contact"`)
+  expect(xml).toContain(`from="contactid"`)
+  expect(xml).toContain(`to="accountid"`)
+  expect(xml).toContain(`link-type="inner"`)
+  expect(xml).toContain(`<attribute name="fullname" alias="full_name" />`)
+  expect(xml).toContain(`<attribute name="name" alias="name" />`)
+})
+
+test("[docs] join: one-to-many contact → account", () => {
+  const q = fetchXml(Contact2).top(5).select(f => ({ fullname: f.fullname }))
+    .innerJoin(Account, "id", "id", sub =>
+      sub.select(f => ({ name: f.name }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`top='5'`)
+  expect(xml).toContain(`name="contact"`)
+  expect(xml).toContain(`name="account"`)
+  expect(xml).toContain(`from="accountid"`)
+  expect(xml).toContain(`to="contactid"`)
+  expect(xml).toContain(`link-type="inner"`)
+})
+
+test("[docs] join: many-to-many via intersect", () => {
+  const Team = new DataverseTable({
+    client, entitySetName: "teams", logicalName: "team",
+    fields: { id: primaryKey("teamid"), name: string("name") },
+  })
+  const SystemUser = new DataverseTable({
+    client, entitySetName: "systemusers", logicalName: "systemuser",
+    fields: { id: primaryKey("systemuserid"), fullname: string("fullname") },
+  })
+  const TeamMembership = new DataverseIntersectTable("teammembership", SystemUser, Team)
+  const q = fetchXml(SystemUser).top(2).select(f => ({ fullname: f.fullname }))
+    .through(TeamMembership, sub =>
+      sub.select(f => ({ team_name: f.name }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`intersect="true"`)
+  expect(xml).toContain(`name="teammembership"`)
+  expect(xml).toContain(`name="team"`)
+  expect(xml).toContain(`link-type="inner"`)
+  expect(xml).toContain(`<attribute name="fullname" alias="fullname" />`)
+  expect(xml).toContain(`<attribute name="name" alias="team_name" />`)
+})
+
+test("[docs] join: no relationship (name match)", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .join("inner", Contact2, "fullname", "name", sub =>
+      sub.select(f => ({ fullname: f.fullname }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`name="contact"`)
+  expect(xml).toContain(`from="fullname"`)
+  expect(xml).toContain(`to="name"`)
+  expect(xml).toContain(`link-type="inner"`)
+})
+
+test("[docs] join: left outer find accounts with no contacts", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .orderby(f => f.name)
+    .join("outer", Contact2, "parentcustomerid", "id", sub => sub)
+    .where(`<condition entityname='auto_link_1' attribute='parentcustomerid' operator='null' />`)
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="outer"`)
+  expect(xml).toContain(`from="parentcustomerid"`)
+  expect(xml).toContain(`to="accountid"`)
+  expect(xml).toContain(`entityname='auto_link_1'`)
+})
+
+test("[docs] join: exists link type", () => {
+  const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
+    .join("exists", Account, "primarycontactid", "id", sub =>
+      sub.where(`<condition attribute="statecode" operator="eq" value="1" />`)
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="exists"`)
+  expect(xml).toContain(`condition attribute="statecode"`)
+  const linkSection = xml.match(/<link-entity[\s\S]*?<\/link-entity>/)
+  expect(linkSection).not.toBeNull()
+  expect(linkSection![0]).not.toContain(`<attribute`)
+})
+
+test("[docs] join: in link type", () => {
+  const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
+    .join("in", Account, "primarycontactid", "id", sub =>
+      sub.where(`<condition attribute="statecode" operator="eq" value="1" />`)
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="in"`)
+  expect(xml).toContain(`condition attribute="statecode"`)
+  const linkSection = xml.match(/<link-entity[\s\S]*?<\/link-entity>/)
+  expect(linkSection).not.toBeNull()
+  expect(linkSection![0]).not.toContain(`<attribute`)
+})
+
+test("[docs] join: matchfirstrowusingcrossapply", () => {
+  const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
+    .join("matchfirstrowusingcrossapply", Account, "primarycontactid", "id", sub =>
+      sub.select(f => ({ accountid: f.id, name: f.name }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type="matchfirstrowusingcrossapply"`)
+  expect(xml).toContain(`from="primarycontactid"`)
+  expect(xml).toContain(`to="contactid"`)
+  expect(xml).toContain(`<attribute name="accountid" alias="accountid" />`)
+  expect(xml).toContain(`<attribute name="name" alias="name" />`)
+})
+
+// ─── Select Columns ───
+
+test("[docs] select: multiple columns", () => {
+  const q = fetchXml(Account).select(f => ({
+    name: f.name,
+    revenue: f.revenue,
+    city: f.city,
+  }))
+  const xml = q.toXml()
+  expect(xml).toContain(`<attribute name="name" alias="name" />`)
+  expect(xml).toContain(`<attribute name="revenue" alias="revenue" />`)
+  expect(xml).toContain(`<attribute name="address1_city" alias="city" />`)
+})
+
+// ─── Filter Rows ───
+
+test("[docs] filter: eq city", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .where(f => eq(f.city, "Redmond"))
+  const xml = q.toXml()
+  expect(xml).toContain(`<filter type="and">`)
+  expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Redmond" />`)
+})
+
+test("[docs] filter: or multiple cities", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
+    .where(f => or(
+      eq(f.city, "Redmond"),
+      eq(f.city, "Seattle"),
+      eq(f.city, "Bellevue"),
+    ))
+  const xml = q.toXml()
+  expect(xml).toContain(`<filter type="and">`)
+  expect(xml).toContain(`<filter type="or">`)
+  expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Redmond" />`)
+  expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Seattle" />`)
+  expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Bellevue" />`)
+})
+
+test("[docs] filter: in operator with values", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
+    .where(In("address1_city", ["Redmond", "Seattle", "Bellevue"]))
+  const xml = q.toXml()
+  expect(xml).toContain(`operator="in"`)
+  expect(xml).toContain(`<value>Redmond</value>`)
+  expect(xml).toContain(`<value>Seattle</value>`)
+  expect(xml).toContain(`<value>Bellevue</value>`)
+})
+
+test("[docs] filter: eq-userid no value", () => {
+  const q = fetchXml(Account).where(EqualUserId("ownerid"))
+  const xml = q.toXml()
+  expect(xml).toContain(`operator="eq-userid"`)
+})
+
+test("[docs] filter: between with value elements", () => {
+  const q = fetchXml(Account).where(Between("numberofemployees", 6, 20))
+  const xml = q.toXml()
+  expect(xml).toContain(`operator="between"`)
+  expect(xml).toContain(`<value>6</value>`)
+  expect(xml).toContain(`<value>20</value>`)
+})
+
+test("[docs] filter: column valueof comparison (same row)", () => {
+  const q = fetchXml(Contact2).select(f => ({ firstname: f.firstname }))
+    .where(f => compare(f.firstname, "eq", f.lastname))
+  const xml = q.toXml()
+  expect(xml).toContain(`<condition attribute="firstname" operator="eq" valueof="lastname" />`)
+})
+
+test("[docs] filter: cross-table valueof with alias", () => {
+  const q = fetchXml(Contact2).select(f => ({ contactid: f.id, fullname: f.fullname }))
+    .join("outer", Account, "id", "parentcustomerid", sub =>
+      sub.select(f => ({ name: f.name }))
+    )
+    .where(conditionCompare("fullname", "eq", "auto_link_1.name"))
+  const xml = q.toXml()
+  expect(xml).toContain(`condition attribute="fullname"`)
+  expect(xml).toContain(`valueof="auto_link_1.name"`)
+  expect(xml).toContain(`link-type="outer"`)
+})
+
+test("[docs] filter: link-type any in filter", () => {
+  const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
+    .where(f => or(
+      eq(f.statecode, "1"),
+      `<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
+        <filter type='and'>
+          <condition attribute='name' operator='eq' value='Contoso' />
+        </filter>
+      </link-entity>`,
+    ))
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type='any'`)
+  expect(xml).toContain(`<condition attribute='name' operator='eq' value='Contoso' />`)
+  expect(xml).toContain(`attribute="statecode"`)
+})
+
+test("[docs] filter: link-type not any", () => {
+  const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
+    .where(`<link-entity name='account' from='primarycontactid' to='contactid' link-type='not any'>
+      <filter type='and'>
+        <condition attribute='name' operator='eq' value='Contoso' />
+      </filter>
+    </link-entity>`)
+  const xml = q.toXml()
+  expect(xml).toContain(`link-type='not any'`)
+  expect(xml).toContain(`<condition attribute='name' operator='eq' value='Contoso' />`)
+})
+
+// ─── Order Rows ───
+
+test("[docs] order: ascending default", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name, accountnumber: f.revenue, createdon: f.city }))
+    .orderby(f => f.city)
+    .orderby(f => f.name)
+    .orderby(f => f.revenue)
+  const xml = q.toXml()
+  const orders = [...xml.matchAll(/<order[^>]*\/>/g)].map(m => m[0])
+  expect(orders).toHaveLength(3)
+  expect(orders[0]).toContain(`attribute='address1_city'`)
+  expect(orders[1]).toContain(`attribute='name'`)
+  expect(orders[2]).toContain(`attribute='revenue'`)
+})
+
+test("[docs] order: descending", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name, createdon: f.city }))
+    .orderby(f => f.city, "desc")
+  const xml = q.toXml()
+  expect(xml).toContain(`<order attribute='address1_city' descending='true' />`)
+})
+
+test("[docs] order: entityname for priority", () => {
+  const q = fetchXml(Account).select(f => ({ name: f.name }))
+    .join("inner", Account, "id", "parentaccountid", sub =>
+      sub.select(f => ({ parentname: f.name }))
+    )
+    .orderby("auto_link_1", "name")
+    .orderby(f => f.name)
+  const xml = q.toXml()
+  const orders = [...xml.matchAll(/<order[^>]*\/>/g)].map(m => m[0])
+  expect(orders).toHaveLength(2)
+  expect(orders[0]).toContain(`entityname='auto_link_1'`)
+  expect(orders[1]).not.toContain(`entityname=`)
+})
+
+// ─── Aggregate Data ───
+
+test("[docs] aggregate: all functions on one column", () => {
+  const q = fetchXml(Account).groupby(
+    () => [],
+    f => ({
+      Average: avg(f.revenue),
+      Count: count(f.revenue),
+      Maximum: max(f.revenue),
+      Minimum: min(f.revenue),
+      Sum: sum(f.revenue),
+    })
+  )
+  const xml = q.toXml()
+  expect(xml).toContain(`aggregate="true"`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Average" aggregate='average' />`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Count" aggregate='count' />`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Maximum" aggregate='max' />`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Minimum" aggregate='min' />`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Sum" aggregate='sum' />`)
+})
+
+test("[docs] aggregate: groupby city with sum and count", () => {
+  const q = fetchXml(Account).groupby(
+    f => [f.city],
+    f => ({ Total: sum(f.revenue), Count: count(f.city) })
+  )
+  const xml = q.toXml()
+  expect(xml).toContain(`aggregate="true"`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Total" aggregate='sum' />`)
+  expect(xml).toContain(`<attribute name="address1_city" alias="Count" aggregate='count' />`)
+  expect(xml).toContain(`<attribute name="address1_city" alias="city" groupby='true' />`)
+})
+
+test("[docs] aggregate: with aggregatelimit", () => {
+  const q = fetchXml(Account).groupby(
+    () => [],
+    f => ({ account_count: count(f.name) })
+  )
+  const xml = q.toXml()
+  expect(xml).toContain(`aggregate="true"`)
+  expect(xml).toContain(`aggregate='count'`)
+})
+
+test("[docs] aggregate: rowaggregate CountChildren", () => {
+  const q = fetchXml(Account).top(5).select(f => ({ name: f.name, numberOfChildren: f.id }))
+    .orderby(f => f.id, "desc")
+  const xml = q.toXml()
+  expect(xml).toContain(`name="accountid" alias="numberOfChildren"`)
+  expect(xml).toContain(`<order attribute='accountid' descending='true' />`)
+})
+

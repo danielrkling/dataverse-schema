@@ -123,6 +123,10 @@ export declare class CollectionIdsProperty extends Schema<GUID[]> {
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
+declare type CollectionKeys<T> = {
+    [K in keyof T]: T[K] extends CollectionProperty<any> ? K : never;
+}[keyof T];
+
 export declare class CollectionProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties>[]> {
     #private;
     kind: "navigation";
@@ -133,10 +137,10 @@ export declare class CollectionProperty<TProperties extends GenericProperties> e
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-export declare function compare(field: string, operator: string, otherField: string): FilterExpr;
+export declare function compare(field: Name, operator: string, otherField: Name): FilterExpr;
 
 /**
- * Creates a FetchXML condition element string.
+ * Creates a FetchXML condition element string for a literal value comparison.
  *
  * @example
  * condition("statuscode", "eq", 1)
@@ -144,7 +148,17 @@ export declare function compare(field: string, operator: string, otherField: str
  */
 export declare function condition(attribute: string, operator: string, value: unknown): string;
 
-export declare function contains(field: string, value: string): FilterExpr;
+/**
+ * Creates a FetchXML condition element string for field-to-field comparison.
+ * Uses the `valueof` attribute instead of `value`.
+ *
+ * @example
+ * conditionCompare("field1", "eq", "field2")
+ * // '<condition attribute="field1" operator="eq" valueof="field2" />'
+ */
+export declare function conditionCompare(attribute: string, operator: string, otherAttribute: string): string;
+
+export declare function contains(field: Name, value: string): FilterExpr;
 
 export declare function ContainsValues(field: Name, values: (string | number)[]): FilterExpr;
 
@@ -898,7 +912,7 @@ export declare function DoesNotContainValues(field: Name, values: (string | numb
  */
 export declare function email(): Validator<string>;
 
-export declare function endsWith(field: string, value: string): FilterExpr;
+export declare function endsWith(field: Name, value: string): FilterExpr;
 
 /**
  * Builds a FetchXML query for Dataverse with full type support.
@@ -917,7 +931,7 @@ export declare function endsWith(field: string, value: string): FilterExpr;
  * const results = await q.execute();
  */
 export declare class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
-    private _aliasCounter;
+    private _linkAlias;
     private _table;
     private _attributes;
     private _links;
@@ -925,19 +939,18 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     private _filters;
     private _proxy;
     private _top?;
-    private _page?;
-    private _pageSize?;
     private _isAggregate;
-    private _returnTotalRecordCount;
     private _useRawOrderBy;
     private _lateMaterialize;
     private _aggregateLimit?;
     private _orders;
-    private _pagingCookie?;
     private _datasource?;
     private _options?;
     /** @param table The DataverseTable definition to build the query against. */
-    constructor(table: DataverseTable<TProps>);
+    constructor(table: DataverseTable<TProps>, _linkAlias?: {
+        value: number;
+    });
+    private _getEffectiveAttributes;
     private _buildProxy;
     /**
      * Selects specific fields to include in the FetchXML query.
@@ -1004,22 +1017,6 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     distinct(): this;
     /** Limits the number of returned records. */
     top(n: number): this;
-    /** Sets the page number for paginated results. */
-    page(n: number): this;
-    /** Sets the number of records per page. */
-    pageSize(n: number): this;
-    /** Requests the server to include the total record count. */
-    returnTotalRecordCount(): this;
-    /** Instructs the server to use the raw order-by string. */
-    useRawOrderBy(): this;
-    /** Enables late materialization for better performance on large datasets. */
-    lateMaterialize(): this;
-    /** Sets the aggregate limit for grouped results. */
-    aggregateLimit(n: number): this;
-    /** Sets custom query options. */
-    options(value: string): this;
-    /** Sets an alternate datasource (e.g. for federated queries). */
-    datasource(value: string): this;
     /** Marks the query as an aggregate (grouped) query. */
     aggregate(): this;
     /**
@@ -1070,8 +1067,6 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     }) => TFields): EntityQueryBuilder<TProps, {
         [P in TFields[number]]: Infer<TProps[P]>;
     }>;
-    /** Sets the paging cookie for navigating paginated results. */
-    pagingCookie(cookie: string): this;
     /**
      * Returns the full FetchXML string.
      *
@@ -1086,6 +1081,7 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
      * // </fetch>
      */
     toXml(): string;
+    private static _isFilterOnlyLinkType;
     private _renderLinkEntity;
     /**
      * Returns the URL-encoded query string for use in the Dataverse API.
@@ -1104,13 +1100,19 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
      *   .where(f => condition(f.status, "eq", 1))
      *   .execute();
      * // contacts: Array<{ name: string; email: string }>
+     *
+     * @example
+     * // With rarely-used options
+     * const contacts = await fetchXml(contactDataverseTable)
+     *   .select(f => ({ name: f.name }))
+     *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
      */
-    execute(): Promise<TResult[]>;
-    private _buildAliasMap;
+    execute(options?: ExecuteOptions): Promise<TResult[]>;
+    private _buildAliasInfo;
     private _collectAliases;
 }
 
-export declare function eq(field: string, value: FilterValue): FilterExpr;
+export declare function eq(field: Name, value: FilterValue): FilterExpr;
 
 export declare function EqualBusinessId(field: Name): FilterExpr;
 
@@ -1125,6 +1127,14 @@ export declare function EqualUserOrUserHierarchyAndTeams(field: Name): FilterExp
 export declare function EqualUserOrUserTeams(field: Name): FilterExpr;
 
 export declare const Etag: unique symbol;
+
+declare type ExecuteOptions = {
+    datasource?: string;
+    lateMaterialize?: boolean;
+    aggregateLimit?: number;
+    useRawOrderBy?: boolean;
+    options?: string;
+};
 
 export declare function expand(values: string | ExpandObject): string;
 
@@ -1293,7 +1303,7 @@ export declare class FormattedField extends Schema<string | null> {
     constructor(name: string);
 }
 
-export declare function ge(field: string, value: string | number): FilterExpr;
+export declare function ge(field: Name, value: string | number): FilterExpr;
 
 /**
  * Represents a generic navigation property in a Dataverse entity.  Navigation
@@ -1347,7 +1357,7 @@ declare type GroupByFields<TFields extends FieldRef<any, string>[]> = {
     [P in TFields[number] as P extends FieldRef<any, infer K> ? K : never]: P extends FieldRef<infer V, any> ? V : never;
 };
 
-export declare function gt(field: string, value: string | number): FilterExpr;
+export declare function gt(field: Name, value: string | number): FilterExpr;
 
 /**
  * Represents a GUID (Globally Unique Identifier) string, a standard identifier
@@ -1418,9 +1428,9 @@ export declare function isInactive(): FilterExpr;
 
 export declare function isNonEmptyString(value: unknown): value is string;
 
-export declare function isNotNull(field: string): FilterExpr;
+export declare function isNotNull(field: Name): FilterExpr;
 
-export declare function isNull(field: string): FilterExpr;
+export declare function isNull(field: Name): FilterExpr;
 
 export declare function isType(type: Types): Validator<any>;
 
@@ -1456,7 +1466,7 @@ export declare function LastXYears(field: Name, value: number): FilterExpr;
 
 export declare function LastYear(field: Name): FilterExpr;
 
-export declare function le(field: string, value: string | number): FilterExpr;
+export declare function le(field: Name, value: string | number): FilterExpr;
 
 /**
  * Creates a choice/option-set column definition with a fixed set of allowed values.
@@ -1525,6 +1535,10 @@ export declare class LookupIdProperty extends Schema<GUID | null> {
     transformValueToDataverse(value: any): string | null;
 }
 
+declare type LookupKeys<T> = {
+    [K in keyof T]: T[K] extends LookupProperty<any> ? K : never;
+}[keyof T];
+
 export declare class LookupProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties> | null> {
     #private;
     kind: "navigation";
@@ -1535,7 +1549,7 @@ export declare class LookupProperty<TProperties extends GenericProperties> exten
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-export declare function lt(field: string, value: string | number): FilterExpr;
+export declare function lt(field: Name, value: string | number): FilterExpr;
 
 export declare function mapChoices(data: any): {
     value: number;
@@ -1667,11 +1681,7 @@ export declare type NarrowKeysByValue<T extends object, V> = {
     [K in keyof T]: T[K] extends V ? K : never;
 }[keyof T];
 
-declare type NavKeys<T> = {
-    [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? K : never;
-}[keyof T];
-
-export declare function ne(field: string, value: FilterValue): FilterExpr;
+export declare function ne(field: Name, value: FilterValue): FilterExpr;
 
 declare type NestedStringArray = Array<string | NestedStringArray>;
 
@@ -1853,11 +1863,14 @@ declare type ODataLookupNavProxy<P extends GenericProperties> = {
 export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     private _table;
     private _fields;
+    private _selectedKeys;
     private _filters;
     private _expands;
     private _orderby;
     private _top?;
     private _apply;
+    private _hasGroupby;
+    private _expandMode;
     private _proxy;
     constructor(table: DataverseTable<T>);
     private _selectDefaults;
@@ -1906,7 +1919,10 @@ export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>>
      *     sub.expand("location", sub2 => sub2.select("name"))
      *   );
      */
-    expand<K extends string & NavKeys<T>, R>(key: K, sub: (q: ODataQuery<RelatedProps<T, K>>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+    expand<K extends CollectionKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'groupby'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+        [P in K]: ExpandResult<T, P, R>;
+    }>;
+    expand<K extends LookupKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'groupby'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
         [P in K]: ExpandResult<T, P, R>;
     }>;
     /**
@@ -1944,12 +1960,13 @@ export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>>
      * // Just groupby without aggregates:
      * fetchOdata(Person).groupby(f => [f.age]);
      */
-    groupby<const TFields extends FieldRef<any, string>[], A extends Record<string, Aggregation>>(selectFields: (f: ODataFieldProxy<T>) => TFields, aggFields: (f: ODataFieldProxy<T>) => A): ODataQuery<T, GroupByFields<TFields> & {
+    groupby<const TFields extends FieldRef<any, string>[], A extends Record<string, Aggregation>>(selectFields: (f: ODataFieldProxy<T>) => TFields, aggFields: (f: ODataFieldProxy<T>) => A): Omit<ODataQuery<T, GroupByFields<TFields> & {
         [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number;
-    }>;
-    groupby<const TFields extends FieldRef<any, string>[]>(selectFields: (f: ODataFieldProxy<T>) => TFields): ODataQuery<T, GroupByFields<TFields>>;
+    }>, 'select' | 'orderby' | 'expand' | 'groupby'>;
+    groupby<const TFields extends FieldRef<any, string>[]>(selectFields: (f: ODataFieldProxy<T>) => TFields): Omit<ODataQuery<T, GroupByFields<TFields>>, 'select' | 'orderby' | 'expand' | 'groupby'>;
     private _build;
     toString(): string;
+    private _partialTransform;
     execute(): Promise<TResult[]>;
 }
 
@@ -2190,7 +2207,7 @@ declare type Simplify<T> = {
     [Key in keyof T]: T[Key];
 } & {};
 
-export declare function startsWith(field: string, value: string): FilterExpr;
+export declare function startsWith(field: Name, value: string): FilterExpr;
 
 /**
  * Creates a string-typed Dataverse column definition.

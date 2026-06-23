@@ -146,56 +146,56 @@ function fn(field: Name, fnName: string, operator: string, values: FilterValue[]
 
 // --- Factory functions ---
 
-export function eq(field: string, value: FilterValue): FilterExpr {
-  return new FilterExpr({ type: "comparison", field, operator: "eq", value })
+export function eq(field: Name, value: FilterValue): FilterExpr {
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "eq", value })
 }
 
-export function ne(field: string, value: FilterValue): FilterExpr {
-  return new FilterExpr({ type: "comparison", field, operator: "ne", value })
+export function ne(field: Name, value: FilterValue): FilterExpr {
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "ne", value })
 }
 
-export function gt(field: string, value: string | number): FilterExpr {
-  return new FilterExpr({ type: "comparison", field, operator: "gt", value })
+export function gt(field: Name, value: string | number): FilterExpr {
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "gt", value })
 }
 
-export function ge(field: string, value: string | number): FilterExpr {
-  return new FilterExpr({ type: "comparison", field, operator: "ge", value })
+export function ge(field: Name, value: string | number): FilterExpr {
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "ge", value })
 }
 
-export function lt(field: string, value: string | number): FilterExpr {
-  return new FilterExpr({ type: "comparison", field, operator: "lt", value })
+export function lt(field: Name, value: string | number): FilterExpr {
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "lt", value })
 }
 
-export function le(field: string, value: string | number): FilterExpr {
-  return new FilterExpr({ type: "comparison", field, operator: "le", value })
+export function le(field: Name, value: string | number): FilterExpr {
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "le", value })
 }
 
-export function isNull(field: string): FilterExpr {
-  return new FilterExpr({ type: "null", field, positive: true })
+export function isNull(field: Name): FilterExpr {
+  return new FilterExpr({ type: "null", field: getName(field), positive: true })
 }
 
-export function isNotNull(field: string): FilterExpr {
-  return new FilterExpr({ type: "null", field, positive: false })
+export function isNotNull(field: Name): FilterExpr {
+  return new FilterExpr({ type: "null", field: getName(field), positive: false })
 }
 
-export function contains(field: string, value: string): FilterExpr {
-  return new FilterExpr({ type: "contains", field, value })
+export function contains(field: Name, value: string): FilterExpr {
+  return new FilterExpr({ type: "contains", field: getName(field), value })
 }
 
-export function startsWith(field: string, value: string): FilterExpr {
-  return new FilterExpr({ type: "startsWith", field, value })
+export function startsWith(field: Name, value: string): FilterExpr {
+  return new FilterExpr({ type: "startsWith", field: getName(field), value })
 }
 
-export function endsWith(field: string, value: string): FilterExpr {
-  return new FilterExpr({ type: "endsWith", field, value })
+export function endsWith(field: Name, value: string): FilterExpr {
+  return new FilterExpr({ type: "endsWith", field: getName(field), value })
 }
 
 export function compare(
-  field: string,
+  field: Name,
   operator: string,
-  otherField: string,
+  otherField: Name,
 ): FilterExpr {
-  return new FilterExpr({ type: "compare", field, operator, otherField })
+  return new FilterExpr({ type: "compare", field: getName(field), operator, otherField: getName(otherField) })
 }
 
 export function and(...conditions: (FilterExpr | string)[]): FilterExpr {

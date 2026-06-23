@@ -1454,7 +1454,7 @@ class DataverseTable extends Schema {
     for (const [key, property] of Object.entries(this.fields)) {
       result[key] = property.transformValueFromDataverse(value[property.fromDataverseName]);
     }
-    result[Etag] = value[Etag];
+    result[Etag] = value["@odata.etag"];
     return result;
   }
   transformValueToDataverse(value) {
@@ -2001,40 +2001,40 @@ function fn(field, fnName, operator, values) {
   return new FilterExpr({ type: "fn", field: getName(field), fnName, operator, values });
 }
 function eq(field, value) {
-  return new FilterExpr({ type: "comparison", field, operator: "eq", value });
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "eq", value });
 }
 function ne(field, value) {
-  return new FilterExpr({ type: "comparison", field, operator: "ne", value });
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "ne", value });
 }
 function gt(field, value) {
-  return new FilterExpr({ type: "comparison", field, operator: "gt", value });
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "gt", value });
 }
 function ge(field, value) {
-  return new FilterExpr({ type: "comparison", field, operator: "ge", value });
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "ge", value });
 }
 function lt(field, value) {
-  return new FilterExpr({ type: "comparison", field, operator: "lt", value });
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "lt", value });
 }
 function le(field, value) {
-  return new FilterExpr({ type: "comparison", field, operator: "le", value });
+  return new FilterExpr({ type: "comparison", field: getName(field), operator: "le", value });
 }
 function isNull(field) {
-  return new FilterExpr({ type: "null", field, positive: true });
+  return new FilterExpr({ type: "null", field: getName(field), positive: true });
 }
 function isNotNull(field) {
-  return new FilterExpr({ type: "null", field, positive: false });
+  return new FilterExpr({ type: "null", field: getName(field), positive: false });
 }
 function contains(field, value) {
-  return new FilterExpr({ type: "contains", field, value });
+  return new FilterExpr({ type: "contains", field: getName(field), value });
 }
 function startsWith(field, value) {
-  return new FilterExpr({ type: "startsWith", field, value });
+  return new FilterExpr({ type: "startsWith", field: getName(field), value });
 }
 function endsWith(field, value) {
-  return new FilterExpr({ type: "endsWith", field, value });
+  return new FilterExpr({ type: "endsWith", field: getName(field), value });
 }
 function compare(field, operator, otherField) {
-  return new FilterExpr({ type: "compare", field, operator, otherField });
+  return new FilterExpr({ type: "compare", field: getName(field), operator, otherField: getName(otherField) });
 }
 function and(...conditions) {
   const valid = conditions.filter((c) => c != null && c !== "");
@@ -2308,11 +2308,14 @@ function count(fieldOrAlias, alias) {
 class ODataQuery {
   _table;
   _fields = [];
+  _selectedKeys = [];
   _filters = [];
   _expands = [];
   _orderby = [];
   _top;
   _apply = "";
+  _hasGroupby = false;
+  _expandMode = "full";
   _proxy;
   constructor(table) {
     this._table = table;
@@ -2371,7 +2374,9 @@ class ODataQuery {
    * fetchOdata(Person).select("name", "age");
    */
   select(...keys) {
+    if (this._hasGroupby) throw new Error("select() is not supported after groupby()");
     this._fields = keys.map((k) => this._proxy[k]);
+    this._selectedKeys = keys;
     return this;
   }
   where(filter) {
@@ -2387,27 +2392,18 @@ class ODataQuery {
     this._filters.push(str);
     return this;
   }
-  /**
-   * Adds a `$expand` clause for a navigation property.
-   *
-   * @example
-   * fetchOdata(Person)
-   *   .select("name")
-   *   .expand("primaryAddress", sub => sub.select("street", "zip"));
-   *
-   * @example
-   * // Nested expand:
-   * fetchOdata(Person)
-   *   .expand("primaryAddress", sub =>
-   *     sub.expand("location", sub2 => sub2.select("name"))
-   *   );
-   */
   expand(key, sub) {
+    if (this._hasGroupby) throw new Error("expand() is not supported after groupby()");
     const prop = this._table.fields[key];
+    const isCollection = prop.type === "collection";
+    if (this._expandMode === "collection" && isCollection) {
+      throw new Error("expand() within a collection expand only supports lookup navigation properties");
+    }
     const child = new ODataQuery(prop.table);
-    const result = sub(child);
+    child._expandMode = isCollection ? "collection" : "lookup";
+    const result = sub?.(child);
     const q = result ?? child;
-    this._expands.push({ name: prop.name, query: q._build(true) });
+    this._expands.push({ name: prop.name, key, query: q._build(true) });
     return this;
   }
   /**
@@ -2419,15 +2415,21 @@ class ODataQuery {
    * fetchOdata(Person).orderby(f => f.age, "desc");
    */
   orderby(fieldSelector, direction = "asc") {
+    if (this._hasGroupby) throw new Error("orderby() is not supported after groupby()");
+    if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
     this._orderby.push({ name: fieldSelector(this._proxy), dir: direction });
     return this;
   }
   /** Limits the number of returned records (`$top`). */
   top(n) {
+    if (this._expandMode === "lookup") throw new Error("top() is not supported in lookup expands");
     this._top = n;
     return this;
   }
   groupby(selectFields, aggFields) {
+    if (this._hasGroupby) throw new Error("groupby() can only be called once");
+    if (this._expandMode !== "full") throw new Error("groupby() is not supported in expand sub-queries");
+    this._hasGroupby = true;
     const groupByNames = selectFields(this._proxy);
     const aggStrings = aggFields ? Object.entries(aggFields(this._proxy)).map(([alias, agg]) => agg.toOdata(alias)) : [];
     if (groupByNames.length > 0 && aggStrings.length > 0) {
@@ -2442,19 +2444,21 @@ class ODataQuery {
   _build(forExpand = false) {
     const parts = [];
     const joinChar = forExpand ? ";" : "&";
-    if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
+    if (!this._hasGroupby) {
+      if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
+      if (this._orderby.length) {
+        parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+      }
+      if (this._expands.length) {
+        parts.push(`$expand=${this._expands.map((e) => {
+          return e.query ? `${e.name}(${e.query})` : e.name;
+        }).join(",")}`);
+      }
+    }
     if (this._filters.length === 1) {
       parts.push(`$filter=${this._filters[0]}`);
     } else if (this._filters.length > 1) {
       parts.push(`$filter=${this._filters.join(" and ")}`);
-    }
-    if (this._orderby.length) {
-      parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
-    }
-    if (this._expands.length) {
-      parts.push(`$expand=${this._expands.map((e) => {
-        return e.query ? `${e.name}(${e.query})` : e.name;
-      }).join(",")}`);
     }
     if (this._top !== void 0) parts.push(`$top=${this._top}`);
     if (this._apply) parts.push(`$apply=${this._apply}`);
@@ -2463,10 +2467,28 @@ class ODataQuery {
   toString() {
     return this._build();
   }
+  _partialTransform(value) {
+    const result = {};
+    for (const key of this._selectedKeys) {
+      const prop = this._table.fields[key];
+      result[key] = prop.transformValueFromDataverse(value[prop.fromDataverseName]);
+    }
+    for (const expand of this._expands) {
+      const prop = this._table.fields[expand.key];
+      if (prop && value[expand.name] !== void 0) {
+        result[expand.key] = prop.transformValueFromDataverse(value[expand.name]);
+      }
+    }
+    result[Etag] = value["@odata.etag"];
+    return result;
+  }
   async execute() {
     const qs = this.toString();
     if (!qs) return this._table.getRecords();
     const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
+    if (this._selectedKeys.length > 0) {
+      return raw.map((v) => this._partialTransform(v));
+    }
     return raw.map((v) => this._table.transformValueFromDataverse(v));
   }
 }
@@ -2497,7 +2519,7 @@ function fetchOdata(table) {
 }
 
 class EntityQueryBuilder {
-  _aliasCounter = 0;
+  _linkAlias;
   _table;
   _attributes = [];
   _links = [];
@@ -2505,21 +2527,29 @@ class EntityQueryBuilder {
   _filters = [];
   _proxy;
   _top;
-  _page;
-  _pageSize;
   _isAggregate = false;
-  _returnTotalRecordCount = false;
   _useRawOrderBy = false;
   _lateMaterialize = false;
   _aggregateLimit;
   _orders = [];
-  _pagingCookie;
   _datasource;
   _options;
   /** @param table The DataverseTable definition to build the query against. */
-  constructor(table) {
+  constructor(table, _linkAlias) {
     this._table = table;
+    this._linkAlias = _linkAlias ?? { value: 0 };
     this._proxy = this._buildProxy();
+  }
+  _getEffectiveAttributes() {
+    if (this._attributes.length > 0) return this._attributes;
+    const attrs = [];
+    for (const [key, prop] of Object.entries(this._table.fields)) {
+      const p = prop;
+      if (p.kind === "value" || p.type === "lookupId" || p.type === "file") {
+        attrs.push({ name: p.fromDataverseName ?? p.name, alias: key });
+      }
+    }
+    return attrs;
   }
   _buildProxy() {
     const proxy = {};
@@ -2585,11 +2615,11 @@ class EntityQueryBuilder {
    *     q => q.select(a => ({ accountName: a.name })))
    */
   join(linkType, table, from, to, subquery, intersect) {
-    const nestedBuilder = new EntityQueryBuilder(table);
+    const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias);
     subquery(nestedBuilder);
     const fromFieldName = table.fields[from].name;
     const toFieldName = this._table.fields[to].name;
-    const autoAlias = `auto_link_${++this._aliasCounter}`;
+    const autoAlias = `auto_link_${++this._linkAlias.value}`;
     const isIntersect = intersect ?? table.intersect === true;
     this._links.push({
       name: table.logicalName,
@@ -2625,17 +2655,17 @@ class EntityQueryBuilder {
         `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
       );
     }
-    const targetBuilder = new EntityQueryBuilder(targetTable);
+    const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
     subquery(targetBuilder);
     const pkName = this._table.getPrimaryKey().property.name;
     const targetPkName = targetTable.getPrimaryKey().property.name;
     const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
-    const intersectBuilder = new EntityQueryBuilder(stubTable);
+    const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
     intersectBuilder._links.push({
       name: targetTable.logicalName,
       from: targetPkName,
       to: targetPkName,
-      alias: `auto_link_${++this._aliasCounter}`,
+      alias: `auto_link_${++this._linkAlias.value}`,
       linkType: "inner",
       builder: targetBuilder
     });
@@ -2643,7 +2673,7 @@ class EntityQueryBuilder {
       name: intersectTable.name,
       from: pkName,
       to: pkName,
-      alias: `auto_link_${++this._aliasCounter}`,
+      alias: `auto_link_${++this._linkAlias.value}`,
       linkType: "inner",
       builder: intersectBuilder,
       intersect: true
@@ -2658,46 +2688,6 @@ class EntityQueryBuilder {
   /** Limits the number of returned records. */
   top(n) {
     this._top = n;
-    return this;
-  }
-  /** Sets the page number for paginated results. */
-  page(n) {
-    this._page = n;
-    return this;
-  }
-  /** Sets the number of records per page. */
-  pageSize(n) {
-    this._pageSize = n;
-    return this;
-  }
-  /** Requests the server to include the total record count. */
-  returnTotalRecordCount() {
-    this._returnTotalRecordCount = true;
-    return this;
-  }
-  /** Instructs the server to use the raw order-by string. */
-  useRawOrderBy() {
-    this._useRawOrderBy = true;
-    return this;
-  }
-  /** Enables late materialization for better performance on large datasets. */
-  lateMaterialize() {
-    this._lateMaterialize = true;
-    return this;
-  }
-  /** Sets the aggregate limit for grouped results. */
-  aggregateLimit(n) {
-    this._aggregateLimit = n;
-    return this;
-  }
-  /** Sets custom query options. */
-  options(value) {
-    this._options = value;
-    return this;
-  }
-  /** Sets an alternate datasource (e.g. for federated queries). */
-  datasource(value) {
-    this._datasource = value;
     return this;
   }
   /** Marks the query as an aggregate (grouped) query. */
@@ -2745,11 +2735,6 @@ class EntityQueryBuilder {
     }
     return this;
   }
-  /** Sets the paging cookie for navigating paginated results. */
-  pagingCookie(cookie) {
-    this._pagingCookie = cookie;
-    return this;
-  }
   /**
    * Returns the full FetchXML string.
    *
@@ -2768,19 +2753,15 @@ class EntityQueryBuilder {
     const fetchAttrs = [`version="1.0"`, `mapping="logical"`];
     if (this._top !== void 0) fetchAttrs.push(`top='${this._top}'`);
     if (this._isDistinct) fetchAttrs.push(`distinct="true"`);
-    if (this._page !== void 0) fetchAttrs.push(`page='${this._page}'`);
-    if (this._pageSize !== void 0) fetchAttrs.push(`count='${this._pageSize}'`);
     if (this._isAggregate) fetchAttrs.push(`aggregate="true"`);
-    if (this._returnTotalRecordCount) fetchAttrs.push(`returntotalrecordcount="true"`);
     if (this._useRawOrderBy) fetchAttrs.push(`useraworderby="true"`);
     if (this._lateMaterialize) fetchAttrs.push(`latematerialize="true"`);
     if (this._aggregateLimit !== void 0) fetchAttrs.push(`aggregatelimit='${this._aggregateLimit}'`);
-    if (this._pagingCookie) fetchAttrs.push(`paging-cookie='${this._pagingCookie}'`);
     if (this._datasource) fetchAttrs.push(`datasource='${this._datasource}'`);
     if (this._options) fetchAttrs.push(`options='${this._options}'`);
     lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
     lines.push(`  <entity name="${this._table.logicalName}">`);
-    for (const attr of this._attributes) {
+    for (const attr of this._getEffectiveAttributes()) {
       const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
       if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
       if (attr.groupby) attrParts.push(`groupby='true'`);
@@ -2810,6 +2791,9 @@ class EntityQueryBuilder {
     lines.push(`</fetch>`);
     return lines.join("\n");
   }
+  static _isFilterOnlyLinkType(linkType) {
+    return linkType === "any" || linkType === "not any" || linkType === "all" || linkType === "not all" || linkType === "exists" || linkType === "in";
+  }
   _renderLinkEntity(link, indent) {
     const lines = [];
     const linkAttrs = [
@@ -2822,27 +2806,29 @@ class EntityQueryBuilder {
     if (link.intersect) linkAttrs.push(`intersect="true"`);
     lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
     const childIndent = `${indent}  `;
+    const filterOnly = EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
     if (link.builder._filters.length > 0) {
       lines.push(`${childIndent}<filter type="and">`);
       for (const c of link.builder._filters) {
-        const entityScoped = c.replace("<condition", `<condition entityname="${link.alias}"`);
-        lines.push(`${childIndent}  ${entityScoped}`);
+        lines.push(`${childIndent}  ${c}`);
       }
       lines.push(`${childIndent}</filter>`);
     }
-    for (const nestedAttr of link.builder._attributes) {
-      const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
-      if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
-      if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
-      if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
-      if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
-      if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
-      lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
-    }
-    for (const order of link.builder._orders) {
-      const parts = [`attribute='${order.attribute}'`];
-      if (order.descending) parts.push(`descending='true'`);
-      lines.push(`${childIndent}<order ${parts.join(" ")} />`);
+    if (!filterOnly) {
+      for (const nestedAttr of link.builder._getEffectiveAttributes()) {
+        const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
+        if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
+        if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
+        if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
+        if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
+        if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
+        lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
+      }
+      for (const order of link.builder._orders) {
+        const parts = [`attribute='${order.attribute}'`];
+        if (order.descending) parts.push(`descending='true'`);
+        lines.push(`${childIndent}<order ${parts.join(" ")} />`);
+      }
     }
     for (const nestedLink of link.builder._links) {
       lines.push(...this._renderLinkEntity(nestedLink, childIndent));
@@ -2869,48 +2855,79 @@ class EntityQueryBuilder {
    *   .where(f => condition(f.status, "eq", 1))
    *   .execute();
    * // contacts: Array<{ name: string; email: string }>
+   *
+   * @example
+   * // With rarely-used options
+   * const contacts = await fetchXml(contactDataverseTable)
+   *   .select(f => ({ name: f.name }))
+   *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
    */
-  async execute() {
+  async execute(options) {
+    if (options?.datasource) this._datasource = options.datasource;
+    if (options?.lateMaterialize) this._lateMaterialize = true;
+    if (options?.aggregateLimit !== void 0) this._aggregateLimit = options.aggregateLimit;
+    if (options?.useRawOrderBy) this._useRawOrderBy = true;
+    if (options?.options) this._options = options.options;
     const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
-    const aliasMap = this._buildAliasMap();
-    if (aliasMap.size > 0) {
+    const aliasInfo = this._buildAliasInfo();
+    if (aliasInfo.size > 0) {
       return raw.map((v) => {
         const result = {};
-        for (const [alias, transform] of aliasMap) {
-          if (alias in v) {
-            result[alias] = transform(v[alias]);
+        for (const [alias, info] of aliasInfo) {
+          if (info.name in v) {
+            result[alias] = info.transform(v[info.name]);
+          } else {
+            result[alias] = info.getDefault();
           }
         }
+        result[Etag] = v["@odata.etag"];
         return result;
       });
     }
-    return raw.map((v) => this._table.transformValueFromDataverse(v));
+    return raw.map((v) => {
+      const r = this._table.transformValueFromDataverse(v);
+      return r;
+    });
   }
-  _buildAliasMap() {
+  _buildAliasInfo() {
     const map = /* @__PURE__ */ new Map();
     this._collectAliases(this, map);
     return map;
   }
   _collectAliases(builder, map) {
-    for (const attr of builder._attributes) {
+    for (const attr of builder._getEffectiveAttributes()) {
       const fields = builder._table.fields;
       const entry = Object.entries(fields).find(
         ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name
       );
       if (entry) {
         const fieldDef = entry[1];
-        map.set(attr.alias, (val) => fieldDef.transformValueFromDataverse(val));
+        const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+        map.set(attr.alias, {
+          transform: (val) => fieldDef.transformValueFromDataverse(val),
+          getDefault: () => fieldDef.getDefault?.(),
+          name: dataverseName
+        });
       } else {
-        map.set(attr.alias, (val) => val);
+        map.set(attr.alias, {
+          transform: (val) => val,
+          getDefault: () => void 0,
+          name: attr.name
+        });
       }
     }
     for (const link of builder._links) {
-      this._collectAliases(link.builder, map);
+      if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
+        this._collectAliases(link.builder, map);
+      }
     }
   }
 }
 function condition(attribute, operator, value) {
   return `<condition attribute="${attribute}" operator="${operator}" value="${value}" />`;
+}
+function conditionCompare(attribute, operator, otherAttribute) {
+  return `<condition attribute="${attribute}" operator="${operator}" valueof="${otherAttribute}" />`;
 }
 function filterAnd(...conditions) {
   return `<filter type="and">${conditions.join("")}</filter>`;
@@ -2922,4 +2939,4 @@ function fetchXml(table) {
   return new EntityQueryBuilder(table);
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FilterExpr, FormattedField, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, avg, base64ImageToURL, boolean, collection, collectionIds, compare, condition, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, filterAnd, filterOr, formatted, ge, getEtag, getImageUrl, getName, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FilterExpr, FormattedField, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, avg, base64ImageToURL, boolean, collection, collectionIds, compare, condition, conditionCompare, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, filterAnd, filterOr, formatted, ge, getEtag, getImageUrl, getName, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
