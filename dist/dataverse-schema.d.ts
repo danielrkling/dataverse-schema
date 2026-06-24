@@ -6,7 +6,7 @@ export declare function AboveOrEqual(field: Name, value: string): FilterExpr;
 
 /**
  * Represents a server-side aggregation expression usable in OData `$apply` and FetchXML.
- * Created via factory functions like `avg()`, `sum()`, `min()`, `max()`, `count()`.
+ * Created via factory functions like `sum()`, `min()`, `max()`, `count()`.
  */
 export declare class Aggregation<TValue = number> {
     readonly operation: string;
@@ -33,14 +33,28 @@ export declare function and(...conditions: (FilterExpr | string)[]): FilterExpr;
 
 export declare function any<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
 
+/** Proxy type for `orderby` after `apply()`, mapping alias names to FieldRefs. */
+declare type ApplyAliasProxy<R extends Record<string, any>> = {
+    [K in keyof R]: FieldRef<R[K], K extends string ? K : never>;
+};
+
+/** Extract the result type from an `apply()` record. */
+declare type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
+    [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V : R[K] extends Aggregation<infer V> ? V : never;
+};
+
+declare type ApplyResultType_2<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
+    [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V : R[K] extends Aggregation<infer V> ? V : never;
+};
+
 export declare function asc(...fields: Name[]): OrderSpec;
 
 export declare function attachEtag<T>(v: T): T;
 
-/** Average aggregation. `avg(field)` or `avg("field_name")`. */
-export declare function avg<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>;
+/** Average aggregation. `average(field)` or `average("field_name")`. */
+export declare function average<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>;
 
-export declare function avg(name: string, alias?: string): Aggregation<number>;
+export declare function average(name: string, alias?: string): Aggregation<number>;
 
 /**
  * Creates a data URL from a base64 encoded image string.
@@ -138,25 +152,6 @@ export declare class CollectionProperty<TProperties extends GenericProperties> e
 }
 
 export declare function compare(field: Name, operator: string, otherField: Name): FilterExpr;
-
-/**
- * Creates a FetchXML condition element string for a literal value comparison.
- *
- * @example
- * condition("statuscode", "eq", 1)
- * // '<condition attribute="statuscode" operator="eq" value="1" />'
- */
-export declare function condition(attribute: string, operator: string, value: unknown): string;
-
-/**
- * Creates a FetchXML condition element string for field-to-field comparison.
- * Uses the `valueof` attribute instead of `value`.
- *
- * @example
- * conditionCompare("field1", "eq", "field2")
- * // '<condition attribute="field1" operator="eq" valueof="field2" />'
- */
-export declare function conditionCompare(attribute: string, operator: string, otherAttribute: string): string;
 
 export declare function contains(field: Name, value: string): FilterExpr;
 
@@ -920,10 +915,14 @@ export declare function endsWith(field: Name, value: string): FilterExpr;
  * Use `fetchXml(table)` to create a builder, then chain methods to construct
  * the query. Call `execute()` to run it or `toXml()` to get the raw XML.
  *
+ * When `select()` is not called, all value/lookupId/file fields are
+ * automatically included. Each result from `execute()` includes an `Etag`
+ * symbol property for optimistic concurrency.
+ *
  * @example
  * const q = fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name, email: f.email }))
- *   .where(f => condition(f.status, "eq", 1))
+ *   .where(f => eq(f.status, 1))
  *   .orderby(f => f.name, "desc")
  *   .top(10);
  *
@@ -955,31 +954,55 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     /**
      * Selects specific fields to include in the FetchXML query.
      * The result type is narrowed to only include selected fields.
+     * When this method is not called, all value/lookupId/file fields
+     * are automatically included via `_getEffectiveAttributes()`.
+     *
+     * Use `apply()` instead for aggregate queries.
      *
      * @example
      * fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name, email: f.email }))
      */
-    select<TSelect extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => TSelect): EntityQueryBuilder<TProps, {
-        [K in keyof TSelect]: Infer<TProps[TSelect[K]]>;
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): EntityQueryBuilder<TProps, {
+        [K in keyof R]: Infer<TProps[R[K]]>;
     }>;
+    /**
+     * Adds grouping and aggregation to the FetchXML query.
+     * The callback receives a field proxy and must return a record where:
+     * - Values created with `groupby()` define grouping fields
+     * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
+     *
+     * Record keys become the alias names in the response.
+     *
+     * @example
+     * fetchXml(Account).apply(v => ({
+     *   city: groupby(v.city),
+     *   total: sum(v.revenue),
+     *   cnt: count(),
+     * }))
+     */
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): Omit<EntityQueryBuilder<TProps, ApplyResultType_2<R>>, 'select'>;
     /**
      * Adds a filter condition to the FetchXML query.
      * Accepts a raw filter string or a callback that receives a field proxy.
      * Multiple `where()` calls are combined with AND.
      *
      * @example
-     * // With callback
-     * fetchXml(contactDataverseTable).where(f => condition(f.status, "eq", 1))
+     * // With typed filter function
+     * fetchXml(contactDataverseTable).where(f => eq(f.status, 1))
      *
      * @example
      * // Raw filter string
-     * fetchXml(contactDataverseTable).where(condition("statuscode", "eq", "1"))
+     * fetchXml(contactDataverseTable).where(eq("statuscode", "1"))
      */
     where(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
     /**
      * Adds a link-entity join to another table. The result type merges the
      * joined entity's selected fields.
+     *
+     * For filter-only link types (`any`, `not any`, `all`, `not all`,
+     * `exists`, `in`), only filters are rendered inside `<link-entity>`;
+     * `<attribute>` and `<order>` elements are skipped.
      *
      * @example
      * fetchXml(contactDataverseTable)
@@ -1017,8 +1040,6 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     distinct(): this;
     /** Limits the number of returned records. */
     top(n: number): this;
-    /** Marks the query as an aggregate (grouped) query. */
-    aggregate(): this;
     /**
      * Adds ordering to the FetchXML query.
      * Matches the OData syntax: pass a field selector callback and optional direction.
@@ -1033,40 +1054,6 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
      */
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string, direction?: 'asc' | 'desc'): this;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
-    /**
-     * Adds grouping and aggregation to the FetchXML query.
-     * Mirrors the OData `groupby()` API using the same `sum()`, `avg()`, `min()`, `max()`, `count()` factory functions.
-     *
-     * @example
-     * // With grouping and aggregates:
-     * fetchXml(Account).groupby(
-     *   f => [f.city],
-     *   f => ({ total: sum(f.revenue), cnt: count(f.id) })
-     * )
-     *
-     * @example
-     * // Without grouping (aggregate all rows):
-     * fetchXml(Account).groupby(
-     *   () => [],
-     *   f => ({ total: sum(f.revenue) })
-     * )
-     *
-     * @example
-     * // Just grouping without aggregates:
-     * fetchXml(Account).groupby(f => [f.city])
-     */
-    groupby<const TFields extends (keyof TProps)[], A extends Record<string, Aggregation>>(selectFields: (f: {
-        [K in keyof TProps]: K;
-    }) => TFields, aggFields: (f: FieldProxy<TProps>) => A): EntityQueryBuilder<TProps, {
-        [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number;
-    } & {
-        [P in TFields[number]]: Infer<TProps[P]>;
-    }>;
-    groupby<const TFields extends (keyof TProps)[]>(selectFields: (f: {
-        [K in keyof TProps]: K;
-    }) => TFields): EntityQueryBuilder<TProps, {
-        [P in TFields[number]]: Infer<TProps[P]>;
-    }>;
     /**
      * Returns the full FetchXML string.
      *
@@ -1094,15 +1081,20 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     /**
      * Executes the FetchXML query against Dataverse and returns the parsed results.
      *
+     * Each result object includes an `Etag` symbol property (import from
+     * `dataverse-schema`) holding the `@odata.etag` value for optimistic
+     * concurrency. When `select()` is not called, value/lookupId/file fields
+     * are auto-included; missing API fields fall back to the field default.
+     *
      * @example
      * const contacts = await fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name, email: f.email }))
-     *   .where(f => condition(f.status, "eq", 1))
+     *   .where(f => eq(f.status, 1))
      *   .execute();
      * // contacts: Array<{ name: string; email: string }>
      *
      * @example
-     * // With rarely-used options
+     * // With optional execute parameters
      * const contacts = await fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name }))
      *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
@@ -1165,13 +1157,13 @@ export declare function fetchOdata<T extends GenericProperties>(table: Dataverse
  * @example
  * const results = await fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name }))
- *   .where(f => condition(f.statecode, "eq", 0))
+ *   .where(f => eq(f.statecode, 0))
  *   .execute();
  */
 export declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): EntityQueryBuilder<TProps, Infer<TProps>>;
 
 export declare type FieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: string;
+    [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>;
 };
 
 /**
@@ -1199,17 +1191,6 @@ export declare class FileField extends Schema<string> {
     kind: "file";
     constructor(name: string);
 }
-
-/**
- * Combines conditions with a logical AND.
- *
- * @example
- * filterAnd(
- *   condition("statecode", "eq", 0),
- *   condition("statuscode", "eq", 1),
- * )
- */
-export declare function filterAnd(...conditions: string[]): string;
 
 export declare class FilterExpr {
     private node;
@@ -1270,17 +1251,6 @@ declare type FilterNode = {
     type: "not";
     condition: FilterExpr;
 };
-
-/**
- * Combines conditions with a logical OR.
- *
- * @example
- * filterOr(
- *   condition("statecode", "eq", 0),
- *   condition("statecode", "eq", 1),
- * )
- */
-export declare function filterOr(...conditions: string[]): string;
 
 declare type FilterValue = string | number | boolean | null;
 
@@ -1352,10 +1322,20 @@ export declare function getName(name: Name): string;
 
 export declare type GetTable<T = any> = () => T;
 
-/** Extract a record type from an array of `FieldRef` values, using their phantom keys. */
-declare type GroupByFields<TFields extends FieldRef<any, string>[]> = {
-    [P in TFields[number] as P extends FieldRef<any, infer K> ? K : never]: P extends FieldRef<infer V, any> ? V : never;
-};
+/** Group a field inside an `apply()` expression. */
+export declare function groupby<TValue>(ref: FieldRef<TValue>): GroupByExpr<TValue>;
+
+export declare function groupby(ref: string): GroupByExpr<unknown>;
+
+/**
+ * Represents a field used for grouping inside an `apply()` expression.
+ * Created via the `groupby()` helper function.
+ */
+export declare class GroupByExpr<TValue = unknown> {
+    private __type;
+    readonly field: string;
+    constructor(field: string);
+}
 
 export declare function gt(field: Name, value: string | number): FilterExpr;
 
@@ -1854,7 +1834,7 @@ declare type ODataLookupNavProxy<P extends GenericProperties> = {
  * @example
  * const q = fetchOdata(Person)
  *   .select("name", "age")
- *   .where(f => equals(f.name, "John"))
+ *   .filter(f => equals(f.name, "John"))
  *   .orderby(f => f.name)
  *   .top(10);
  *
@@ -1869,41 +1849,40 @@ export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>>
     private _orderby;
     private _top?;
     private _apply;
-    private _hasGroupby;
+    private _isApply;
     private _expandMode;
     private _proxy;
+    private _applyAliasProxy;
     constructor(table: DataverseTable<T>);
-    private _selectDefaults;
     private _buildProxy;
     private _buildProxyForDataverseTable;
     /**
-     * Restricts the returned columns to the specified fields.
-     * By default, all value columns are selected.
-     *
-     * @param keys One or more value-field keys (navigation properties are excluded).
+     * Selects all value columns (no-args) or restricts to the specified fields.
      *
      * @example
+     * fetchOdata(Person).select();
      * fetchOdata(Person).select("name", "age");
      */
+    select(): ODataQuery<T, Infer<T>>;
     select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, {
         [P in K]: Infer<T[P]>;
     }>;
     /**
      * Adds a `$filter` clause. Can be a raw string or a callback receiving a
-     * typed field proxy. Multiple `.where()` calls stack with `and`.
+     * typed field proxy. Multiple `.filter()` calls stack with `and`.
      *
      * @example
-     * fetchOdata(Person).where(f => equals(f.name, "John"));
+     * fetchOdata(Person).filter(f => eq(f.name, "John"));
      *
      * @example
      * // Multiple calls stack:
      * fetchOdata(Person)
-     *   .where(f => equals(f.name, "John"))
-     *   .where(f => greaterThan(f.age, 20));
+     *   .filter(f => equals(f.name, "John"))
+     *   .filter(f => greaterThan(f.age, 20));
      */
-    where(filter: string): this;
-    where(filter: FilterExpr): this;
-    where(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
+    filter(filter: string): this;
+    filter(filter: FilterExpr): this;
+    filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
     /**
      * Adds a `$expand` clause for a navigation property.
      *
@@ -1919,51 +1898,55 @@ export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>>
      *     sub.expand("location", sub2 => sub2.select("name"))
      *   );
      */
-    expand<K extends CollectionKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'groupby'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+    expand<K extends CollectionKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'apply'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
         [P in K]: ExpandResult<T, P, R>;
     }>;
-    expand<K extends LookupKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'groupby'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+    expand<K extends LookupKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'apply'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
         [P in K]: ExpandResult<T, P, R>;
     }>;
     /**
-     * Adds a `$orderby` clause. The callback receives a field proxy to select
-     * a field. Direction defaults to `"asc"`. Multiple calls accumulate.
+     * Adds a `$orderby` clause.
+     *
+     * After `select()`: use a field selector callback.
+     * After `apply()`: use a field selector callback with alias names.
+     *
+     * Multiple calls accumulate.
      *
      * @example
      * fetchOdata(Person).orderby(f => f.name);
      * fetchOdata(Person).orderby(f => f.age, "desc");
+     * fetchOdata(Person).apply(v => ({ total: sum(v.age) })).orderby(r => r.total, "desc");
      */
     orderby(fieldSelector: (f: ODataFieldProxy<T>) => string, direction?: "asc" | "desc"): this;
+    orderby(alias: string, direction?: "asc" | "desc"): this;
     /** Limits the number of returned records (`$top`). */
     top(n: number): this;
     /**
-     * Adds a `$apply` expression with optional grouping and aggregations.
+     * Adds a `$apply` expression for server-side aggregation and grouping.
+     * The callback receives a field proxy and must return a record where:
+     * - Values created with `groupby()` define grouping fields
+     * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
      *
-     * @param selectFields Callback returning the field refs to group by.
-     *   Pass `() => []` to aggregate the whole table without grouping.
-     * @param aggFields Optional callback returning a record of alias → Aggregation.
+     * Record keys become the alias names in the response.
      *
      * @example
-     * fetchOdata(Person).groupby(
-     *   f => [f.age],
-     *   f => ({ total: sum(f.age) }),
-     * );
+     * fetchOdata(Person).apply(v => ({
+     *   age: groupby(v.age),
+     *   total: sum(v.age),
+     *   average: average(v.age),
+     * }));
      *
      * @example
      * // Aggregate without grouping:
-     * fetchOdata(Person).groupby(
-     *   () => [],
-     *   f => ({ total: sum(f.age) }),
-     * );
-     *
-     * @example
-     * // Just groupby without aggregates:
-     * fetchOdata(Person).groupby(f => [f.age]);
+     * fetchOdata(Person).apply(v => ({
+     *   total: sum(v.age),
+     *   cnt: count(),
+     * }));
      */
-    groupby<const TFields extends FieldRef<any, string>[], A extends Record<string, Aggregation>>(selectFields: (f: ODataFieldProxy<T>) => TFields, aggFields: (f: ODataFieldProxy<T>) => A): Omit<ODataQuery<T, GroupByFields<TFields> & {
-        [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number;
-    }>, 'select' | 'orderby' | 'expand' | 'groupby'>;
-    groupby<const TFields extends FieldRef<any, string>[]>(selectFields: (f: ODataFieldProxy<T>) => TFields): Omit<ODataQuery<T, GroupByFields<TFields>>, 'select' | 'orderby' | 'expand' | 'groupby'>;
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: ODataFieldProxy<T>) => R): Omit<ODataQuery<T, ApplyResultType<R>>, 'select' | 'expand'> & {
+        orderby(fieldSelector: (f: ApplyAliasProxy<ApplyResultType<R>>) => string, direction?: "asc" | "desc"): ODataQuery<T, ApplyResultType<R>>;
+        orderby(alias: string, direction?: "asc" | "desc"): ODataQuery<T, ApplyResultType<R>>;
+    };
     private _build;
     toString(): string;
     private _partialTransform;

@@ -2284,7 +2284,16 @@ class Aggregation {
     return this.toOdata();
   }
 }
-function avg(name, alias) {
+class GroupByExpr {
+  field;
+  constructor(field) {
+    this.field = field;
+  }
+}
+function groupby(ref) {
+  return new GroupByExpr(ref);
+}
+function average(name, alias) {
   return new Aggregation("average", name, alias);
 }
 function sum(name, alias) {
@@ -2314,20 +2323,13 @@ class ODataQuery {
   _orderby = [];
   _top;
   _apply = "";
-  _hasGroupby = false;
+  _isApply = false;
   _expandMode = "full";
   _proxy;
+  _applyAliasProxy = {};
   constructor(table) {
     this._table = table;
     this._proxy = this._buildProxy();
-    this._selectDefaults();
-  }
-  _selectDefaults() {
-    for (const prop of Object.values(this._table.fields)) {
-      if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
-        this._fields.push(prop.fromDataverseName ?? prop.name);
-      }
-    }
   }
   _buildProxy() {
     return this._buildProxyForDataverseTable(this._table);
@@ -2364,22 +2366,23 @@ class ODataQuery {
     }
     return proxy;
   }
-  /**
-   * Restricts the returned columns to the specified fields.
-   * By default, all value columns are selected.
-   *
-   * @param keys One or more value-field keys (navigation properties are excluded).
-   *
-   * @example
-   * fetchOdata(Person).select("name", "age");
-   */
   select(...keys) {
-    if (this._hasGroupby) throw new Error("select() is not supported after groupby()");
-    this._fields = keys.map((k) => this._proxy[k]);
-    this._selectedKeys = keys;
+    if (this._isApply) throw new Error("select() is not supported after apply()");
+    if (keys.length === 0) {
+      this._fields = [];
+      this._selectedKeys = [];
+      for (const prop of Object.values(this._table.fields)) {
+        if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
+          this._fields.push(prop.fromDataverseName ?? prop.name);
+        }
+      }
+    } else {
+      this._fields = keys.map((k) => this._proxy[k]);
+      this._selectedKeys = keys;
+    }
     return this;
   }
-  where(filter) {
+  filter(filter) {
     let str;
     if (filter instanceof FilterExpr) {
       str = filter.toOdata();
@@ -2393,7 +2396,7 @@ class ODataQuery {
     return this;
   }
   expand(key, sub) {
-    if (this._hasGroupby) throw new Error("expand() is not supported after groupby()");
+    if (this._isApply) throw new Error("expand() is not supported after apply()");
     const prop = this._table.fields[key];
     const isCollection = prop.type === "collection";
     if (this._expandMode === "collection" && isCollection) {
@@ -2406,18 +2409,13 @@ class ODataQuery {
     this._expands.push({ name: prop.name, key, query: q._build(true) });
     return this;
   }
-  /**
-   * Adds a `$orderby` clause. The callback receives a field proxy to select
-   * a field. Direction defaults to `"asc"`. Multiple calls accumulate.
-   *
-   * @example
-   * fetchOdata(Person).orderby(f => f.name);
-   * fetchOdata(Person).orderby(f => f.age, "desc");
-   */
-  orderby(fieldSelector, direction = "asc") {
-    if (this._hasGroupby) throw new Error("orderby() is not supported after groupby()");
+  orderby(nameOrSelector, direction = "asc") {
     if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
-    this._orderby.push({ name: fieldSelector(this._proxy), dir: direction });
+    if (typeof nameOrSelector === "function") {
+      this._orderby.push({ name: nameOrSelector(this._isApply ? this._applyAliasProxy : this._proxy), dir: direction });
+    } else {
+      this._orderby.push({ name: nameOrSelector, dir: direction });
+    }
     return this;
   }
   /** Limits the number of returned records (`$top`). */
@@ -2426,26 +2424,74 @@ class ODataQuery {
     this._top = n;
     return this;
   }
-  groupby(selectFields, aggFields) {
-    if (this._hasGroupby) throw new Error("groupby() can only be called once");
-    if (this._expandMode !== "full") throw new Error("groupby() is not supported in expand sub-queries");
-    this._hasGroupby = true;
-    const groupByNames = selectFields(this._proxy);
-    const aggStrings = aggFields ? Object.entries(aggFields(this._proxy)).map(([alias, agg]) => agg.toOdata(alias)) : [];
-    if (groupByNames.length > 0 && aggStrings.length > 0) {
-      this._apply = `groupby((${groupByNames.join(",")}),aggregate(${aggStrings.join(",")}))`;
-    } else if (groupByNames.length > 0) {
-      this._apply = `groupby((${groupByNames.join(",")}))`;
-    } else if (aggStrings.length > 0) {
-      this._apply = `aggregate(${aggStrings.join(",")})`;
+  /**
+   * Adds a `$apply` expression for server-side aggregation and grouping.
+   * The callback receives a field proxy and must return a record where:
+   * - Values created with `groupby()` define grouping fields
+   * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
+   *
+   * Record keys become the alias names in the response.
+   *
+   * @example
+   * fetchOdata(Person).apply(v => ({
+   *   age: groupby(v.age),
+   *   total: sum(v.age),
+   *   average: average(v.age),
+   * }));
+   *
+   * @example
+   * // Aggregate without grouping:
+   * fetchOdata(Person).apply(v => ({
+   *   total: sum(v.age),
+   *   cnt: count(),
+   * }));
+   */
+  apply(expr) {
+    if (this._isApply) throw new Error("apply() can only be called once");
+    if (this._expandMode !== "full") throw new Error("apply() is not supported in expand sub-queries");
+    this._isApply = true;
+    const result = expr(this._proxy);
+    const groupByFields = [];
+    const aggParts = [];
+    this._applyAliasProxy = {};
+    for (const [alias, value] of Object.entries(result)) {
+      this._applyAliasProxy[alias] = alias;
+      if (value instanceof GroupByExpr) {
+        groupByFields.push(value.field);
+      } else if (value instanceof Aggregation) {
+        aggParts.push(value.toOdata(alias));
+      }
+    }
+    if (groupByFields.length > 0 && aggParts.length > 0) {
+      this._apply = `groupby((${groupByFields.join(",")}),aggregate(${aggParts.join(",")}))`;
+    } else if (groupByFields.length > 0) {
+      this._apply = `groupby((${groupByFields.join(",")}))`;
+    } else if (aggParts.length > 0) {
+      this._apply = `aggregate(${aggParts.join(",")})`;
     }
     return this;
   }
   _build(forExpand = false) {
     const parts = [];
     const joinChar = forExpand ? ";" : "&";
-    if (!this._hasGroupby) {
+    if (this._isApply) {
+      if (this._filters.length === 1) {
+        parts.push(`$filter=${this._filters[0]}`);
+      } else if (this._filters.length > 1) {
+        parts.push(`$filter=${this._filters.join(" and ")}`);
+      }
+      if (this._apply) parts.push(`$apply=${this._apply}`);
+      if (this._orderby.length) {
+        parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+      }
+      if (this._top !== void 0) parts.push(`$top=${this._top}`);
+    } else {
       if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
+      if (this._filters.length === 1) {
+        parts.push(`$filter=${this._filters[0]}`);
+      } else if (this._filters.length > 1) {
+        parts.push(`$filter=${this._filters.join(" and ")}`);
+      }
       if (this._orderby.length) {
         parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
       }
@@ -2454,14 +2500,8 @@ class ODataQuery {
           return e.query ? `${e.name}(${e.query})` : e.name;
         }).join(",")}`);
       }
+      if (this._top !== void 0) parts.push(`$top=${this._top}`);
     }
-    if (this._filters.length === 1) {
-      parts.push(`$filter=${this._filters[0]}`);
-    } else if (this._filters.length > 1) {
-      parts.push(`$filter=${this._filters.join(" and ")}`);
-    }
-    if (this._top !== void 0) parts.push(`$top=${this._top}`);
-    if (this._apply) parts.push(`$apply=${this._apply}`);
     return parts.join(joinChar);
   }
   toString() {
@@ -2486,6 +2526,14 @@ class ODataQuery {
     const qs = this.toString();
     if (!qs) return this._table.getRecords();
     const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
+    if (this._isApply) {
+      return raw.map((v) => {
+        const r = { ...v };
+        r[Etag] = v["@odata.etag"];
+        delete r["@odata.etag"];
+        return r;
+      });
+    }
     if (this._selectedKeys.length > 0) {
       return raw.map((v) => this._partialTransform(v));
     }
@@ -2561,12 +2609,17 @@ class EntityQueryBuilder {
   /**
    * Selects specific fields to include in the FetchXML query.
    * The result type is narrowed to only include selected fields.
+   * When this method is not called, all value/lookupId/file fields
+   * are automatically included via `_getEffectiveAttributes()`.
+   *
+   * Use `apply()` instead for aggregate queries.
    *
    * @example
    * fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
    */
   select(selector) {
+    if (this._isAggregate) throw new Error("select() is not supported after apply()");
     const fieldsMock = {};
     for (const key of Object.keys(this._table.fields)) {
       fieldsMock[key] = key;
@@ -2579,17 +2632,44 @@ class EntityQueryBuilder {
     return this;
   }
   /**
+   * Adds grouping and aggregation to the FetchXML query.
+   * The callback receives a field proxy and must return a record where:
+   * - Values created with `groupby()` define grouping fields
+   * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
+   *
+   * Record keys become the alias names in the response.
+   *
+   * @example
+   * fetchXml(Account).apply(v => ({
+   *   city: groupby(v.city),
+   *   total: sum(v.revenue),
+   *   cnt: count(),
+   * }))
+   */
+  apply(expr) {
+    this._isAggregate = true;
+    const result = expr(this._proxy);
+    for (const [alias, value] of Object.entries(result)) {
+      if (value instanceof GroupByExpr) {
+        this._attributes.push({ name: value.field, alias, groupby: true });
+      } else if (value instanceof Aggregation && value.field) {
+        this._attributes.push({ name: value.field, alias, aggregate: value.operation });
+      }
+    }
+    return this;
+  }
+  /**
    * Adds a filter condition to the FetchXML query.
    * Accepts a raw filter string or a callback that receives a field proxy.
    * Multiple `where()` calls are combined with AND.
    *
    * @example
-   * // With callback
-   * fetchXml(contactDataverseTable).where(f => condition(f.status, "eq", 1))
+   * // With typed filter function
+   * fetchXml(contactDataverseTable).where(f => eq(f.status, 1))
    *
    * @example
    * // Raw filter string
-   * fetchXml(contactDataverseTable).where(condition("statuscode", "eq", "1"))
+   * fetchXml(contactDataverseTable).where(eq("statuscode", "1"))
    */
   where(filter) {
     let str;
@@ -2607,6 +2687,10 @@ class EntityQueryBuilder {
   /**
    * Adds a link-entity join to another table. The result type merges the
    * joined entity's selected fields.
+   *
+   * For filter-only link types (`any`, `not any`, `all`, `not all`,
+   * `exists`, `in`), only filters are rendered inside `<link-entity>`;
+   * `<attribute>` and `<order>` elements are skipped.
    *
    * @example
    * fetchXml(contactDataverseTable)
@@ -2690,11 +2774,6 @@ class EntityQueryBuilder {
     this._top = n;
     return this;
   }
-  /** Marks the query as an aggregate (grouped) query. */
-  aggregate() {
-    this._isAggregate = true;
-    return this;
-  }
   orderby(...args) {
     if (typeof args[0] === "function") {
       const name = args[0](this._proxy);
@@ -2705,33 +2784,6 @@ class EntityQueryBuilder {
       const attribute = args[1];
       const direction = args[2];
       this._orders.push({ attribute, entityname, descending: direction === "desc" });
-    }
-    return this;
-  }
-  groupby(selectFields, aggFields) {
-    this._isAggregate = true;
-    const keyProxy = {};
-    for (const key of Object.keys(this._table.fields)) {
-      keyProxy[key] = key;
-    }
-    const groupByKeys = selectFields(keyProxy);
-    for (const key of groupByKeys) {
-      const fieldDef = this._table.fields[key];
-      if (fieldDef) {
-        this._attributes.push({ name: fieldDef.name, alias: key, groupby: true });
-      }
-    }
-    if (aggFields) {
-      const aggs = aggFields(this._proxy);
-      for (const [alias, agg] of Object.entries(aggs)) {
-        if (agg.field) {
-          this._attributes.push({
-            name: agg.field,
-            alias,
-            aggregate: agg.operation
-          });
-        }
-      }
     }
     return this;
   }
@@ -2849,15 +2901,20 @@ class EntityQueryBuilder {
   /**
    * Executes the FetchXML query against Dataverse and returns the parsed results.
    *
+   * Each result object includes an `Etag` symbol property (import from
+   * `dataverse-schema`) holding the `@odata.etag` value for optimistic
+   * concurrency. When `select()` is not called, value/lookupId/file fields
+   * are auto-included; missing API fields fall back to the field default.
+   *
    * @example
    * const contacts = await fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
-   *   .where(f => condition(f.status, "eq", 1))
+   *   .where(f => eq(f.status, 1))
    *   .execute();
    * // contacts: Array<{ name: string; email: string }>
    *
    * @example
-   * // With rarely-used options
+   * // With optional execute parameters
    * const contacts = await fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name }))
    *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
@@ -2923,20 +2980,8 @@ class EntityQueryBuilder {
     }
   }
 }
-function condition(attribute, operator, value) {
-  return `<condition attribute="${attribute}" operator="${operator}" value="${value}" />`;
-}
-function conditionCompare(attribute, operator, otherAttribute) {
-  return `<condition attribute="${attribute}" operator="${operator}" valueof="${otherAttribute}" />`;
-}
-function filterAnd(...conditions) {
-  return `<filter type="and">${conditions.join("")}</filter>`;
-}
-function filterOr(...conditions) {
-  return `<filter type="or">${conditions.join("")}</filter>`;
-}
 function fetchXml(table) {
   return new EntityQueryBuilder(table);
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FilterExpr, FormattedField, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, avg, base64ImageToURL, boolean, collection, collectionIds, compare, condition, conditionCompare, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, filterAnd, filterOr, formatted, ge, getEtag, getImageUrl, getName, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, compare, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
