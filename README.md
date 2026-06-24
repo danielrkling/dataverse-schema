@@ -135,12 +135,12 @@ await Person.dissociateRecord("primaryAddressId", newId);
 ### Option 1: OData Query String Helpers
 
 ```typescript
-import { and, or, not, equals, greaterThan, lessThanOrEqual, contains, orderby, select, expand, keys } from "dataverse-schema";
+import { and, or, not, eq, gt, contains, orderby, select, expand, keys } from "dataverse-schema";
 
 const results = await Person.getRecords({
   filter: and(
-    equals(Person.fields.gender.fromDataverseName, "M"),
-    greaterThan(Person.fields.age.fromDataverseName, 21)
+    eq(Person.fields.gender.fromDataverseName, "M"),
+    gt(Person.fields.age.fromDataverseName, 21)
   ),
   orderby: { name: "asc" },
   top: 100,
@@ -157,11 +157,11 @@ const records = await Person.getRecords({ filter: "age gt 20", top: 10 });
 ```
 
 All filter operators:
-`equals`, `notEquals`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `contains`, `startsWith`, `endsWith`, `isNull`, `isNotNull`, `compare`, `isActive`, `isInactive`
+`eq`, `ne`, `gt`, `ge`, `lt`, `le`, `contains`, `startsWith`, `endsWith`, `isNull`, `isNotNull`, `compare`, `isActive`, `isInactive`
 
 Logical: `and`, `or`, `not`
 
-Aggregation: `groupby`, `aggregate`, `average`, `sum`, `min`, `max`, `count`
+Aggregation: `apply`, `groupby`, `average`, `sum`, `min`, `max`, `count`
 
 Lambda: `any`, `all`
 
@@ -170,18 +170,36 @@ CRM Query Functions: `Above`, `Below`, `Between`, `In`, `Today`, `Yesterday`, `T
 ### Option 2: Fluent ODataQuery Builder (type-safe)
 
 ```typescript
-import { from } from "dataverse-schema";
+import { fetchOdata, and, eq, gt } from "dataverse-schema";
 
-const results = await from(Person)
+const results = await fetchOdata(Person)
   .select("name", "age", "dob")
-  .where((f) => and(
-    equals(f.gender, "M"),
-    greaterThan(f.age, 21)
+  .filter((f) => and(
+    eq(f.gender, "M"),
+    gt(f.age, 21)
   ))
-  .orderby((f) => desc(f.name))
+  .orderby((f) => f.name)
   .top(100)
   .includeCount()
   .execute();
+```
+
+#### OData Aggregation with `apply()`
+
+```typescript
+import { fetchOdata, apply as odataApply, groupby, sum, average, count } from "dataverse-schema";
+
+const results = await fetchOdata(Person)
+  .apply(v => ({
+    city: groupby(v.city),
+    totalAge: sum(v.age),
+    avgAge: average(v.age),
+  }))
+  .filter(gt("person_age", 18))
+  .orderby("totalAge", "desc")
+  .top(10)
+  .execute();
+// results: Array<{ city: string; totalAge: number; avgAge: number; [Etag]: symbol }>
 ```
 
 ### Option 3: FetchXML Builder
@@ -198,6 +216,16 @@ const results = await fetchXml(Person)
   )
   .orderby((f) => f.fullname, "desc")
   .top(50)
+  .execute();
+
+// FetchXML aggregation with apply()
+const aggResults = await fetchXml(Person)
+  .apply(v => ({
+    city: groupby(v.city),
+    totalAge: sum(v.age),
+  }))
+  .where(f => gt(f.age, 0))
+  .orderby(f => f.city)
   .execute();
 
 // With execute options
@@ -248,7 +276,7 @@ For operators not covered by the typed functions (e.g. `between`, `in`, `eq-user
 </link-entity>`)
 ```
 
-The deprecated `condition()` and `conditionCompare()` helpers still work but are superseded by the typed filter functions above.
+The `condition()`, `conditionCompare()`, `filterAnd()`, and `filterOr()` legacy helpers have been removed. Use the typed filter functions (`eq`, `compare`, `and`, `or`) instead.
 
 ### FetchXML Execute Options
 
@@ -270,7 +298,7 @@ Link types `any`, `not any`, `all`, `not all`, `exists`, and `in` only render fi
 
 ```typescript
 fetchXml(Contact).where(or(
-  condition("statecode", "eq", "1"),
+  eq("statecode", "1"),
   `<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
     <filter type='and'>
       <condition attribute='name' operator='eq' value='Contoso' />

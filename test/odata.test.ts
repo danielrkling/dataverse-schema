@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, isNull, isNotNull, sum, avg, min, max, count } from "../src"
+import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, isNull, isNotNull, sum, average, min, max, count, groupby } from "../src"
 import { DataverseTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection, Infer } from "../src"
 import { Etag, getEtag } from "../src/util"
 import { BASE_URL } from "./mocks/handlers"
@@ -78,6 +78,11 @@ test("select narrows result type", () => {
   expectTypeOf(q.execute).returns.resolves.toExtend<{ name: string; age: number }[]>()
 })
 
+test("select with no args returns full type", () => {
+  const q = fetchOdata(Person).select()
+  expectTypeOf(q.execute).returns.resolves.toExtend<Infer<typeof Person>[]>()
+})
+
 test("expand narrows nav property type", () => {
   const q = fetchOdata(Person).expand("primaryAddress", sub => sub.select("street"))
   expectTypeOf(q.execute).returns.resolves.toExtend<{ primaryAddress: { street: string } | null }[]>()
@@ -88,8 +93,8 @@ test("select + expand combined", () => {
   expectTypeOf(q.execute).returns.resolves.toExtend<{ name: string; addresses: { zip: number }[] }[]>()
 })
 
-test("where preserves result type", () => {
-  const q = fetchOdata(Person).where(f => eq(f.name, "John"))
+test("filter preserves result type", () => {
+  const q = fetchOdata(Person).filter(f => eq(f.name, "John"))
   expectTypeOf(q.execute).returns.resolves.toExtend<Infer<typeof Person>[]>()
 })
 
@@ -98,21 +103,21 @@ test("orderby preserves result type", () => {
   expectTypeOf(q.execute).returns.resolves.toExtend<Infer<typeof Person>[]>()
 })
 
-test("groupby merges grouped fields and aggregate types", () => {
+test("apply merges grouped fields and aggregate types", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age], f => ({ total: sum(f.age), average: avg(f.age) }))
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age), average: average(v.age) }))
   expectTypeOf(q.execute).returns.resolves.items.toMatchTypeOf<{ age: number; total: number; average: number }>()
 })
 
-test("groupby typed max aggregate with grouped field", () => {
+test("apply typed max aggregate with grouped field", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.name], f => ({ latest: max(f.age) }))
+    .apply(v => ({ name: groupby(v.name), latest: max(v.age) }))
   expectTypeOf(q.execute).returns.resolves.items.toMatchTypeOf<{ name: string; latest: number }>()
 })
 
-test("groupby without aggregate returns grouped fields only", () => {
+test("apply without aggregate returns grouped fields only", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age])
+    .apply(v => ({ age: groupby(v.age) }))
   expectTypeOf(q.execute).returns.resolves.items.toMatchTypeOf<{ age: number }>()
 })
 
@@ -128,9 +133,17 @@ test("select resolves field names", () => {
   expect(q).toBe("$select=fullname,person_age")
 })
 
-test("where receives field proxy with Dataverse names", () => {
+test("select with no args selects all value columns", () => {
+  const q = fetchOdata(Person).select().toString()
+  expect(q).toContain("$select=")
+  expect(q).toContain("personid")
+  expect(q).toContain("fullname")
+  expect(q).toContain("person_age")
+})
+
+test("filter receives field proxy with Dataverse names", () => {
   const q = fetchOdata(Person)
-    .where(f => `(${f.name} eq 'John' and ${f.age} gt 20)`)
+    .filter(f => `(${f.name} eq 'John' and ${f.age} gt 20)`)
     .toString()
   expect(q).toContain("fullname eq 'John'")
   expect(q).toContain("person_age gt 20")
@@ -145,9 +158,9 @@ test("expand creates subquery with navigation name", () => {
   expect(q).toContain("$select=street_Address,zip_code")
 })
 
-test("expand with where inside subquery", () => {
+test("expand with filter inside subquery", () => {
   const q = fetchOdata(Person)
-    .expand("addresses", sub => sub.where(f => `${f.zip} eq 12345`))
+    .expand("addresses", sub => sub.filter(f => `${f.zip} eq 12345`))
     .toString()
   expect(q).toContain("person_Address_person")
   expect(q).toContain("zip_code eq 12345")
@@ -163,7 +176,7 @@ test("multi-expand on lookup and collection nav properties", () => {
 
 test("expand with filter on collection nav property", () => {
   const q = fetchOdata(Person)
-    .expand("addresses", sub => sub.where(f => eq(f.street, "Main")))
+    .expand("addresses", sub => sub.filter(f => eq(f.street, "Main")))
     .toString()
   expect(q).toContain("person_Address_person(")
   expect(q).toContain("$filter=(street_Address eq 'Main')")
@@ -173,7 +186,7 @@ test("expand with select, filter, and orderby on collection nav", () => {
   const q = fetchOdata(Person)
     .expand("addresses", sub => sub
       .select("street", "zip")
-      .where(f => `${f.zip} gt 10000`)
+      .filter(f => `${f.zip} gt 10000`)
       .orderby(f => f.street)
     )
     .toString()
@@ -199,10 +212,10 @@ test("top sets $top", () => {
 test("full query combines all clauses", () => {
   const q = fetchOdata(Person)
     .select("name", "age")
-    .where(f => `${f.active} eq true`)
+    .filter(f => `${f.active} eq true`)
     .orderby(f => f.name)
     .top(5)
-    .expand("primaryAddress", sub => sub.select("street").where(f => `${f.zip} gt 0`))
+    .expand("primaryAddress", sub => sub.select("street").filter(f => `${f.zip} gt 0`))
     .toString()
   expect(q).toContain("$select=fullname,person_age")
   expect(q).toContain("$filter=active eq true")
@@ -213,17 +226,14 @@ test("full query combines all clauses", () => {
   expect(q).toContain("$filter=zip_code gt 0")
 })
 
-test("default select includes all value columns", () => {
+test("default (no select) emits no $select", () => {
   const q = fetchOdata(Person).toString()
-  expect(q).toContain("$select=")
-  expect(q).toContain("personid")
-  expect(q).toContain("fullname")
-  expect(q).toContain("person_age")
+  expect(q).toBe("")
 })
 
 test("existing filter functions work with field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => and(eq(f.name, "John"), gt(f.age, 20)))
+    .filter(f => and(eq(f.name, "John"), gt(f.age, 20)))
     .toString()
   expect(q).toContain("fullname eq 'John'")
   expect(q).toContain("person_age gt 20")
@@ -231,38 +241,38 @@ test("existing filter functions work with field proxy", () => {
 
 test("startsWith via field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => startsWith(f.name, "A"))
+    .filter(f => startsWith(f.name, "A"))
     .toString()
   expect(q).toContain("startswith(fullname,'A')")
 })
 
 test("endsWith via field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => endsWith(f.name, "Inc."))
+    .filter(f => endsWith(f.name, "Inc."))
     .toString()
   expect(q).toContain("endswith(fullname,'Inc.')")
 })
 
 test("not via field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => not(contains(f.name, "sample")))
+    .filter(f => not(contains(f.name, "sample")))
     .toString()
   expect(q).toContain("not(contains(fullname,'sample'))")
 })
 
-// --- where raw string overload ---
+// --- filter raw string overload ---
 
-test("where accepts raw string directly", () => {
+test("filter accepts raw string directly", () => {
   const q = fetchOdata(Person)
-    .where("fullname eq 'John'")
+    .filter("fullname eq 'John'")
     .toString()
   expect(q).toContain("$filter=fullname eq 'John'")
 })
 
-test("where raw string works with other clauses", () => {
+test("filter raw string works with other clauses", () => {
   const q = fetchOdata(Person)
     .select("name")
-    .where("person_age gt 21")
+    .filter("person_age gt 21")
     .top(5)
     .toString()
   expect(q).toContain("$select=fullname")
@@ -270,25 +280,25 @@ test("where raw string works with other clauses", () => {
   expect(q).toContain("$top=5")
 })
 
-test("multiple where calls stack additively", () => {
+test("multiple filter calls stack additively", () => {
   const q = fetchOdata(Person)
-    .where(f => eq(f.name, "John"))
-    .where(f => gt(f.age, 20))
+    .filter(f => eq(f.name, "John"))
+    .filter(f => gt(f.age, 20))
     .toString()
   expect(q).toContain("$filter=(fullname eq 'John') and (person_age gt 20)")
 })
 
-test("multiple where with raw strings stacks additively", () => {
+test("multiple filter with raw strings stacks additively", () => {
   const q = fetchOdata(Person)
-    .where("fullname eq 'John'")
-    .where("person_age gt 20")
+    .filter("fullname eq 'John'")
+    .filter("person_age gt 20")
     .toString()
   expect(q).toContain("$filter=fullname eq 'John' and person_age gt 20")
 })
 
 test("grouping operators use parentheses for precedence", () => {
   const q = fetchOdata(Person)
-    .where(f => and(
+    .filter(f => and(
       or(contains(f.name, "sample"), contains(f.name, "test")),
       eq(f.active, true),
     ))
@@ -324,80 +334,80 @@ test("multiple orderby calls accumulate", () => {
   expect(q).toContain("person_age desc")
 })
 
-// --- groupby ---
+// --- apply ---
 
-test("groupby single field with sum aggregate", () => {
+test("apply single field with sum aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age], f => ({ total: sum(f.age) }))
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with sum as total))")
 })
 
-test("groupby single field with avg aggregate", () => {
+test("apply single field with average aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age], f => ({ average: avg(f.age) }))
+    .apply(v => ({ age: groupby(v.age), average: average(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with average as average))")
 })
 
-test("groupby single field with min aggregate", () => {
+test("apply single field with min aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age], f => ({ minimum: min(f.age) }))
+    .apply(v => ({ age: groupby(v.age), minimum: min(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with min as minimum))")
 })
 
-test("groupby single field with max aggregate", () => {
+test("apply single field with max aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age], f => ({ maximum: max(f.age) }))
+    .apply(v => ({ age: groupby(v.age), maximum: max(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with max as maximum))")
 })
 
-test("groupby with count aggregate", () => {
+test("apply with count aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age], f => ({ cnt: count() }))
+    .apply(v => ({ age: groupby(v.age), cnt: count() }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age),aggregate($count as cnt))")
 })
 
-test("groupby multiple fields with sum aggregate", () => {
+test("apply multiple fields with sum aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age, f.name], f => ({ total: sum(f.age) }))
+    .apply(v => ({ age: groupby(v.age), name: groupby(v.name), total: sum(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age,fullname),aggregate(person_age with sum as total))")
 })
 
-test("groupby multiple fields with multiple aggregates", () => {
+test("apply multiple fields with multiple aggregates", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.name], f => ({ total: sum(f.age), average: avg(f.age) }))
+    .apply(v => ({ name: groupby(v.name), total: sum(v.age), average: average(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((fullname),aggregate(person_age with sum as total,person_age with average as average))")
 })
 
-test("groupby empty callback aggregates without grouping", () => {
+test("apply empty grouping aggregates without grouping", () => {
   const q = fetchOdata(Person)
-    .groupby(() => [], f => ({ total: sum(f.age) }))
+    .apply(v => ({ total: sum(v.age) }))
     .toString()
   expect(q).toContain("$apply=aggregate(person_age with sum as total)")
   expect(q).not.toContain("groupby")
 })
 
-test("groupby without aggregate callback", () => {
+test("apply without aggregate", () => {
   const q = fetchOdata(Person)
-    .groupby(f => [f.age])
+    .apply(v => ({ age: groupby(v.age) }))
     .toString()
   expect(q).toContain("$apply=groupby((person_age))")
 })
 
-test("aggregate min and max on date field (last/first created)", () => {
+test("apply min and max on date field (last/first created)", () => {
   const q = fetchOdata(Person)
-    .groupby(() => [], f => ({ lastCreate: max(f.createdOn), firstCreate: min(f.createdOn) }))
+    .apply(v => ({ lastCreate: max(v.createdOn), firstCreate: min(v.createdOn) }))
     .toString()
   expect(q).toContain("$apply=aggregate(createdon with max as lastCreate,createdon with min as firstCreate)")
 })
 
-test("groupby with nav property path and includeAnnotations", () => {
+test("apply with nav property path", () => {
   const Contact = new DataverseTable({
     client, entitySetName: "contacts", logicalName: "contact",
     fields: {
@@ -418,65 +428,102 @@ test("groupby with nav property path and includeAnnotations", () => {
   })
 
   const q = fetchOdata(Account)
-    .groupby(f => [f.primaryContact.fullname], f => ({ total: sum(f.revenue) }))
+    .apply(v => ({ contact: groupby(v.primaryContact.fullname), total: sum(v.revenue) }))
     .toString()
   expect(q).toContain("$apply=groupby((primarycontactid/fullname),aggregate(revenue with sum as total))")
+})
+
+// --- apply path ordering ---
+
+test("apply with filter emits $filter before $apply", () => {
+  const q = fetchOdata(Person)
+    .filter(f => gt(f.age, 20))
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
+    .toString()
+  const parts = q.split("&")
+  expect(parts[0]).toMatch(/^\$filter=/)
+  expect(parts[1]).toMatch(/^\$apply=/)
+})
+
+test("apply with orderby alias and top", () => {
+  const q = fetchOdata(Person)
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
+    .orderby("total", "desc")
+    .top(5)
+    .toString()
+  expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with sum as total))")
+  expect(q).toContain("$orderby=total desc")
+  expect(q).toContain("$top=5")
+})
+
+test("apply with filter, orderby alias, and top", () => {
+  const q = fetchOdata(Person)
+    .filter(f => gt(f.age, 20))
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
+    .orderby("total", "desc")
+    .top(5)
+    .toString()
+  const parts = q.split("&")
+  expect(parts[0]).toMatch(/^\$filter=/)
+  expect(parts[1]).toMatch(/^\$apply=/)
+  expect(parts[2]).toMatch(/^\$orderby=total desc/)
+  expect(parts[3]).toMatch(/^\$top=5/)
 })
 
 // --- Filter helpers ---
 
 test("any lambda filter", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, a => contains(a.street, "Seattle")))
+    .filter(f => any(f.addresses, a => contains(a.street, "Seattle")))
     .toString()
   expect(q).toContain("person_Address_person/any(x: contains(x/street_Address,'Seattle'))")
 })
 
 test("all lambda filter", () => {
   const q = fetchOdata(Person)
-    .where(f => all(f.addresses, a => gt(a.zip, 0)))
+    .filter(f => all(f.addresses, a => gt(a.zip, 0)))
     .toString()
   expect(q).toContain("person_Address_person/all(x: (x/zip_code gt 0))")
 })
 
-test("any used in where clause with raw string", () => {
+test("any used in filter clause with raw string", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, a => `contains(x/street_Address, 'Seattle')`))
+    .filter(f => any(f.addresses, a => `contains(x/street_Address, 'Seattle')`))
     .toString()
   expect(q).toContain("person_Address_person/any(x: contains(x/street_Address, 'Seattle'))")
 })
 
 test("column comparison", () => {
   const q = fetchOdata(Person)
-    .where(f => compare(f.name, "eq", f.age))
+    .filter(f => compare(f.name, "eq", f.age))
     .toString()
   expect(q).toContain("(fullname eq person_age)")
 })
 
 test("any with equals inside callback", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, a => eq(a.street, "Main")))
+    .filter(f => any(f.addresses, a => eq(a.street, "Main")))
     .toString()
   expect(q).toContain("person_Address_person/any(x: (x/street_Address eq 'Main'))")
 })
 
 test("any with contains inside callback", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, a => contains(a.street, "Main")))
+    .filter(f => any(f.addresses, a => contains(a.street, "Main")))
     .toString()
   expect(q).toContain("person_Address_person/any(x: contains(x/street_Address,'Main'))")
 })
 
 test("all with raw string callback", () => {
   const q = fetchOdata(Person)
-    .where(f => all(f.addresses, a => `${a.zip} gt 0`))
+    .filter(f => all(f.addresses, a => `${a.zip} gt 0`))
     .toString()
   expect(q).toContain("person_Address_person/all(x: x/zip_code gt 0)")
 })
 
 test("multiple any calls compose via and", () => {
   const q = fetchOdata(Person)
-    .where(f => and(
+    .filter(f => and(
       any(f.addresses, a => contains(a.street, "Main")),
       any(f.addresses, b => eq(b.zip, "98101")),
     ))
@@ -485,9 +532,9 @@ test("multiple any calls compose via and", () => {
   expect(q).toContain("any(x: (x/zip_code eq '98101'))")
 })
 
-test("any and other where conditions combine", () => {
+test("any and other filter conditions combine", () => {
   const q = fetchOdata(Person)
-    .where(f => and(
+    .filter(f => and(
       eq(f.name, "John"),
       any(f.addresses, a => contains(a.street, "Main")),
     ))
@@ -501,42 +548,42 @@ test("any and other where conditions combine", () => {
 
 test("filter on lookup nav property sub-field generates slash path", () => {
   const q = fetchOdata(Person)
-    .where(f => `${f.primaryAddress.street} eq '123 Main'`)
+    .filter(f => `${f.primaryAddress.street} eq '123 Main'`)
     .toString()
   expect(q).toContain("person_Address/street_Address eq '123 Main'")
 })
 
 test("filter on lookup nav property sub-field with equals", () => {
   const q = fetchOdata(Person)
-    .where(f => eq(f.primaryAddress.zip, "98101"))
+    .filter(f => eq(f.primaryAddress.zip, "98101"))
     .toString()
   expect(q).toContain("(person_Address/zip_code eq '98101')")
 })
 
 test("nested nav property sub-field (two hops)", () => {
   const q = fetchOdata(Person)
-    .where(f => `${f.primaryAddress.location.name} eq 'HQ'`)
+    .filter(f => `${f.primaryAddress.location.name} eq 'HQ'`)
     .toString()
   expect(q).toContain("person_Address/address_Location/location_name eq 'HQ'")
 })
 
 test("nested nav property with filter function", () => {
   const q = fetchOdata(Person)
-    .where(f => contains(f.primaryAddress.location.name, "HQ"))
+    .filter(f => contains(f.primaryAddress.location.name, "HQ"))
     .toString()
   expect(q).toContain("contains(person_Address/address_Location/location_name,'HQ')")
 })
 
 test("nav proxy toString works in template literal", () => {
   const q = fetchOdata(Person)
-    .where(f => `${f.primaryAddress} eq something`)
+    .filter(f => `${f.primaryAddress} eq something`)
     .toString()
   expect(q).toContain("person_Address eq something")
 })
 
 test("nav proxy works with any lambda", () => {
   const q = fetchOdata(Person)
-    .where(f => any(f.addresses, a => contains(a.street, "Main")))
+    .filter(f => any(f.addresses, a => contains(a.street, "Main")))
     .toString()
   expect(q).toContain("person_Address_person/any(x: contains(x/street_Address,'Main'))")
 })
@@ -572,21 +619,21 @@ test("TripPin: select basic fields (FirstName, LastName, Age)", () => {
 
 test("TripPin: filter by gender enum value", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => eq(f.gender, "Male"))
+    .filter(f => eq(f.gender, "Male"))
     .toString()
   expect(q).toContain("gendercode eq 'Male'")
 })
 
 test("TripPin: filter not null (Age ne null)", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => ne(f.age, null))
+    .filter(f => ne(f.age, null))
     .toString()
   expect(q).toContain("(person_age ne null)")
 })
 
 test("TripPin: filter with age range using ge and le", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => or(
+    .filter(f => or(
       ge(f.age, "18"),
       le(f.age, "65"),
     ))
@@ -597,7 +644,7 @@ test("TripPin: filter with age range using ge and le", () => {
 
 test("TripPin: filter with raw age range expression", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => `(person_age ge 18 and person_age le 65)`)
+    .filter(f => `(person_age ge 18 and person_age le 65)`)
     .toString()
   expect(q).toContain("person_age ge 18")
   expect(q).toContain("person_age le 65")
@@ -621,7 +668,7 @@ test("TripPin: multiple orderby with different directions", () => {
 
 test("TripPin: contains on string field (find by first name)", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => contains(f.firstName, "Russell"))
+    .filter(f => contains(f.firstName, "Russell"))
     .toString()
   expect(q).toContain("contains(firstname,'Russell')")
 })
@@ -629,7 +676,7 @@ test("TripPin: contains on string field (find by first name)", () => {
 test("TripPin: combined real-world query (select, filter, orderby, top)", () => {
   const q = fetchOdata(TrippinPerson)
     .select("firstName", "lastName", "age")
-    .where(f => `person_age gt 20`)
+    .filter(f => `person_age gt 20`)
     .orderby(f => f.lastName)
     .top(10)
     .toString()
@@ -641,7 +688,7 @@ test("TripPin: combined real-world query (select, filter, orderby, top)", () => 
 
 test("TripPin: filter by first name AND last name", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => and(eq(f.firstName, "Russell"), eq(f.lastName, "Whyte")))
+    .filter(f => and(eq(f.firstName, "Russell"), eq(f.lastName, "Whyte")))
     .toString()
   expect(q).toContain("firstname eq 'Russell'")
   expect(q).toContain("lastname eq 'Whyte'")
@@ -649,7 +696,7 @@ test("TripPin: filter by first name AND last name", () => {
 
 test("TripPin: compare age with column comparison", () => {
   const q = fetchOdata(TrippinPerson)
-    .where(f => compare(f.age, "gt", f.firstName))
+    .filter(f => compare(f.age, "gt", f.firstName))
     .toString()
   expect(q).toContain("(person_age gt firstname)")
 })
@@ -681,39 +728,49 @@ test("execute transforms datetime fields", async () => {
   expect(results[0].createdOn?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
 })
 
-// --- Bug 1: groupby excludes select, orderby, expand from query string ---
+// --- apply excludes select, orderby, expand from query string ---
 
-test("groupby excludes select, orderby, expand from query string", () => {
+test("apply excludes select, expand from query string", () => {
   const q = fetchOdata(Person)
     .select("name", "age")
-    .orderby(f => f.name)
     .expand("primaryAddress", sub => sub.select("street"))
-    .groupby(f => [f.age], f => ({ total: sum(f.age) }))
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
     .toString()
   expect(q).not.toContain("$select=")
-  expect(q).not.toContain("$orderby=")
   expect(q).not.toContain("$expand=")
   expect(q).toContain("$apply=groupby((person_age),aggregate(person_age with sum as total))")
 })
 
-test("groupby runtime guard throws on select after groupby", () => {
-  const q = fetchOdata(Person).groupby(f => [f.age])
-  expect(() => (q as any).select("name")).toThrow("select() is not supported after groupby()")
+// --- apply runtime guards ---
+
+test("apply runtime guard throws on select after apply", () => {
+  const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
+  expect(() => (q as any).select("name")).toThrow("select() is not supported after apply()")
 })
 
-test("groupby runtime guard throws on orderby after groupby", () => {
-  const q = fetchOdata(Person).groupby(f => [f.age])
-  expect(() => (q as any).orderby((f: any) => f.name)).toThrow("orderby() is not supported after groupby()")
+test("apply runtime guard throws on expand after apply", () => {
+  const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
+  expect(() => (q as any).expand("primaryAddress")).toThrow("expand() is not supported after apply()")
 })
 
-test("groupby runtime guard throws on expand after groupby", () => {
-  const q = fetchOdata(Person).groupby(f => [f.age])
-  expect(() => (q as any).expand("primaryAddress")).toThrow("expand() is not supported after groupby()")
+test("apply runtime guard throws on double apply", () => {
+  const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
+  expect(() => (q as any).apply((v: any) => ({ name: groupby(v.name) }))).toThrow("apply() can only be called once")
 })
 
-test("groupby runtime guard throws on double groupby", () => {
-  const q = fetchOdata(Person).groupby(f => [f.age])
-  expect(() => (q as any).groupby((f: any) => [f.name])).toThrow("groupby() can only be called once")
+test("orderby with field selector throws after apply", () => {
+  const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
+  expect(() => (q as any).orderby((f: any) => f.name)).toThrow("orderby() with field selector is not supported after apply()")
+})
+
+test("apply is not supported in expand sub-queries", () => {
+  expect(() => {
+    fetchOdata(Person)
+      .expand("primaryAddress", sub =>
+        (sub as any).apply((v: any) => ({ street: groupby(v.street) }))
+      )
+      .toString()
+  }).toThrow("apply() is not supported in expand sub-queries")
 })
 
 // --- Bug 2: select partial transform ---
@@ -790,21 +847,21 @@ test("execute with select carries etag", async () => {
 
 test("isNull filter with field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => isNull(f.name))
+    .filter(f => isNull(f.name))
     .toString()
   expect(q).toContain("fullname eq null")
 })
 
 test("isNotNull filter with field proxy", () => {
   const q = fetchOdata(Person)
-    .where(f => isNotNull(f.age))
+    .filter(f => isNotNull(f.age))
     .toString()
   expect(q).toContain("person_age ne null")
 })
 
 test("isNull with lookup nav proxy at parent level", () => {
   const q = fetchOdata(Person)
-    .where(f => isNull(f.primaryAddress))
+    .filter(f => isNull(f.primaryAddress))
     .toString()
   expect(q).toContain("person_Address eq null")
 })
@@ -860,13 +917,36 @@ test("lookup expand throws on top", () => {
   }).toThrow("top() is not supported in lookup expands")
 })
 
-test("groupby is not supported in expand sub-queries", () => {
+test("apply is not supported in expand sub-queries", () => {
   expect(() => {
     fetchOdata(Person)
       .expand("primaryAddress", sub =>
-        (sub as any).groupby((f: any) => [f.street])
+        (sub as any).apply((v: any) => ({ street: groupby(v.street) }))
       )
       .toString()
-  }).toThrow("groupby() is not supported in expand sub-queries")
+  }).toThrow("apply() is not supported in expand sub-queries")
 })
 
+// --- execute with apply ---
+
+test("execute with apply returns results with etag", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          person_age: 30,
+          total: 150,
+          "@odata.etag": 'W/"etag-123"',
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person)
+    .apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(results[0]).toHaveProperty("person_age", 30)
+  expect(results[0]).toHaveProperty("total", 150)
+  expect(getEtag(results[0])).toBe('W/"etag-123"')
+})

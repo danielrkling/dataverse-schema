@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchXml, condition, conditionCompare, eq, gt, compare, and, or, Infer,
+import { fetchXml, eq, gt, compare, and, or, Infer,
   Today, Tomorrow, Yesterday, Last7Days, Next7Days, LastMonth, NextMonth, ThisMonth,
   LastWeek, NextWeek, ThisWeek, LastYear, NextYear, ThisYear,
   LastXDays, NextXDays, OlderThanXDays,
@@ -9,7 +9,7 @@ import { fetchXml, condition, conditionCompare, eq, gt, compare, and, or, Infer,
   Between, NotBetween, On, Under, Above,
   ThisFiscalPeriod, ThisFiscalYear, InFiscalPeriodAndYear,
   LastXHours, LastXMonths, LastXWeeks, LastXYears,
-  sum, avg, min, max, count,
+  sum, average, min, max, count, groupby,
 } from "../src"
 import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, datetime } from "../src"
 import { BASE_URL } from "./mocks/handlers"
@@ -221,16 +221,13 @@ test("[docs] distinct results", () => {
 // --- MS Docs Example: Aggregate data ---
 
 test("[docs] aggregate functions on a column", () => {
-  const q = fetchXml(Account).groupby(
-    () => [],
-    f => ({
-      Total: sum(f.revenue),
-      Count: count(f.revenue),
-      Maximum: max(f.revenue),
-      Minimum: min(f.revenue),
-      Average: avg(f.revenue),
-    })
-  )
+  const q = fetchXml(Account).apply(v => ({
+    Total: sum(v.revenue),
+    Count: count(v.revenue),
+    Maximum: max(v.revenue),
+    Minimum: min(v.revenue),
+    Average: average(v.revenue),
+  }))
   const xml = q.toXml()
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`aggregate='sum'`)
@@ -248,10 +245,11 @@ test("[docs] aggregate functions on a column", () => {
 // --- MS Docs Example: Grouping ---
 
 test("[docs] groupby with sum and count", () => {
-  const q = fetchXml(Account).groupby(
-    f => [f.city],
-    f => ({ Total: sum(f.revenue), Count: count(f.city) })
-  ).orderby(f => f.city)
+  const q = fetchXml(Account).apply(v => ({
+    city: groupby(v.city),
+    Total: sum(v.revenue),
+    Count: count(v.city),
+  })).orderby(f => f.city)
   const xml = q.toXml()
   expect(xml).toContain(`aggregate='sum'`)
   expect(xml).toContain(`aggregate='count'`)
@@ -286,10 +284,8 @@ test("[docs] aggregateLimit via execute option", async () => {
       return HttpResponse.json({ value: [] })
     }),
   )
-  await fetchXml(Account).groupby(
-    () => [],
-    f => ({ cnt: count(f.name) })
-  ).execute({ aggregateLimit: 5 })
+  await fetchXml(Account).apply(v => ({ cnt: count(v.name) }))
+    .execute({ aggregateLimit: 5 })
   expect(decodeURIComponent(capturedUrl)).toContain(`aggregatelimit='5'`)
   expect(decodeURIComponent(capturedUrl)).toContain(`aggregate="true"`)
 })
@@ -320,12 +316,6 @@ test("where with and/greaterThan filter functions", () => {
   const q = fetchXml(Person).where(f => and(eq(f.name, "John"), gt(f.age, 20)))
   expect(q.toXml()).toContain("fullname")
   expect(q.toXml()).toContain("person_age")
-})
-
-test("condition helper builds condition XML", () => {
-  expect(condition("fullname", "eq", "John")).toBe(
-    `<condition attribute="fullname" operator="eq" value="John" />`
-  )
 })
 
 test("and wraps conditions in FetchXML format", () => {
@@ -607,11 +597,6 @@ test("execute transforms joined date fields via alias map", async () => {
 
 // --- Bug 8: field-to-field comparison uses valueof ---
 
-test("conditionCompare generates valueof attribute", () => {
-  const xml = conditionCompare("field1", "eq", "field2")
-  expect(xml).toBe(`<condition attribute="field1" operator="eq" valueof="field2" />`)
-})
-
 test("compare filter function uses valueof in fetchXml", () => {
   const q = fetchXml(Person).where(f => compare(f.name, "eq", f.age))
   const xml = q.toXml()
@@ -870,7 +855,7 @@ test("[docs] filter: cross-table valueof with alias", () => {
     .join("outer", Account, "id", "parentcustomerid", sub =>
       sub.select(f => ({ name: f.name }))
     )
-    .where(conditionCompare("fullname", "eq", "auto_link_1.name"))
+    .where(`<condition attribute="fullname" operator="eq" valueof="auto_link_1.name" />`)
   const xml = q.toXml()
   expect(xml).toContain(`condition attribute="fullname"`)
   expect(xml).toContain(`valueof="auto_link_1.name"`)
@@ -944,16 +929,13 @@ test("[docs] order: entityname for priority", () => {
 // ─── Aggregate Data ───
 
 test("[docs] aggregate: all functions on one column", () => {
-  const q = fetchXml(Account).groupby(
-    () => [],
-    f => ({
-      Average: avg(f.revenue),
-      Count: count(f.revenue),
-      Maximum: max(f.revenue),
-      Minimum: min(f.revenue),
-      Sum: sum(f.revenue),
-    })
-  )
+  const q = fetchXml(Account).apply(v => ({
+    Average: average(v.revenue),
+    Count: count(v.revenue),
+    Maximum: max(v.revenue),
+    Minimum: min(v.revenue),
+    Sum: sum(v.revenue),
+  }))
   const xml = q.toXml()
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`<attribute name="revenue" alias="Average" aggregate='average' />`)
@@ -964,10 +946,11 @@ test("[docs] aggregate: all functions on one column", () => {
 })
 
 test("[docs] aggregate: groupby city with sum and count", () => {
-  const q = fetchXml(Account).groupby(
-    f => [f.city],
-    f => ({ Total: sum(f.revenue), Count: count(f.city) })
-  )
+  const q = fetchXml(Account).apply(v => ({
+    city: groupby(v.city),
+    Total: sum(v.revenue),
+    Count: count(v.city),
+  }))
   const xml = q.toXml()
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`<attribute name="revenue" alias="Total" aggregate='sum' />`)
@@ -976,10 +959,7 @@ test("[docs] aggregate: groupby city with sum and count", () => {
 })
 
 test("[docs] aggregate: with aggregatelimit", () => {
-  const q = fetchXml(Account).groupby(
-    () => [],
-    f => ({ account_count: count(f.name) })
-  )
+  const q = fetchXml(Account).apply(v => ({ account_count: count(v.name) }))
   const xml = q.toXml()
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`aggregate='count'`)

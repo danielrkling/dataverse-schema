@@ -132,7 +132,7 @@ test("MS Docs filter-rows: $filter on lookup property path", async () => {
 
   const q = fetchOdata(Account)
     .select("name", "primaryContactId")
-    .where(eq("primarycontactid/fullname", "Susanna Stubberod (sample)"))
+    .filter(eq("primarycontactid/fullname", "Susanna Stubberod (sample)"))
   expect(q.toString()).toBe("$select=name,_primarycontactid_value&$filter=(primarycontactid/fullname eq 'Susanna Stubberod (sample)')")
 
   const result = await q.execute()
@@ -181,7 +181,7 @@ test("MS Docs filter-rows: nested filter on multi-hop lookup + nested expand", a
   const q = fetchOdata(Account)
     .select("name", "primaryContactId")
     .top(1)
-    .where(eq("primarycontactid/createdby/fullname", "System Administrator"))
+    .filter(eq("primarycontactid/createdby/fullname", "System Administrator"))
     .expand("primaryContact", (sub) =>
       sub
         .select("fullname", "createdById")

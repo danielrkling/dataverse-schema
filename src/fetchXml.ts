@@ -1,7 +1,7 @@
 import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { FilterExpr } from "./filter";
-import { Aggregation } from "./odata";
+import { Aggregation, GroupByExpr, FieldRef } from "./odata";
 import { Etag } from "./util";
 
 type AliasInfo = {
@@ -25,7 +25,7 @@ type FieldSelector<TProps extends GenericProperties> = {
 };
 
 export type FieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: string
+    [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>
 };
 
 export type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in" | "matchfirstrowusingcrossapply";
@@ -46,7 +46,11 @@ type OrderDef = {
     descending?: boolean;
 };
 
-
+type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
+  [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V
+    : R[K] extends Aggregation<infer V> ? V
+    : never
+}
 
 /**
  * Builds a FetchXML query for Dataverse with full type support.
@@ -61,14 +65,17 @@ type OrderDef = {
  * @example
  * const q = fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name, email: f.email }))
- *   .where(f => condition(f.status, "eq", 1))
+ *   .where(f => eq(f.status, 1))
  *   .orderby(f => f.name, "desc")
  *   .top(10);
  *
  * const xml = q.toXml();
  * const results = await q.execute();
  */
-export class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
+export class EntityQueryBuilder<
+    TProps extends GenericProperties,
+    TResult extends Record<string, any> = {},
+> {
     private _linkAlias: { value: number };
 
     private _table: DataverseTable<TProps>;
@@ -127,13 +134,16 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
      * When this method is not called, all value/lookupId/file fields
      * are automatically included via `_getEffectiveAttributes()`.
      *
+     * Use `apply()` instead for aggregate queries.
+     *
      * @example
      * fetchXml(contactDataverseTable)
      *   .select(f => ({ name: f.name, email: f.email }))
      */
-    public select<TSelect extends Record<string, keyof TProps>>(
-        selector: (fields: FieldSelector<TProps>) => TSelect,
-    ): EntityQueryBuilder<TProps, { [K in keyof TSelect]: Infer<TProps[TSelect[K]]> }> {
+    public select<R extends Record<string, keyof TProps>>(
+        selector: (fields: FieldSelector<TProps>) => R,
+    ): EntityQueryBuilder<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }> {
+        if (this._isAggregate) throw new Error("select() is not supported after apply()")
         const fieldsMock = {} as FieldSelector<TProps>;
         for (const key of Object.keys(this._table.fields)) {
             (fieldsMock as any)[key] = key;
@@ -147,17 +157,50 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
     }
 
     /**
+     * Adds grouping and aggregation to the FetchXML query.
+     * The callback receives a field proxy and must return a record where:
+     * - Values created with `groupby()` define grouping fields
+     * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
+     *
+     * Record keys become the alias names in the response.
+     *
+     * @example
+     * fetchXml(Account).apply(v => ({
+     *   city: groupby(v.city),
+     *   total: sum(v.revenue),
+     *   cnt: count(),
+     * }))
+     */
+    public apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
+        expr: (f: FieldProxy<TProps>) => R,
+    ): Omit<EntityQueryBuilder<TProps, ApplyResultType<R>>, 'select'> {
+        this._isAggregate = true;
+
+        const result = expr(this._proxy as any);
+
+        for (const [alias, value] of Object.entries(result)) {
+            if (value instanceof GroupByExpr) {
+                this._attributes.push({ name: value.field, alias, groupby: true });
+            } else if (value instanceof Aggregation && value.field) {
+                this._attributes.push({ name: value.field, alias, aggregate: value.operation });
+            }
+        }
+
+        return this as any;
+    }
+
+    /**
      * Adds a filter condition to the FetchXML query.
      * Accepts a raw filter string or a callback that receives a field proxy.
      * Multiple `where()` calls are combined with AND.
      *
      * @example
-     * // With callback
-     * fetchXml(contactDataverseTable).where(f => condition(f.status, "eq", 1))
+     * // With typed filter function
+     * fetchXml(contactDataverseTable).where(f => eq(f.status, 1))
      *
      * @example
      * // Raw filter string
-     * fetchXml(contactDataverseTable).where(condition("statuscode", "eq", "1"))
+     * fetchXml(contactDataverseTable).where(eq("statuscode", "1"))
      */
     public where(
         filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr),
@@ -328,12 +371,6 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
         return this;
     }
 
-    /** Marks the query as an aggregate (grouped) query. */
-    public aggregate(): this {
-        this._isAggregate = true;
-        return this;
-    }
-
   /**
    * Adds ordering to the FetchXML query.
    * Matches the OData syntax: pass a field selector callback and optional direction.
@@ -364,78 +401,6 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
       }
       return this;
   }
-
-    /**
-     * Adds grouping and aggregation to the FetchXML query.
-     * Mirrors the OData `groupby()` API using the same `sum()`, `avg()`, `min()`, `max()`, `count()` factory functions.
-     *
-     * @example
-     * // With grouping and aggregates:
-     * fetchXml(Account).groupby(
-     *   f => [f.city],
-     *   f => ({ total: sum(f.revenue), cnt: count(f.id) })
-     * )
-     *
-     * @example
-     * // Without grouping (aggregate all rows):
-     * fetchXml(Account).groupby(
-     *   () => [],
-     *   f => ({ total: sum(f.revenue) })
-     * )
-     *
-     * @example
-     * // Just grouping without aggregates:
-     * fetchXml(Account).groupby(f => [f.city])
-     */
-    public groupby<
-        const TFields extends (keyof TProps)[],
-        A extends Record<string, Aggregation>,
-    >(
-        selectFields: (f: { [K in keyof TProps]: K }) => TFields,
-        aggFields: (f: FieldProxy<TProps>) => A,
-    ): EntityQueryBuilder<TProps,
-        { [P in keyof A]: A[P] extends Aggregation<infer V> ? V : number } &
-        { [P in TFields[number]]: Infer<TProps[P]> }
-    >
-    public groupby<
-        const TFields extends (keyof TProps)[],
-    >(
-        selectFields: (f: { [K in keyof TProps]: K }) => TFields,
-    ): EntityQueryBuilder<TProps, { [P in TFields[number]]: Infer<TProps[P]> }>
-    public groupby(
-        selectFields: (f: any) => string[],
-        aggFields?: (f: any) => Record<string, Aggregation>,
-    ): EntityQueryBuilder<TProps, any> {
-        this._isAggregate = true;
-
-        const keyProxy = {} as Record<string, string>;
-        for (const key of Object.keys(this._table.fields)) {
-            keyProxy[key] = key;
-        }
-        const groupByKeys = selectFields(keyProxy);
-
-        for (const key of groupByKeys) {
-            const fieldDef = (this._table.fields as Record<string, any>)[key];
-            if (fieldDef) {
-                this._attributes.push({ name: fieldDef.name, alias: key, groupby: true });
-            }
-        }
-
-        if (aggFields) {
-            const aggs = aggFields(this._proxy);
-            for (const [alias, agg] of Object.entries(aggs)) {
-                if (agg.field) {
-                    this._attributes.push({
-                        name: agg.field,
-                        alias: alias,
-                        aggregate: agg.operation,
-                    });
-                }
-            }
-        }
-
-        return this as any;
-    }
 
     /**
      * Returns the full FetchXML string.
@@ -588,7 +553,7 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
    * @example
    * const contacts = await fetchXml(contactDataverseTable)
    *   .select(f => ({ name: f.name, email: f.email }))
-   *   .where(f => condition(f.status, "eq", 1))
+   *   .where(f => eq(f.status, 1))
    *   .execute();
    * // contacts: Array<{ name: string; email: string }>
    *
@@ -665,82 +630,6 @@ export class EntityQueryBuilder<TProps extends GenericProperties, TResult extend
   }
 }
 
-// --- Helpers ---
-
-/**
- * Creates a FetchXML condition element string for a literal value comparison.
- *
- * @deprecated Use typed filter functions (`eq`, `neq`, `gt`, `lt`, etc.)
- * instead — they generate the same FetchXML via `toFetchXml()` and provide
- * type-safe field references.
- *
- * @example
- * // Preferred:
- * .where(f => eq(f.statuscode, 1))
- *
- * // Legacy:
- * .where(condition("statuscode", "eq", 1))
- */
-export function condition(attribute: string, operator: string, value: unknown): string {
-    return `<condition attribute="${attribute}" operator="${operator}" value="${value}" />`;
-}
-
-/**
- * Creates a FetchXML condition element string for field-to-field comparison.
- * Uses the `valueof` attribute instead of `value`.
- *
- * @deprecated Use `compare()` from filter.ts instead — it generates the same
- * FetchXML via `toFetchXml()` and provides type-safe field references.
- *
- * @example
- * // Preferred:
- * .where(f => compare(f.field1, "eq", f.field2))
- *
- * // Legacy:
- * .where(conditionCompare("field1", "eq", "field2"))
- *
- * @example
- * // Cross-entity alias (still requires raw string):
- * conditionCompare("fullname", "eq", "auto_link_1.name")
- */
-export function conditionCompare(attribute: string, operator: string, otherAttribute: string): string {
-    return `<condition attribute="${attribute}" operator="${operator}" valueof="${otherAttribute}" />`;
-}
-
-/**
- * Combines conditions with a logical AND.
- *
- * @deprecated Use `and()` from filter.ts instead — it accepts both
- * `FilterExpr` objects and raw strings, works for both OData and FetchXML.
- *
- * @example
- * // Preferred:
- * .where(and(condition("a", "eq", "1"), condition("b", "eq", "2")))
- *
- * // Legacy:
- * .where(filterAnd(condition("a", "eq", "1"), condition("b", "eq", "2")))
- */
-export function filterAnd(...conditions: string[]): string {
-    return `<filter type="and">${conditions.join("")}</filter>`;
-}
-
-/**
- * Combines conditions with a logical OR.
- *
- * @deprecated Use `or()` from filter.ts instead — it accepts both
- * `FilterExpr` objects and raw strings, works for both OData and FetchXML.
- *
- * @example
- * // Preferred:
- * .where(or(condition("statecode", "eq", 0), condition("statecode", "eq", 1)))
- *
- * // Legacy:
- * .where(filterOr(condition("statecode", "eq", 0), condition("statecode", "eq", 1)))
- */
-export function filterOr(...conditions: string[]): string {
-    return `<filter type="or">${conditions.join("")}</filter>`;
-}
-
 // --- Root Entry Point ---
 
 /**
@@ -751,7 +640,7 @@ export function filterOr(...conditions: string[]): string {
  * @example
  * const results = await fetchXml(contactDataverseTable)
  *   .select(f => ({ name: f.name }))
- *   .where(f => condition(f.statecode, "eq", 0))
+ *   .where(f => eq(f.statecode, 0))
  *   .execute();
  */
 export function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): EntityQueryBuilder<TProps, Infer<TProps>> {
