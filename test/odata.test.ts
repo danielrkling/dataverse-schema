@@ -758,9 +758,10 @@ test("apply runtime guard throws on double apply", () => {
   expect(() => (q as any).apply((v: any) => ({ name: groupby(v.name) }))).toThrow("apply() can only be called once")
 })
 
-test("orderby with field selector throws after apply", () => {
-  const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
-  expect(() => (q as any).orderby((f: any) => f.name)).toThrow("orderby() with field selector is not supported after apply()")
+test("orderby with alias proxy after apply", () => {
+  const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
+  const result = (q as any).orderby((f: any) => f.total, "desc").toString()
+  expect(result).toContain("$orderby=total desc")
 })
 
 test("apply is not supported in expand sub-queries", () => {

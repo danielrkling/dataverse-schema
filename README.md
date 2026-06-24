@@ -187,7 +187,7 @@ const results = await fetchOdata(Person)
 #### OData Aggregation with `apply()`
 
 ```typescript
-import { fetchOdata, apply as odataApply, groupby, sum, average, count } from "dataverse-schema";
+import { fetchOdata, groupby, sum, average, count } from "dataverse-schema";
 
 const results = await fetchOdata(Person)
   .apply(v => ({
@@ -195,8 +195,8 @@ const results = await fetchOdata(Person)
     totalAge: sum(v.age),
     avgAge: average(v.age),
   }))
-  .filter(gt("person_age", 18))
-  .orderby("totalAge", "desc")
+  .filter(f => gt(f.age, 18))
+  .orderby(r => r.totalAge, "desc")
   .top(10)
   .execute();
 // results: Array<{ city: string; totalAge: number; avgAge: number; [Etag]: symbol }>
@@ -297,8 +297,8 @@ When `select()` is not called, the builder automatically includes all value fiel
 Link types `any`, `not any`, `all`, `not all`, `exists`, and `in` only render filters inside `<link-entity>` — they skip `<attribute>` and `<order>` elements:
 
 ```typescript
-fetchXml(Contact).where(or(
-  eq("statecode", "1"),
+fetchXml(Contact).where(f => or(
+  eq(f.statecode, "1"),
   `<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
     <filter type='and'>
       <condition attribute='name' operator='eq' value='Contoso' />

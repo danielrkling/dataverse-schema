@@ -157,6 +157,11 @@ type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any
     : never
 }
 
+/** Proxy type for `orderby` after `apply()`, mapping alias names to FieldRefs. */
+type ApplyAliasProxy<R extends Record<string, any>> = {
+  [K in keyof R]: FieldRef<R[K], K extends string ? K : never>
+}
+
 /**
  * A type-safe OData query builder for Dataverse.
  *
@@ -183,6 +188,7 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
   private _isApply = false
   private _expandMode: "full" | "collection" | "lookup" = "full"
   private _proxy: ODataFieldProxy<T>
+  private _applyAliasProxy: Record<string, string> = {}
 
   constructor(table: DataverseTable<T>) {
     this._table = table
@@ -327,22 +333,21 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
    * Adds a `$orderby` clause.
    *
    * After `select()`: use a field selector callback.
-   * After `apply()`: use a string alias.
+   * After `apply()`: use a field selector callback with alias names.
    *
    * Multiple calls accumulate.
    *
    * @example
    * fetchOdata(Person).orderby(f => f.name);
    * fetchOdata(Person).orderby(f => f.age, "desc");
-   * fetchOdata(Person).apply(v => ({ total: sum(v.age) })).orderby("total", "desc");
+   * fetchOdata(Person).apply(v => ({ total: sum(v.age) })).orderby(r => r.total, "desc");
    */
   orderby(fieldSelector: (f: ODataFieldProxy<T>) => string, direction?: "asc" | "desc"): this
   orderby(alias: string, direction?: "asc" | "desc"): this
-  orderby(nameOrSelector: string | ((f: ODataFieldProxy<T>) => string), direction: "asc" | "desc" = "asc"): this {
+  orderby(nameOrSelector: string | ((f: any) => string), direction: "asc" | "desc" = "asc"): this {
     if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands")
     if (typeof nameOrSelector === "function") {
-      if (this._isApply) throw new Error("orderby() with field selector is not supported after apply(); use orderby(alias, dir) instead")
-      this._orderby.push({ name: nameOrSelector(this._proxy), dir: direction })
+      this._orderby.push({ name: nameOrSelector(this._isApply ? this._applyAliasProxy : this._proxy), dir: direction })
     } else {
       this._orderby.push({ name: nameOrSelector, dir: direction })
     }
@@ -380,7 +385,10 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
    */
   apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
     expr: (f: ODataFieldProxy<T>) => R,
-  ): Omit<ODataQuery<T, ApplyResultType<R>>, 'select' | 'expand'> {
+  ): Omit<ODataQuery<T, ApplyResultType<R>>, 'select' | 'expand'> & {
+    orderby(fieldSelector: (f: ApplyAliasProxy<ApplyResultType<R>>) => string, direction?: "asc" | "desc"): ODataQuery<T, ApplyResultType<R>>
+    orderby(alias: string, direction?: "asc" | "desc"): ODataQuery<T, ApplyResultType<R>>
+  } {
     if (this._isApply) throw new Error("apply() can only be called once")
     if (this._expandMode !== "full") throw new Error("apply() is not supported in expand sub-queries")
     this._isApply = true
@@ -389,7 +397,9 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     const groupByFields: string[] = []
     const aggParts: string[] = []
 
+    this._applyAliasProxy = {}
     for (const [alias, value] of Object.entries(result)) {
+      this._applyAliasProxy[alias] = alias
       if (value instanceof GroupByExpr) {
         groupByFields.push(value.field)
       } else if (value instanceof Aggregation) {
