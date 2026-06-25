@@ -1,23 +1,14 @@
 import { StandardSchemaV1 } from '@standard-schema/spec';
 
-export declare function Above(field: Name, value: string): FilterExpr;
+export declare function Above(field: FieldRef<any>, value: string): FilterExpr;
 
-export declare function AboveOrEqual(field: Name, value: string): FilterExpr;
+export declare function AboveOrEqual(field: FieldRef<any>, value: string): FilterExpr;
 
-/**
- * Represents a server-side aggregation expression usable in OData `$apply` and FetchXML.
- * Created via factory functions like `sum()`, `min()`, `max()`, `count()`.
- */
-export declare class Aggregation<TValue = number> {
-    readonly operation: string;
-    readonly field?: string | undefined;
-    readonly alias?: string | undefined;
-    constructor(operation: string, field?: string | undefined, alias?: string | undefined);
-    /** OData format (e.g. `"title with average as avg_title"`). */
-    toOdata(alias?: string): string;
-    /** FetchXML format (e.g. `name="title" alias="avg_title" aggregate="avg"`). */
-    toXml(alias?: string): string;
-    toString(): string;
+export declare class Aggregation<V = any> {
+    field?: string;
+    operation: string;
+    constructor(operation: string, field?: string);
+    toOdata(alias: string): string;
 }
 
 export declare function all<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
@@ -33,12 +24,14 @@ export declare function and(...conditions: (FilterExpr | string)[]): FilterExpr;
 
 export declare function any<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
 
-/** Proxy type for `orderby` after `apply()`, mapping alias names to FieldRefs. */
 declare type ApplyAliasProxy<R extends Record<string, any>> = {
     [K in keyof R]: FieldRef<R[K], K extends string ? K : never>;
 };
 
-/** Extract the result type from an `apply()` record. */
+declare type ApplyAliasProxy_2<R extends Record<string, any>> = {
+    [K in keyof R]: FieldRef<R[K], K extends string ? K : never>;
+};
+
 declare type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
     [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V : R[K] extends Aggregation<infer V> ? V : never;
 };
@@ -51,10 +44,17 @@ export declare function asc(...fields: Name[]): OrderSpec;
 
 export declare function attachEtag<T>(v: T): T;
 
-/** Average aggregation. `average(field)` or `average("field_name")`. */
-export declare function average<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>;
+declare type AttrDef = {
+    name: string;
+    alias: string;
+    aggregate?: string;
+    groupby?: boolean;
+    dategrouping?: string;
+    distinct?: boolean;
+    rowaggregate?: string;
+};
 
-export declare function average(name: string, alias?: string): Aggregation<number>;
+export declare function average<V>(field: FieldRef<V>): Aggregation<V>;
 
 /**
  * Creates a data URL from a base64 encoded image string.
@@ -70,7 +70,7 @@ export declare function average(name: string, alias?: string): Aggregation<numbe
  */
 export declare function base64ImageToURL(base64: string): string;
 
-export declare function Between(field: Name, value1: string | number, value2: string | number): FilterExpr;
+export declare function Between(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr;
 
 /**
  * Creates a boolean-typed Dataverse column definition.
@@ -90,6 +90,10 @@ export declare class BooleanField extends Schema<boolean> {
     type: "boolean";
     constructor(name: string);
 }
+
+export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
+
+export declare function buildProxyForTable<T extends GenericProperties>(table: DataverseTable<T>, prefix?: string): ODataFieldProxy<T>;
 
 /**
  * Creates a one-to-many (collection) navigation property definition. The related records
@@ -137,7 +141,7 @@ export declare class CollectionIdsProperty extends Schema<GUID[]> {
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-declare type CollectionKeys<T> = {
+declare type CollectionKeys<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends CollectionProperty<any> ? K : never;
 }[keyof T];
 
@@ -151,16 +155,11 @@ export declare class CollectionProperty<TProperties extends GenericProperties> e
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-export declare function compare(field: Name, operator: string, otherField: Name): FilterExpr;
+export declare function contains<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
 
-export declare function contains(field: Name, value: string): FilterExpr;
+export declare function ContainsValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
 
-export declare function ContainsValues(field: Name, values: (string | number)[]): FilterExpr;
-
-/** Count aggregation. `count()` for OData, `count(field)` or `count(field, alias)` for FetchXML. */
-export declare function count(alias?: string): Aggregation<number>;
-
-export declare function count(field: string, alias?: string): Aggregation<number>;
+export declare function count<V>(field?: FieldRef<V> | string): Aggregation<number>;
 
 /**
  * Low-level HTTP client for the Dataverse Web API (v9.2).
@@ -888,7 +887,7 @@ export declare class DateTimeField extends Schema<Date> {
 
 export declare function desc(...fields: Name[]): OrderSpec;
 
-export declare function DoesNotContainValues(field: Name, values: (string | number)[]): FilterExpr;
+export declare function DoesNotContainValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
 
 /**
  * Creates a validator function that checks if a string is a valid email address.
@@ -907,216 +906,74 @@ export declare function DoesNotContainValues(field: Name, values: (string | numb
  */
 export declare function email(): Validator<string>;
 
-export declare function endsWith(field: Name, value: string): FilterExpr;
+export declare function endsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
 
-/**
- * Builds a FetchXML query for Dataverse with full type support.
- *
- * Use `fetchXml(table)` to create a builder, then chain methods to construct
- * the query. Call `execute()` to run it or `toXml()` to get the raw XML.
- *
- * When `select()` is not called, all value/lookupId/file fields are
- * automatically included. Each result from `execute()` includes an `Etag`
- * symbol property for optimistic concurrency.
- *
- * @example
- * const q = fetchXml(contactDataverseTable)
- *   .select(f => ({ name: f.name, email: f.email }))
- *   .where(f => eq(f.status, 1))
- *   .orderby(f => f.name, "desc")
- *   .top(10);
- *
- * const xml = q.toXml();
- * const results = await q.execute();
- */
 export declare class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
-    private _linkAlias;
+    protected _linkAlias: {
+        value: number;
+    };
     private _table;
     private _attributes;
-    private _links;
+    protected _links: Array<{
+        name: string;
+        alias: string;
+        from: string;
+        to: string;
+        linkType: FetchLinkType;
+        builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
+        intersect?: boolean;
+    }>;
+    protected _orders: OrderDef[];
+    protected _filters: string[];
     private _isDistinct;
-    private _filters;
     private _proxy;
     private _top?;
     private _isAggregate;
     private _useRawOrderBy;
     private _lateMaterialize;
     private _aggregateLimit?;
-    private _orders;
     private _datasource?;
     private _options?;
-    /** @param table The DataverseTable definition to build the query against. */
     constructor(table: DataverseTable<TProps>, _linkAlias?: {
         value: number;
     });
     private _getEffectiveAttributes;
     private _buildProxy;
-    /**
-     * Selects specific fields to include in the FetchXML query.
-     * The result type is narrowed to only include selected fields.
-     * When this method is not called, all value/lookupId/file fields
-     * are automatically included via `_getEffectiveAttributes()`.
-     *
-     * Use `apply()` instead for aggregate queries.
-     *
-     * @example
-     * fetchXml(contactDataverseTable)
-     *   .select(f => ({ name: f.name, email: f.email }))
-     */
     select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): EntityQueryBuilder<TProps, {
         [K in keyof R]: Infer<TProps[R[K]]>;
     }>;
-    /**
-     * Adds grouping and aggregation to the FetchXML query.
-     * The callback receives a field proxy and must return a record where:
-     * - Values created with `groupby()` define grouping fields
-     * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
-     *
-     * Record keys become the alias names in the response.
-     *
-     * @example
-     * fetchXml(Account).apply(v => ({
-     *   city: groupby(v.city),
-     *   total: sum(v.revenue),
-     *   cnt: count(),
-     * }))
-     */
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): Omit<EntityQueryBuilder<TProps, ApplyResultType_2<R>>, 'select'>;
-    /**
-     * Adds a filter condition to the FetchXML query.
-     * Accepts a raw filter string or a callback that receives a field proxy.
-     * Multiple `where()` calls are combined with AND.
-     *
-     * @example
-     * // With typed filter function
-     * fetchXml(contactDataverseTable).where(f => eq(f.status, 1))
-     *
-     * @example
-     * // Raw filter string
-     * fetchXml(contactDataverseTable).where(eq("statuscode", "1"))
-     */
-    where(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
-    /**
-     * Adds a link-entity join to another table. The result type merges the
-     * joined entity's selected fields.
-     *
-     * For filter-only link types (`any`, `not any`, `all`, `not all`,
-     * `exists`, `in`), only filters are rendered inside `<link-entity>`;
-     * `<attribute>` and `<order>` elements are skipped.
-     *
-     * @example
-     * fetchXml(contactDataverseTable)
-     *   .select(f => ({ name: f.name }))
-     *   .join("inner", accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
-     *     q => q.select(a => ({ accountName: a.name })))
-     */
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    /**
-     * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
-     *
-     * @example
-     * fetchXml(contactDataverseTable)
-     *   .select(f => ({ name: f.name }))
-     *   .innerJoin(accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
-     *     q => q.select(a => ({ accountName: a.name })))
-     */
-    innerJoin<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, TResult & TJoinResult extends infer T ? { [Key in keyof T]: (TResult & TJoinResult)[Key]; } : never>;
-    /**
-     * Auto-joins through a DataverseIntersectTable intersect table, detecting
-     * which side matches the current query and which is the target.
-     * Creates both join legs (source → intersect, intersect → target) so the
-     * subquery receives the target table's builder directly.
-     *
-     * @example
-     * fetchXml(Person)
-     *   .select(f => ({ name: f.name }))
-     *   .through(PersonAccount, sub =>
-     *     sub.select(f => ({ accountName: f.name }))
-     *   )
-     */
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): FetchXmlAggregateQuery<TProps, ApplyResultType_2<R>>;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): EntityQueryBuilder<TProps, TResult>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
     through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: EntityQueryBuilder<T2, {}>) => EntityQueryBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
     through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: EntityQueryBuilder<T1, {}>) => EntityQueryBuilder<T1, TJoinResult>): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    /** Enables distinct (deduplicated) results. */
     distinct(): this;
-    /** Limits the number of returned records. */
     top(n: number): this;
-    /**
-     * Adds ordering to the FetchXML query.
-     * Matches the OData syntax: pass a field selector callback and optional direction.
-     *
-     * @example
-     * fetchXml(contactDataverseTable).orderby(f => f.name);
-     * fetchXml(contactDataverseTable).orderby(f => f.name, "desc");
-     *
-     * @example
-     * // With explicit entity name (for cross-entity ordering)
-     * fetchXml(contactDataverseTable).orderby("contact", "createdon", "desc")
-     */
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string, direction?: 'asc' | 'desc'): this;
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
-    /**
-     * Returns the full FetchXML string.
-     *
-     * @example
-     * const xml = fetchXml(contactDataverseTable)
-     *   .select(f => ({ name: f.name }))
-     *   .toXml();
-     * // <fetch version="1.0" mapping="logical">
-     * //   <entity name="contact">
-     * //     <attribute name="fullname" alias="name" />
-     * //   </entity>
-     * // </fetch>
-     */
     toXml(): string;
-    private static _isFilterOnlyLinkType;
+    static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean;
     private _renderLinkEntity;
-    /**
-     * Returns the URL-encoded query string for use in the Dataverse API.
-     *
-     * @example
-     * fetchXml(contactDataverseTable).select(f => ({ name: f.name })).toString()
-     * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
-     */
     toString(): string;
-    /**
-     * Executes the FetchXML query against Dataverse and returns the parsed results.
-     *
-     * Each result object includes an `Etag` symbol property (import from
-     * `dataverse-schema`) holding the `@odata.etag` value for optimistic
-     * concurrency. When `select()` is not called, value/lookupId/file fields
-     * are auto-included; missing API fields fall back to the field default.
-     *
-     * @example
-     * const contacts = await fetchXml(contactDataverseTable)
-     *   .select(f => ({ name: f.name, email: f.email }))
-     *   .where(f => eq(f.status, 1))
-     *   .execute();
-     * // contacts: Array<{ name: string; email: string }>
-     *
-     * @example
-     * // With optional execute parameters
-     * const contacts = await fetchXml(contactDataverseTable)
-     *   .select(f => ({ name: f.name }))
-     *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
-     */
     execute(options?: ExecuteOptions): Promise<TResult[]>;
     private _buildAliasInfo;
     private _collectAliases;
 }
 
-export declare function eq(field: Name, value: FilterValue): FilterExpr;
+export declare function eq<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
 
-export declare function EqualBusinessId(field: Name): FilterExpr;
+export declare function EqualBusinessId(field: FieldRef<any>): FilterExpr;
 
-export declare function EqualUserId(field: Name): FilterExpr;
+export declare function EqualUserId(field: FieldRef<any>): FilterExpr;
 
-export declare function EqualUserLanguage(field: Name): FilterExpr;
+export declare function EqualUserLanguage(field: FieldRef<any>): FilterExpr;
 
-export declare function EqualUserOrUserHierarchy(field: Name): FilterExpr;
+export declare function EqualUserOrUserHierarchy(field: FieldRef<any>): FilterExpr;
 
-export declare function EqualUserOrUserHierarchyAndTeams(field: Name): FilterExpr;
+export declare function EqualUserOrUserHierarchyAndTeams(field: FieldRef<any>): FilterExpr;
 
-export declare function EqualUserOrUserTeams(field: Name): FilterExpr;
+export declare function EqualUserOrUserTeams(field: FieldRef<any>): FilterExpr;
 
 export declare const Etag: unique symbol;
 
@@ -1134,7 +991,7 @@ export declare interface ExpandObject {
     [key: string]: ExpandValue;
 }
 
-declare type ExpandResult<T, K extends keyof T, R> = T[K] extends CollectionProperty<any> ? R[] : (R | null);
+declare type ExpandResult<T extends GenericProperties, K extends keyof T, R> = T[K] extends CollectionProperty<any> ? R[] : R;
 
 export declare type ExpandValue = string | {
     select?: (Name)[];
@@ -1149,31 +1006,56 @@ export declare type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all
 
 export declare function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): ODataQuery<T, Infer<T>>;
 
-/**
- * Creates a new FetchXML query builder for the given table.
- * Returns an `EntityQueryBuilder` that starts with all table fields selected
- * and narrows the result type as you chain methods.
- *
- * @example
- * const results = await fetchXml(contactDataverseTable)
- *   .select(f => ({ name: f.name }))
- *   .where(f => eq(f.statecode, 0))
- *   .execute();
- */
 export declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): EntityQueryBuilder<TProps, Infer<TProps>>;
+
+export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
+    private _linkAlias;
+    private _table;
+    private _attributes;
+    private _links;
+    protected _filters: string[];
+    private _aliasProxy;
+    private _proxy;
+    private _top?;
+    private _useRawOrderBy;
+    private _lateMaterialize;
+    private _aggregateLimit?;
+    private _orders;
+    private _datasource?;
+    private _options?;
+    constructor(table: DataverseTable<TProps>, initialAttributes?: AttrDef[], _linkAlias?: {
+        value: number;
+    }, initialFilters?: string[]);
+    private _buildProxy;
+    private _getEffectiveAttributes;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FetchLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => void, intersect?: boolean): this;
+    through<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): this;
+    through<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: FilterCollector<T1>) => void): this;
+    top(n: number): this;
+    orderby(fieldSelector: (f: ApplyAliasProxy_2<TResult>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
+    toXml(): string;
+    toString(): string;
+    execute(options?: ExecuteOptions): Promise<TResult[]>;
+    private _buildAliasInfo;
+    private _collectAliases;
+    private static _isFilterOnlyLinkType;
+    private _renderLinkEntity;
+    private _collectAliasesFromBuilder;
+}
 
 export declare type FieldProxy<T extends GenericProperties> = {
     [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>;
 };
 
-/**
- * Phantom branded string that carries the inferred TypeScript type of a Dataverse field.
- * At runtime it is just a string (the OData field name).
- */
-export declare type FieldRef<T, K extends string = string> = string & {
-    __fieldType: T;
-    __key: K;
-};
+export declare class FieldRef<T = any, K extends string = string> {
+    private readonly _dataverseName;
+    readonly fieldDef?: any;
+    constructor(_dataverseName: string, fieldDef?: any);
+    get dataverseName(): string;
+    toString(): string;
+}
 
 declare type FieldSelector<TProps extends GenericProperties> = {
     [K in keyof TProps]: K;
@@ -1192,6 +1074,14 @@ export declare class FileField extends Schema<string> {
     constructor(name: string);
 }
 
+export declare class FilterCollector<TProps extends GenericProperties = any> {
+    protected _filters: string[];
+    private _proxy;
+    constructor(table: DataverseTable<TProps>);
+    private _buildProxy;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
+}
+
 export declare class FilterExpr {
     private node;
     constructor(node: FilterNode);
@@ -1202,30 +1092,30 @@ export declare class FilterExpr {
 
 declare type FilterNode = {
     type: "comparison";
-    field: string;
+    field: FieldRef<any>;
     operator: string;
     value: FilterValue;
 } | {
     type: "null";
-    field: string;
+    field: FieldRef<any>;
     positive: boolean;
 } | {
     type: "contains";
-    field: string;
+    field: FieldRef<any>;
     value: string;
 } | {
     type: "startsWith";
-    field: string;
+    field: FieldRef<any>;
     value: string;
 } | {
     type: "endsWith";
-    field: string;
+    field: FieldRef<any>;
     value: string;
 } | {
     type: "compare";
-    field: string;
+    field: FieldRef<any>;
     operator: string;
-    otherField: string;
+    otherField: FieldRef<any>;
 } | {
     type: "lambda";
     field: string;
@@ -1234,7 +1124,7 @@ declare type FilterNode = {
     condition: string;
 } | {
     type: "fn";
-    field: string;
+    field: FieldRef<any>;
     fnName: string;
     operator: string;
     values: FilterValue[];
@@ -1252,7 +1142,9 @@ declare type FilterNode = {
     condition: FilterExpr;
 };
 
-declare type FilterValue = string | number | boolean | null;
+declare type FilterOnlyLinkType = 'any' | 'not any' | 'all' | 'not all' | 'exists' | 'in';
+
+declare type FilterValue = string | number | boolean | Date | null;
 
 /**
  * Creates a formatted-value column definition for retrieving user-localized display values
@@ -1273,7 +1165,7 @@ export declare class FormattedField extends Schema<string | null> {
     constructor(name: string);
 }
 
-export declare function ge(field: Name, value: string | number): FilterExpr;
+export declare function ge<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
 
 /**
  * Represents a generic navigation property in a Dataverse entity.  Navigation
@@ -1322,22 +1214,14 @@ export declare function getName(name: Name): string;
 
 export declare type GetTable<T = any> = () => T;
 
-/** Group a field inside an `apply()` expression. */
-export declare function groupby<TValue>(ref: FieldRef<TValue>): GroupByExpr<TValue>;
+export declare function groupby<V>(field: FieldRef<V> | string): GroupByExpr<V>;
 
-export declare function groupby(ref: string): GroupByExpr<unknown>;
-
-/**
- * Represents a field used for grouping inside an `apply()` expression.
- * Created via the `groupby()` helper function.
- */
-export declare class GroupByExpr<TValue = unknown> {
-    private __type;
-    readonly field: string;
+export declare class GroupByExpr<V = any> {
+    field: string;
     constructor(field: string);
 }
 
-export declare function gt(field: Name, value: string | number): FilterExpr;
+export declare function gt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
 
 /**
  * Represents a GUID (Globally Unique Identifier) string, a standard identifier
@@ -1359,7 +1243,7 @@ export declare class ImageField extends Schema<string | null> {
     constructor(name: string);
 }
 
-export declare function In(field: Name, values: (string | number)[]): FilterExpr;
+export declare function In<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
 
 /**
  * Infers the TypeScript type from a Dataverse schema definition.  This is a recursive
@@ -1372,15 +1256,15 @@ export declare type Infer<T> = T extends DataverseTable<infer U> ? Infer<U> : T 
     [K in keyof T]: Infer<T[K]>;
 } : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends Schema<infer U> ? U : never;
 
-export declare function InFiscalPeriod(field: Name, value: number): FilterExpr;
+export declare function InFiscalPeriod(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function InFiscalPeriodAndYear(field: Name, fiscalPeriod: number, fiscalYear: number): FilterExpr;
+export declare function InFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
 
-export declare function InFiscalYear(field: Name, value: number): FilterExpr;
+export declare function InFiscalYear(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function InOrAfterFiscalPeriodAndYear(field: Name, fiscalPeriod: number, fiscalYear: number): FilterExpr;
+export declare function InOrAfterFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
 
-export declare function InOrBeforeFiscalPeriodAndYear(field: Name, fiscalPeriod: number, fiscalYear: number): FilterExpr;
+export declare function InOrBeforeFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
 
 /**
  * Creates a validator function that checks if a value is an integer.  It can validate both numbers and strings.
@@ -1408,9 +1292,13 @@ export declare function isInactive(): FilterExpr;
 
 export declare function isNonEmptyString(value: unknown): value is string;
 
-export declare function isNotNull(field: Name): FilterExpr;
+export declare function isNotNull(field: FieldRef<any> | {
+    toString(): string;
+}): FilterExpr;
 
-export declare function isNull(field: Name): FilterExpr;
+export declare function isNull(field: FieldRef<any> | {
+    toString(): string;
+}): FilterExpr;
 
 export declare function isType(type: Types): Validator<any>;
 
@@ -1420,33 +1308,33 @@ export declare function keys(keyValues: {
     [key: string]: string | number;
 }): string;
 
-export declare function Last7Days(field: Name): FilterExpr;
+export declare function Last7Days(field: FieldRef<any>): FilterExpr;
 
-export declare function LastFiscalPeriod(field: Name): FilterExpr;
+export declare function LastFiscalPeriod(field: FieldRef<any>): FilterExpr;
 
-export declare function LastFiscalYear(field: Name): FilterExpr;
+export declare function LastFiscalYear(field: FieldRef<any>): FilterExpr;
 
-export declare function LastMonth(field: Name): FilterExpr;
+export declare function LastMonth(field: FieldRef<any>): FilterExpr;
 
-export declare function LastWeek(field: Name): FilterExpr;
+export declare function LastWeek(field: FieldRef<any>): FilterExpr;
 
-export declare function LastXDays(field: Name, value: number): FilterExpr;
+export declare function LastXDays(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastXFiscalPeriods(field: Name, value: number): FilterExpr;
+export declare function LastXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastXFiscalYears(field: Name, value: number): FilterExpr;
+export declare function LastXFiscalYears(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastXHours(field: Name, value: number): FilterExpr;
+export declare function LastXHours(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastXMonths(field: Name, value: number): FilterExpr;
+export declare function LastXMonths(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastXWeeks(field: Name, value: number): FilterExpr;
+export declare function LastXWeeks(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastXYears(field: Name, value: number): FilterExpr;
+export declare function LastXYears(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function LastYear(field: Name): FilterExpr;
+export declare function LastYear(field: FieldRef<any>): FilterExpr;
 
-export declare function le(field: Name, value: string | number): FilterExpr;
+export declare function le<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
 
 /**
  * Creates a choice/option-set column definition with a fixed set of allowed values.
@@ -1515,7 +1403,7 @@ export declare class LookupIdProperty extends Schema<GUID | null> {
     transformValueToDataverse(value: any): string | null;
 }
 
-declare type LookupKeys<T> = {
+declare type LookupKeys<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends LookupProperty<any> ? K : never;
 }[keyof T];
 
@@ -1529,7 +1417,7 @@ export declare class LookupProperty<TProperties extends GenericProperties> exten
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
-export declare function lt(field: Name, value: string | number): FilterExpr;
+export declare function lt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
 
 export declare function mapChoices(data: any): {
     value: number;
@@ -1538,10 +1426,7 @@ export declare function mapChoices(data: any): {
     description: string;
 }[];
 
-/** Maximum aggregation. */
-export declare function max<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>;
-
-export declare function max(name: string, alias?: string): Aggregation<number>;
+export declare function max<V>(field: FieldRef<V>): Aggregation<V>;
 
 /**
  * Creates a validator function that checks if the length of a value is less than or equal to a maximum length.
@@ -1590,10 +1475,7 @@ export declare function maxValue(max: number): Validator<number>;
  */
 export declare function mergeRecords<T>(prevRecords: T[], newRecords: T[]): T[];
 
-/** Minimum aggregation. */
-export declare function min<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>;
-
-export declare function min(name: string, alias?: string): Aggregation<number>;
+export declare function min<V>(field: FieldRef<V>): Aggregation<V>;
 
 /**
  * Creates a validator function that checks if the length of a value is greater than or equal to a minimum length.
@@ -1661,47 +1543,51 @@ export declare type NarrowKeysByValue<T extends object, V> = {
     [K in keyof T]: T[K] extends V ? K : never;
 }[keyof T];
 
-export declare function ne(field: Name, value: FilterValue): FilterExpr;
+export declare function ne<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
 
 declare type NestedStringArray = Array<string | NestedStringArray>;
 
-export declare function Next7Days(field: Name): FilterExpr;
+export declare function Next7Days(field: FieldRef<any>): FilterExpr;
 
-export declare function NextFiscalPeriod(field: Name): FilterExpr;
+export declare function NextFiscalPeriod(field: FieldRef<any>): FilterExpr;
 
-export declare function NextFiscalYear(field: Name): FilterExpr;
+export declare function NextFiscalYear(field: FieldRef<any>): FilterExpr;
 
-export declare function NextMonth(field: Name): FilterExpr;
+export declare function NextMonth(field: FieldRef<any>): FilterExpr;
 
-export declare function NextWeek(field: Name): FilterExpr;
+export declare function NextWeek(field: FieldRef<any>): FilterExpr;
 
-export declare function NextXDays(field: Name, value: number): FilterExpr;
+export declare function NextXDays(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextXFiscalPeriods(field: Name, value: number): FilterExpr;
+export declare function NextXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextXFiscalYears(field: Name, value: number): FilterExpr;
+export declare function NextXFiscalYears(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextXHours(field: Name, value: number): FilterExpr;
+export declare function NextXHours(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextXMonths(field: Name, value: number): FilterExpr;
+export declare function NextXMonths(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextXWeeks(field: Name, value: number): FilterExpr;
+export declare function NextXWeeks(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextXYears(field: Name, value: number): FilterExpr;
+export declare function NextXYears(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function NextYear(field: Name): FilterExpr;
+export declare function NextYear(field: FieldRef<any>): FilterExpr;
+
+declare type NonNullType<T> = T extends Date | null ? Date : Exclude<T, null>;
+
+declare type NormalLinkType = Exclude<FetchLinkType, FilterOnlyLinkType>;
 
 export declare function not(condition: FilterExpr | string): FilterExpr;
 
-export declare function NotBetween(field: Name, value1: string | number, value2: string | number): FilterExpr;
+export declare function NotBetween(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr;
 
-export declare function NotEqualBusinessId(field: Name): FilterExpr;
+export declare function NotEqualBusinessId(field: FieldRef<any>): FilterExpr;
 
-export declare function NotEqualUserId(field: Name): FilterExpr;
+export declare function NotEqualUserId(field: FieldRef<any>): FilterExpr;
 
-export declare function NotIn(field: Name, values: (string | number)[]): FilterExpr;
+export declare function NotIn<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
 
-export declare function NotUnder(field: Name, value: string): FilterExpr;
+export declare function NotUnder(field: FieldRef<any>, value: string): FilterExpr;
 
 /**
  * Creates a nullable date-only column definition (allows `null`).
@@ -1810,6 +1696,25 @@ export declare class NumberField extends Schema<number> {
  */
 export declare function numeric(): Validator<number | string>;
 
+export declare class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
+    private _table;
+    private _filters;
+    private _apply;
+    private _orderby;
+    private _top?;
+    private _aliasProxy;
+    constructor(table: DataverseTable<T>, apply: string, aliasProxy: Record<string, string>, initialFilters?: string[]);
+    filter(filter: string): this;
+    filter(filter: FilterExpr): this;
+    filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
+    orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): this;
+    orderby(alias: string, direction?: "asc" | "desc"): this;
+    top(n: number): this;
+    private _build;
+    toString(): string;
+    execute(): Promise<TResult[]>;
+}
+
 declare type ODataCollectionNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
@@ -1819,27 +1724,13 @@ declare type ODataFieldProxy<T extends GenericProperties> = {
 };
 
 declare type ODataLambdaProxy<P extends GenericProperties> = {
-    [K in keyof P]: string;
+    [K in keyof P]: FieldRef<any>;
 };
 
 declare type ODataLookupNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
 
-/**
- * A type-safe OData query builder for Dataverse.
- *
- * Create one via {@link fetchOdata} — never instantiate directly.
- *
- * @example
- * const q = fetchOdata(Person)
- *   .select("name", "age")
- *   .filter(f => equals(f.name, "John"))
- *   .orderby(f => f.name)
- *   .top(10);
- *
- * const results = await q.execute();
- */
 export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     private _table;
     private _fields;
@@ -1848,134 +1739,62 @@ export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>>
     private _expands;
     private _orderby;
     private _top?;
-    private _apply;
-    private _isApply;
     private _expandMode;
     private _proxy;
-    private _applyAliasProxy;
     constructor(table: DataverseTable<T>);
     private _buildProxy;
-    private _buildProxyForDataverseTable;
-    /**
-     * Selects all value columns (no-args) or restricts to the specified fields.
-     *
-     * @example
-     * fetchOdata(Person).select();
-     * fetchOdata(Person).select("name", "age");
-     */
     select(): ODataQuery<T, Infer<T>>;
     select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, {
         [P in K]: Infer<T[P]>;
     }>;
-    /**
-     * Adds a `$filter` clause. Can be a raw string or a callback receiving a
-     * typed field proxy. Multiple `.filter()` calls stack with `and`.
-     *
-     * @example
-     * fetchOdata(Person).filter(f => eq(f.name, "John"));
-     *
-     * @example
-     * // Multiple calls stack:
-     * fetchOdata(Person)
-     *   .filter(f => equals(f.name, "John"))
-     *   .filter(f => greaterThan(f.age, 20));
-     */
     filter(filter: string): this;
     filter(filter: FilterExpr): this;
     filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
-    /**
-     * Adds a `$expand` clause for a navigation property.
-     *
-     * @example
-     * fetchOdata(Person)
-     *   .select("name")
-     *   .expand("primaryAddress", sub => sub.select("street", "zip"));
-     *
-     * @example
-     * // Nested expand:
-     * fetchOdata(Person)
-     *   .expand("primaryAddress", sub =>
-     *     sub.expand("location", sub2 => sub2.select("name"))
-     *   );
-     */
-    expand<K extends CollectionKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'apply'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+    expand<K extends CollectionKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'apply' | 'execute' | 'toString'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
         [P in K]: ExpandResult<T, P, R>;
     }>;
-    expand<K extends LookupKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'apply'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
+    expand<K extends LookupKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'apply' | 'execute' | 'toString'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
         [P in K]: ExpandResult<T, P, R>;
     }>;
-    /**
-     * Adds a `$orderby` clause.
-     *
-     * After `select()`: use a field selector callback.
-     * After `apply()`: use a field selector callback with alias names.
-     *
-     * Multiple calls accumulate.
-     *
-     * @example
-     * fetchOdata(Person).orderby(f => f.name);
-     * fetchOdata(Person).orderby(f => f.age, "desc");
-     * fetchOdata(Person).apply(v => ({ total: sum(v.age) })).orderby(r => r.total, "desc");
-     */
-    orderby(fieldSelector: (f: ODataFieldProxy<T>) => string, direction?: "asc" | "desc"): this;
+    orderby(fieldSelector: (f: ODataFieldProxy<T>) => string | FieldRef<any>, direction?: "asc" | "desc"): this;
     orderby(alias: string, direction?: "asc" | "desc"): this;
-    /** Limits the number of returned records (`$top`). */
     top(n: number): this;
-    /**
-     * Adds a `$apply` expression for server-side aggregation and grouping.
-     * The callback receives a field proxy and must return a record where:
-     * - Values created with `groupby()` define grouping fields
-     * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
-     *
-     * Record keys become the alias names in the response.
-     *
-     * @example
-     * fetchOdata(Person).apply(v => ({
-     *   age: groupby(v.age),
-     *   total: sum(v.age),
-     *   average: average(v.age),
-     * }));
-     *
-     * @example
-     * // Aggregate without grouping:
-     * fetchOdata(Person).apply(v => ({
-     *   total: sum(v.age),
-     *   cnt: count(),
-     * }));
-     */
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: ODataFieldProxy<T>) => R): Omit<ODataQuery<T, ApplyResultType<R>>, 'select' | 'expand'> & {
-        orderby(fieldSelector: (f: ApplyAliasProxy<ApplyResultType<R>>) => string, direction?: "asc" | "desc"): ODataQuery<T, ApplyResultType<R>>;
-        orderby(alias: string, direction?: "asc" | "desc"): ODataQuery<T, ApplyResultType<R>>;
-    };
-    private _build;
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: ODataFieldProxy<T>) => R): ODataApplyQuery<T, ApplyResultType<R>>;
+    protected _build(forExpand?: boolean): string;
     toString(): string;
     private _partialTransform;
     execute(): Promise<TResult[]>;
 }
 
-export declare function OlderThanXDays(field: Name, value: number): FilterExpr;
+export declare function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function OlderThanXHours(field: Name, value: number): FilterExpr;
+export declare function OlderThanXHours(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function OlderThanXMinutes(field: Name, value: number): FilterExpr;
+export declare function OlderThanXMinutes(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function OlderThanXMonths(field: Name, value: number): FilterExpr;
+export declare function OlderThanXMonths(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function OlderThanXWeeks(field: Name, value: number): FilterExpr;
+export declare function OlderThanXWeeks(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function OlderThanXYears(field: Name, value: number): FilterExpr;
+export declare function OlderThanXYears(field: FieldRef<any>, value: number): FilterExpr;
 
-export declare function On(field: Name, value: string): FilterExpr;
+export declare function On(field: FieldRef<any>, value: string): FilterExpr;
 
-export declare function OnOrAfter(field: Name, value: string): FilterExpr;
+export declare function OnOrAfter(field: FieldRef<any>, value: string): FilterExpr;
 
-export declare function OnOrBefore(field: Name, value: string): FilterExpr;
+export declare function OnOrBefore(field: FieldRef<any>, value: string): FilterExpr;
 
 export declare function or(...conditions: (FilterExpr | string)[]): FilterExpr;
 
 export declare function orderby(values: {
     [key: string]: "asc" | "desc";
 } | string[]): string;
+
+declare type OrderDef = {
+    attribute: string;
+    entityname?: string;
+    descending?: boolean;
+};
 
 export declare class OrderSpec {
     readonly fields: string[];
@@ -2016,7 +1835,7 @@ export declare type QueryForTable<T> = {
     top?: number;
 };
 
-declare type RelatedProps<T, K extends keyof T> = T[K] extends LookupProperty<infer P> ? P : T[K] extends CollectionProperty<infer P> ? P : never;
+declare type RelatedProps<T extends GenericProperties, K extends keyof T> = T[K] extends CollectionProperty<infer P> ? P : T[K] extends LookupProperty<infer P> ? P : never;
 
 export declare function required(): (v: any) => "Required" | undefined;
 
@@ -2190,7 +2009,7 @@ declare type Simplify<T> = {
     [Key in keyof T]: T[Key];
 } & {};
 
-export declare function startsWith(field: Name, value: string): FilterExpr;
+export declare function startsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
 
 /**
  * Creates a string-typed Dataverse column definition.
@@ -2212,20 +2031,28 @@ export declare class StringField extends Schema<string> {
     transformValueFromDataverse(value: any): string;
 }
 
-/** Sum aggregation. */
-export declare function sum<TValue>(name: FieldRef<TValue>, alias?: string): Aggregation<TValue>;
+declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any>> = {
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): SubJoinBuilder<TProps, {
+        [K in keyof R]: Infer<TProps[R[K]]>;
+    }>;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult>;
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>;
+    toXml(): string;
+    toString(): string;
+};
 
-export declare function sum(name: string, alias?: string): Aggregation<number>;
+export declare function sum<V>(field: FieldRef<V> | string): Aggregation<V>;
 
-export declare function ThisFiscalPeriod(field: Name): FilterExpr;
+export declare function ThisFiscalPeriod(field: FieldRef<any>): FilterExpr;
 
-export declare function ThisFiscalYear(field: Name): FilterExpr;
+export declare function ThisFiscalYear(field: FieldRef<any>): FilterExpr;
 
-export declare function ThisMonth(field: Name): FilterExpr;
+export declare function ThisMonth(field: FieldRef<any>): FilterExpr;
 
-export declare function ThisWeek(field: Name): FilterExpr;
+export declare function ThisWeek(field: FieldRef<any>): FilterExpr;
 
-export declare function ThisYear(field: Name): FilterExpr;
+export declare function ThisYear(field: FieldRef<any>): FilterExpr;
 
 /**
  * Converts a File object to a base64 encoded string.
@@ -2244,20 +2071,26 @@ export declare function toBase64(file: File): Promise<string>;
 
 export declare function toDateOnly(date: Date): string | null;
 
-export declare function Today(field: Name): FilterExpr;
+export declare function Today(field: FieldRef<any>): FilterExpr;
 
-export declare function Tomorrow(field: Name): FilterExpr;
+export declare function Tomorrow(field: FieldRef<any>): FilterExpr;
 
 export declare type Types = "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function";
 
-export declare function Under(field: Name, value: string): FilterExpr;
+export declare function Under(field: FieldRef<any>, value: string): FilterExpr;
 
-export declare function UnderOrEqual(field: Name, value: string): FilterExpr;
+export declare function UnderOrEqual(field: FieldRef<any>, value: string): FilterExpr;
 
 export declare type Validator<T> = (value: T) => void | undefined | string;
 
-declare type ValueKeys<T> = {
-    [K in keyof T]: T[K] extends LookupProperty<any> | CollectionProperty<any> ? never : K;
+declare type ValueKeys<T extends GenericProperties> = {
+    [K in keyof T]: T[K] extends {
+        kind: 'value';
+    } | {
+        type: 'lookupId';
+    } | {
+        type: 'file';
+    } ? K : never;
 }[keyof T];
 
 /**
@@ -2292,6 +2125,6 @@ export declare function wrapString(value: unknown): string;
  */
 export declare function xml(raw: TemplateStringsArray, ...values: unknown[]): string;
 
-export declare function Yesterday(field: Name): FilterExpr;
+export declare function Yesterday(field: FieldRef<any>): FilterExpr;
 
 export { }

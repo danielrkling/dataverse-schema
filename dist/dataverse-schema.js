@@ -1894,6 +1894,19 @@ function lookup(name, getTable) {
   return new LookupProperty(name, getTable);
 }
 
+class FieldRef {
+  constructor(_dataverseName, fieldDef) {
+    this._dataverseName = _dataverseName;
+    this.fieldDef = fieldDef;
+  }
+  fieldDef;
+  get dataverseName() {
+    return this._dataverseName;
+  }
+  toString() {
+    return this._dataverseName;
+  }
+}
 class FilterExpr {
   constructor(node) {
     this.node = node;
@@ -1911,21 +1924,21 @@ class FilterExpr {
 function serializeOdata(node) {
   switch (node.type) {
     case "comparison":
-      return `(${node.field} ${node.operator} ${wrapString(node.value)})`;
+      return `(${node.field.toString()} ${node.operator} ${wrapString(node.value)})`;
     case "null":
-      return `${node.field} ${node.positive ? "eq" : "ne"} null`;
+      return `${node.field.toString()} ${node.positive ? "eq" : "ne"} null`;
     case "contains":
-      return `contains(${node.field},${wrapString(node.value)})`;
+      return `contains(${node.field.toString()},${wrapString(node.value)})`;
     case "startsWith":
-      return `startswith(${node.field},${wrapString(node.value)})`;
+      return `startswith(${node.field.toString()},${wrapString(node.value)})`;
     case "endsWith":
-      return `endswith(${node.field},${wrapString(node.value)})`;
+      return `endswith(${node.field.toString()},${wrapString(node.value)})`;
     case "compare":
-      return `(${node.field} ${node.operator} ${node.otherField})`;
+      return `(${node.field.toString()} ${node.operator} ${node.otherField.toString()})`;
     case "lambda":
       return `${node.field}/${node.operator}(${node.alias}: ${node.condition})`;
     case "fn": {
-      const field = wrapString(node.field);
+      const field = wrapString(node.field.toString());
       const vals = node.values.map(wrapString);
       if (vals.length === 0) {
         return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field})`;
@@ -1960,22 +1973,22 @@ function serializeFetchXml(node) {
   switch (node.type) {
     case "comparison": {
       const value = node.value === null ? "" : escapeXml(String(node.value));
-      return `<condition attribute="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" value="${value}" />`;
+      return `<condition attribute="${escapeXml(node.field.toString())}" operator="${escapeXml(node.operator)}" value="${value}" />`;
     }
     case "null":
-      return `<condition attribute="${escapeXml(node.field)}" operator="${node.positive ? "null" : "not-null"}" />`;
+      return `<condition attribute="${escapeXml(node.field.toString())}" operator="${node.positive ? "null" : "not-null"}" />`;
     case "contains":
-      return `<condition attribute="${escapeXml(node.field)}" operator="like" value="%${escapeXml(node.value)}%" />`;
+      return `<condition attribute="${escapeXml(node.field.toString())}" operator="like" value="%${escapeXml(node.value)}%" />`;
     case "startsWith":
-      return `<condition attribute="${escapeXml(node.field)}" operator="begins-with" value="${escapeXml(node.value)}" />`;
+      return `<condition attribute="${escapeXml(node.field.toString())}" operator="begins-with" value="${escapeXml(node.value)}" />`;
     case "endsWith":
-      return `<condition attribute="${escapeXml(node.field)}" operator="ends-with" value="${escapeXml(node.value)}" />`;
+      return `<condition attribute="${escapeXml(node.field.toString())}" operator="ends-with" value="${escapeXml(node.value)}" />`;
     case "compare":
-      return `<condition attribute="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(node.otherField)}" />`;
+      return `<condition attribute="${escapeXml(node.field.toString())}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(node.otherField.toString())}" />`;
     case "lambda":
       return `<condition entityname="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" value="${escapeXml(`${node.alias}: ${node.condition}`)}" />`;
     case "fn": {
-      const attr = escapeXml(node.field);
+      const attr = escapeXml(node.field.toString());
       const op = escapeXml(node.operator);
       if (node.values.length === 0) {
         return `<condition attribute="${attr}" operator="${op}" />`;
@@ -1998,43 +2011,58 @@ function serializeFetchXml(node) {
   }
 }
 function fn(field, fnName, operator, values) {
-  return new FilterExpr({ type: "fn", field: getName(field), fnName, operator, values });
+  return new FilterExpr({ type: "fn", field, fnName, operator, values });
 }
 function eq(field, value) {
-  return new FilterExpr({ type: "comparison", field: getName(field), operator: "eq", value });
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field, operator: "eq", otherField: value });
+  }
+  return new FilterExpr({ type: "comparison", field, operator: "eq", value });
 }
 function ne(field, value) {
-  return new FilterExpr({ type: "comparison", field: getName(field), operator: "ne", value });
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field, operator: "ne", otherField: value });
+  }
+  return new FilterExpr({ type: "comparison", field, operator: "ne", value });
 }
 function gt(field, value) {
-  return new FilterExpr({ type: "comparison", field: getName(field), operator: "gt", value });
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field, operator: "gt", otherField: value });
+  }
+  return new FilterExpr({ type: "comparison", field, operator: "gt", value });
 }
 function ge(field, value) {
-  return new FilterExpr({ type: "comparison", field: getName(field), operator: "ge", value });
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field, operator: "ge", otherField: value });
+  }
+  return new FilterExpr({ type: "comparison", field, operator: "ge", value });
 }
 function lt(field, value) {
-  return new FilterExpr({ type: "comparison", field: getName(field), operator: "lt", value });
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field, operator: "lt", otherField: value });
+  }
+  return new FilterExpr({ type: "comparison", field, operator: "lt", value });
 }
 function le(field, value) {
-  return new FilterExpr({ type: "comparison", field: getName(field), operator: "le", value });
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field, operator: "le", otherField: value });
+  }
+  return new FilterExpr({ type: "comparison", field, operator: "le", value });
 }
 function isNull(field) {
-  return new FilterExpr({ type: "null", field: getName(field), positive: true });
+  return new FilterExpr({ type: "null", field, positive: true });
 }
 function isNotNull(field) {
-  return new FilterExpr({ type: "null", field: getName(field), positive: false });
+  return new FilterExpr({ type: "null", field, positive: false });
 }
 function contains(field, value) {
-  return new FilterExpr({ type: "contains", field: getName(field), value });
+  return new FilterExpr({ type: "contains", field, value });
 }
 function startsWith(field, value) {
-  return new FilterExpr({ type: "startsWith", field: getName(field), value });
+  return new FilterExpr({ type: "startsWith", field, value });
 }
 function endsWith(field, value) {
-  return new FilterExpr({ type: "endsWith", field: getName(field), value });
-}
-function compare(field, operator, otherField) {
-  return new FilterExpr({ type: "compare", field: getName(field), operator, otherField: getName(otherField) });
+  return new FilterExpr({ type: "endsWith", field, value });
 }
 function and(...conditions) {
   const valid = conditions.filter((c) => c != null && c !== "");
@@ -2051,10 +2079,10 @@ function not(condition) {
   return new FilterExpr({ type: "not", condition: c });
 }
 function isActive() {
-  return eq("statecode", 0);
+  return eq(new FieldRef("statecode"), 0);
 }
 function isInactive() {
-  return eq("statecode", 1);
+  return eq(new FieldRef("statecode"), 1);
 }
 function Above(field, value) {
   return fn(field, "Above", "above", [value]);
@@ -2259,60 +2287,89 @@ function Yesterday(field) {
 }
 
 const proxyTableMap = /* @__PURE__ */ new WeakMap();
-class Aggregation {
-  constructor(operation, field, alias) {
-    this.operation = operation;
-    this.field = field;
-    this.alias = alias;
-  }
-  /** OData format (e.g. `"title with average as avg_title"`). */
-  toOdata(alias) {
-    const a = alias ?? this.alias;
-    if (this.operation === "count" || this.operation === "countdistinct") {
-      return a ? `$count as ${a}` : `$count`;
-    }
-    const resolvedAlias = a ?? this.field;
-    return `${this.field} with ${this.operation} as ${resolvedAlias}`;
-  }
-  /** FetchXML format (e.g. `name="title" alias="avg_title" aggregate="avg"`). */
-  toXml(alias) {
-    if (!this.field) return "";
-    const a = alias ?? this.alias ?? this.field;
-    return `name="${this.field}" alias="${a}" aggregate="${this.operation}"`;
-  }
-  toString() {
-    return this.toOdata();
-  }
-}
 class GroupByExpr {
   field;
   constructor(field) {
     this.field = field;
   }
 }
-function groupby(ref) {
-  return new GroupByExpr(ref);
-}
-function average(name, alias) {
-  return new Aggregation("average", name, alias);
-}
-function sum(name, alias) {
-  return new Aggregation("sum", name, alias);
-}
-function min(name, alias) {
-  return new Aggregation("min", name, alias);
-}
-function max(name, alias) {
-  return new Aggregation("max", name, alias);
-}
-function count(fieldOrAlias, alias) {
-  if (fieldOrAlias === void 0) {
-    return new Aggregation("count", void 0, alias);
+class Aggregation {
+  field;
+  operation;
+  constructor(operation, field) {
+    this.operation = operation;
+    this.field = field;
   }
-  if (alias !== void 0) {
-    return new Aggregation("count", fieldOrAlias, alias);
+  toOdata(alias) {
+    return this.field ? `${this.field} with ${this.operation} as ${alias}` : `$count as ${alias}`;
   }
-  return new Aggregation("count", fieldOrAlias);
+}
+class ODataApplyQuery {
+  _table;
+  _filters = [];
+  _apply;
+  _orderby = [];
+  _top;
+  _aliasProxy = {};
+  constructor(table, apply, aliasProxy, initialFilters) {
+    this._table = table;
+    this._apply = apply;
+    this._aliasProxy = aliasProxy;
+    if (initialFilters) this._filters = [...initialFilters];
+  }
+  filter(filter) {
+    let str;
+    if (filter instanceof FilterExpr) {
+      str = filter.toOdata();
+    } else if (typeof filter === "function") {
+      const result = filter(buildProxyForTable(this._table));
+      str = result instanceof FilterExpr ? result.toOdata() : result;
+    } else {
+      str = filter;
+    }
+    this._filters.push(str);
+    return this;
+  }
+  orderby(nameOrSelector, direction = "asc") {
+    if (typeof nameOrSelector === "function") {
+      const result = nameOrSelector(this._aliasProxy);
+      this._orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
+    } else {
+      this._orderby.push({ name: nameOrSelector, dir: direction });
+    }
+    return this;
+  }
+  top(n) {
+    this._top = n;
+    return this;
+  }
+  _build() {
+    const parts = [];
+    if (this._filters.length === 1) {
+      parts.push(`$filter=${this._filters[0]}`);
+    } else if (this._filters.length > 1) {
+      parts.push(`$filter=${this._filters.join(" and ")}`);
+    }
+    if (this._apply) parts.push(`$apply=${this._apply}`);
+    if (this._orderby.length) {
+      parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+    }
+    if (this._top !== void 0) parts.push(`$top=${this._top}`);
+    return parts.join("&");
+  }
+  toString() {
+    return this._build();
+  }
+  async execute() {
+    const qs = this.toString();
+    const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
+    return raw.map((v) => {
+      const r = { ...v };
+      r[Etag] = v["@odata.etag"];
+      delete r["@odata.etag"];
+      return r;
+    });
+  }
 }
 class ODataQuery {
   _table;
@@ -2322,52 +2379,16 @@ class ODataQuery {
   _expands = [];
   _orderby = [];
   _top;
-  _apply = "";
-  _isApply = false;
   _expandMode = "full";
   _proxy;
-  _applyAliasProxy = {};
   constructor(table) {
     this._table = table;
     this._proxy = this._buildProxy();
   }
   _buildProxy() {
-    return this._buildProxyForDataverseTable(this._table);
-  }
-  _buildProxyForDataverseTable(table, prefix) {
-    const proxy = {};
-    const fields = table.fields;
-    for (const [key, prop] of Object.entries(fields)) {
-      const dataverseName = prop.fromDataverseName ?? prop.name;
-      const isCollection = prop.kind === "navigation" && prop.type === "collection";
-      const isLookup = prop.kind === "navigation" && prop.type === "lookup";
-      if (isCollection || isLookup) {
-        const navProp = prop;
-        const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName;
-        let cached;
-        Object.defineProperty(proxy, key, {
-          get: () => {
-            if (!cached) {
-              const sub = this._buildProxyForDataverseTable(navProp.table, currentPrefix);
-              sub.toString = () => dataverseName;
-              if (isCollection) {
-                proxyTableMap.set(sub, navProp.table);
-              }
-              cached = sub;
-            }
-            return cached;
-          },
-          enumerable: true,
-          configurable: true
-        });
-      } else {
-        proxy[key] = prefix ? `${prefix}/${dataverseName}` : dataverseName;
-      }
-    }
-    return proxy;
+    return buildProxyForTable(this._table);
   }
   select(...keys) {
-    if (this._isApply) throw new Error("select() is not supported after apply()");
     if (keys.length === 0) {
       this._fields = [];
       this._selectedKeys = [];
@@ -2377,7 +2398,7 @@ class ODataQuery {
         }
       }
     } else {
-      this._fields = keys.map((k) => this._proxy[k]);
+      this._fields = keys.map((k) => this._proxy[k].toString());
       this._selectedKeys = keys;
     }
     return this;
@@ -2396,7 +2417,6 @@ class ODataQuery {
     return this;
   }
   expand(key, sub) {
-    if (this._isApply) throw new Error("expand() is not supported after apply()");
     const prop = this._table.fields[key];
     const isCollection = prop.type === "collection";
     if (this._expandMode === "collection" && isCollection) {
@@ -2412,96 +2432,64 @@ class ODataQuery {
   orderby(nameOrSelector, direction = "asc") {
     if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
     if (typeof nameOrSelector === "function") {
-      this._orderby.push({ name: nameOrSelector(this._isApply ? this._applyAliasProxy : this._proxy), dir: direction });
+      const result = nameOrSelector(this._proxy);
+      this._orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
     } else {
       this._orderby.push({ name: nameOrSelector, dir: direction });
     }
     return this;
   }
-  /** Limits the number of returned records (`$top`). */
   top(n) {
     if (this._expandMode === "lookup") throw new Error("top() is not supported in lookup expands");
     this._top = n;
     return this;
   }
-  /**
-   * Adds a `$apply` expression for server-side aggregation and grouping.
-   * The callback receives a field proxy and must return a record where:
-   * - Values created with `groupby()` define grouping fields
-   * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
-   *
-   * Record keys become the alias names in the response.
-   *
-   * @example
-   * fetchOdata(Person).apply(v => ({
-   *   age: groupby(v.age),
-   *   total: sum(v.age),
-   *   average: average(v.age),
-   * }));
-   *
-   * @example
-   * // Aggregate without grouping:
-   * fetchOdata(Person).apply(v => ({
-   *   total: sum(v.age),
-   *   cnt: count(),
-   * }));
-   */
   apply(expr) {
-    if (this._isApply) throw new Error("apply() can only be called once");
-    if (this._expandMode !== "full") throw new Error("apply() is not supported in expand sub-queries");
-    this._isApply = true;
     const result = expr(this._proxy);
     const groupByFields = [];
     const aggParts = [];
-    this._applyAliasProxy = {};
+    const aliasProxy = {};
     for (const [alias, value] of Object.entries(result)) {
-      this._applyAliasProxy[alias] = alias;
+      aliasProxy[alias] = alias;
       if (value instanceof GroupByExpr) {
         groupByFields.push(value.field);
       } else if (value instanceof Aggregation) {
         aggParts.push(value.toOdata(alias));
       }
     }
+    let applyStr = "";
     if (groupByFields.length > 0 && aggParts.length > 0) {
-      this._apply = `groupby((${groupByFields.join(",")}),aggregate(${aggParts.join(",")}))`;
+      applyStr = `groupby((${groupByFields.join(",")}),aggregate(${aggParts.join(",")}))`;
     } else if (groupByFields.length > 0) {
-      this._apply = `groupby((${groupByFields.join(",")}))`;
+      applyStr = `groupby((${groupByFields.join(",")}))`;
     } else if (aggParts.length > 0) {
-      this._apply = `aggregate(${aggParts.join(",")})`;
+      applyStr = `aggregate(${aggParts.join(",")})`;
     }
-    return this;
+    return new ODataApplyQuery(
+      this._table,
+      applyStr,
+      aliasProxy,
+      this._filters.length > 0 ? this._filters : void 0
+    );
   }
   _build(forExpand = false) {
     const parts = [];
     const joinChar = forExpand ? ";" : "&";
-    if (this._isApply) {
-      if (this._filters.length === 1) {
-        parts.push(`$filter=${this._filters[0]}`);
-      } else if (this._filters.length > 1) {
-        parts.push(`$filter=${this._filters.join(" and ")}`);
-      }
-      if (this._apply) parts.push(`$apply=${this._apply}`);
-      if (this._orderby.length) {
-        parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
-      }
-      if (this._top !== void 0) parts.push(`$top=${this._top}`);
-    } else {
-      if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
-      if (this._filters.length === 1) {
-        parts.push(`$filter=${this._filters[0]}`);
-      } else if (this._filters.length > 1) {
-        parts.push(`$filter=${this._filters.join(" and ")}`);
-      }
-      if (this._orderby.length) {
-        parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
-      }
-      if (this._expands.length) {
-        parts.push(`$expand=${this._expands.map((e) => {
-          return e.query ? `${e.name}(${e.query})` : e.name;
-        }).join(",")}`);
-      }
-      if (this._top !== void 0) parts.push(`$top=${this._top}`);
+    if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
+    if (this._filters.length === 1) {
+      parts.push(`$filter=${this._filters[0]}`);
+    } else if (this._filters.length > 1) {
+      parts.push(`$filter=${this._filters.join(" and ")}`);
     }
+    if (this._orderby.length) {
+      parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+    }
+    if (this._expands.length) {
+      parts.push(`$expand=${this._expands.map((e) => {
+        return e.query ? `${e.name}(${e.query})` : e.name;
+      }).join(",")}`);
+    }
+    if (this._top !== void 0) parts.push(`$top=${this._top}`);
     return parts.join(joinChar);
   }
   toString() {
@@ -2526,25 +2514,65 @@ class ODataQuery {
     const qs = this.toString();
     if (!qs) return this._table.getRecords();
     const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
-    if (this._isApply) {
-      return raw.map((v) => {
-        const r = { ...v };
-        r[Etag] = v["@odata.etag"];
-        delete r["@odata.etag"];
-        return r;
-      });
-    }
     if (this._selectedKeys.length > 0) {
       return raw.map((v) => this._partialTransform(v));
     }
     return raw.map((v) => this._table.transformValueFromDataverse(v));
   }
 }
+function buildProxyForTable(table, prefix) {
+  const proxy = {};
+  const fields = table.fields;
+  for (const [key, prop] of Object.entries(fields)) {
+    const dataverseName = prop.fromDataverseName ?? prop.name;
+    const isCollection = prop.kind === "navigation" && prop.type === "collection";
+    const isLookup = prop.kind === "navigation" && prop.type === "lookup";
+    if (isCollection || isLookup) {
+      const navProp = prop;
+      const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName;
+      let cached;
+      Object.defineProperty(proxy, key, {
+        get: () => {
+          if (!cached) {
+            const sub = buildProxyForTable(navProp.table, currentPrefix);
+            sub.toString = () => currentPrefix;
+            if (isCollection) proxyTableMap.set(sub, navProp.table);
+            cached = sub;
+          }
+          return cached;
+        },
+        enumerable: true,
+        configurable: true
+      });
+    } else {
+      proxy[key] = new FieldRef(prefix ? `${prefix}/${dataverseName}` : dataverseName, prop);
+    }
+  }
+  return proxy;
+}
+function sum(field) {
+  return new Aggregation("sum", field instanceof FieldRef ? field.toString() : field);
+}
+function min(field) {
+  return new Aggregation("min", field.toString());
+}
+function max(field) {
+  return new Aggregation("max", field.toString());
+}
+function average(field) {
+  return new Aggregation("average", field.toString());
+}
+function count(field) {
+  return new Aggregation("count", field ? field instanceof FieldRef ? field.toString() : field : void 0);
+}
+function groupby(field) {
+  return new GroupByExpr(field instanceof FieldRef ? field.toString() : field);
+}
 function buildLambdaProxy(alias, table) {
   const fields = table.fields;
   const proxy = {};
   for (const [key, prop] of Object.entries(fields)) {
-    proxy[key] = `${alias}/${prop.fromDataverseName ?? prop.name}`;
+    proxy[key] = new FieldRef(`${alias}/${prop.fromDataverseName ?? prop.name}`);
   }
   return proxy;
 }
@@ -2566,23 +2594,359 @@ function fetchOdata(table) {
   return new ODataQuery(table);
 }
 
-class EntityQueryBuilder {
+class FilterCollector {
+  _filters = [];
+  _proxy;
+  constructor(table) {
+    this._proxy = this._buildProxy(table);
+  }
+  _buildProxy(table) {
+    const proxy = {};
+    for (const [key, prop] of Object.entries(table.fields)) {
+      proxy[key] = new FieldRef(prop.fromDataverseName ?? prop.name, prop);
+    }
+    return proxy;
+  }
+  filter(filter) {
+    let str;
+    if (filter instanceof FilterExpr) {
+      str = filter.toFetchXml();
+    } else if (typeof filter === "function") {
+      const result = filter(this._proxy);
+      str = result instanceof FilterExpr ? result.toFetchXml() : result;
+    } else {
+      str = filter;
+    }
+    this._filters.push(str);
+    return this;
+  }
+}
+class FetchXmlAggregateQuery {
   _linkAlias;
   _table;
   _attributes = [];
   _links = [];
-  _isDistinct = false;
   _filters = [];
+  _aliasProxy = {};
   _proxy;
   _top;
-  _isAggregate = false;
   _useRawOrderBy = false;
   _lateMaterialize = false;
   _aggregateLimit;
   _orders = [];
   _datasource;
   _options;
-  /** @param table The DataverseTable definition to build the query against. */
+  constructor(table, initialAttributes, _linkAlias, initialFilters) {
+    this._table = table;
+    this._linkAlias = _linkAlias ?? { value: 0 };
+    this._proxy = this._buildProxy();
+    if (initialAttributes) this._attributes = initialAttributes;
+    if (initialFilters) this._filters = [...initialFilters];
+    for (const attr of initialAttributes ?? []) {
+      this._aliasProxy[attr.alias] = attr.alias;
+    }
+  }
+  _buildProxy() {
+    const proxy = {};
+    for (const [key, prop] of Object.entries(this._table.fields)) {
+      proxy[key] = new FieldRef(prop.fromDataverseName ?? prop.name, prop);
+    }
+    return proxy;
+  }
+  _getEffectiveAttributes() {
+    return this._attributes;
+  }
+  filter(filter) {
+    let str;
+    if (filter instanceof FilterExpr) {
+      str = filter.toFetchXml();
+    } else if (typeof filter === "function") {
+      const result = filter(this._proxy);
+      str = result instanceof FilterExpr ? result.toFetchXml() : result;
+    } else {
+      str = filter;
+    }
+    this._filters.push(str);
+    return this;
+  }
+  join(linkType, table, from, to, subquery, intersect) {
+    const nested = new EntityQueryBuilder(table, this._linkAlias);
+    subquery(nested);
+    const fromFieldName = table.fields[from].name;
+    const toFieldName = this._table.fields[to].name;
+    const autoAlias = `auto_link_${++this._linkAlias.value}`;
+    const isIntersect = intersect ?? table.intersect === true;
+    this._links.push({
+      name: table.logicalName,
+      from: fromFieldName,
+      to: toFieldName,
+      alias: autoAlias,
+      linkType,
+      builder: nested,
+      intersect: isIntersect
+    });
+    return this;
+  }
+  through(intersectTable, subquery) {
+    let targetTable;
+    if (intersectTable.table1 === this._table) {
+      targetTable = intersectTable.table2;
+    } else if (intersectTable.table2 === this._table) {
+      targetTable = intersectTable.table1;
+    } else {
+      throw new Error(
+        `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
+      );
+    }
+    const collector = new FilterCollector(targetTable);
+    subquery(collector);
+    const pkName = this._table.getPrimaryKey().property.name;
+    const targetPkName = targetTable.getPrimaryKey().property.name;
+    const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
+    const intersectCollector = new FilterCollector(stubTable);
+    intersectCollector._filters.push(...collector._filters);
+    const targetAlias = `auto_link_${++this._linkAlias.value}`;
+    const intersectAlias = `auto_link_${++this._linkAlias.value}`;
+    this._links.push({
+      name: targetTable.logicalName,
+      from: targetPkName,
+      to: targetPkName,
+      alias: targetAlias,
+      linkType: "inner",
+      builder: collector
+    });
+    this._links.push({
+      name: intersectTable.name,
+      from: pkName,
+      to: pkName,
+      alias: intersectAlias,
+      linkType: "inner",
+      builder: intersectCollector,
+      intersect: true
+    });
+    return this;
+  }
+  top(n) {
+    this._top = n;
+    return this;
+  }
+  orderby(...args) {
+    if (typeof args[0] === "function") {
+      const result = args[0](this._aliasProxy);
+      const name = typeof result === "string" ? result : result.toString();
+      const dir = args[1] ?? "asc";
+      this._orders.push({ attribute: name, descending: dir === "desc" });
+    } else {
+      const entityname = args[0];
+      const attribute = args[1];
+      const direction = args[2];
+      this._orders.push({ attribute, entityname, descending: direction === "desc" });
+    }
+    return this;
+  }
+  toXml() {
+    const lines = [];
+    const fetchAttrs = [`version="1.0"`, `mapping="logical"`];
+    if (this._top !== void 0) fetchAttrs.push(`top='${this._top}'`);
+    fetchAttrs.push(`aggregate="true"`);
+    if (this._useRawOrderBy) fetchAttrs.push(`useraworderby="true"`);
+    if (this._lateMaterialize) fetchAttrs.push(`latematerialize="true"`);
+    if (this._aggregateLimit !== void 0) fetchAttrs.push(`aggregatelimit='${this._aggregateLimit}'`);
+    if (this._datasource) fetchAttrs.push(`datasource='${this._datasource}'`);
+    if (this._options) fetchAttrs.push(`options='${this._options}'`);
+    lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
+    lines.push(`  <entity name="${this._table.logicalName}">`);
+    for (const attr of this._getEffectiveAttributes()) {
+      const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
+      if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
+      if (attr.groupby) attrParts.push(`groupby='true'`);
+      if (attr.dategrouping) attrParts.push(`dategrouping='${attr.dategrouping}'`);
+      if (attr.distinct) attrParts.push(`distinct='true'`);
+      if (attr.rowaggregate) attrParts.push(`rowaggregate='${attr.rowaggregate}'`);
+      lines.push(`    <attribute ${attrParts.join(" ")} />`);
+    }
+    for (const order of this._orders) {
+      const parts = [];
+      if (order.entityname) parts.push(`entityname='${order.entityname}'`);
+      parts.push(`attribute='${order.attribute}'`);
+      if (order.descending) parts.push(`descending='true'`);
+      lines.push(`    <order ${parts.join(" ")} />`);
+    }
+    if (this._filters.length > 0) {
+      lines.push(`    <filter type="and">`);
+      for (const c of this._filters) {
+        lines.push(`      ${c}`);
+      }
+      lines.push(`    </filter>`);
+    }
+    for (const link of this._links) {
+      lines.push(...this._renderLinkEntity(link, "    "));
+    }
+    lines.push(`  </entity>`);
+    lines.push(`</fetch>`);
+    return lines.join("\n");
+  }
+  toString() {
+    return `fetchXml=${encodeURIComponent(this.toXml())}`;
+  }
+  async execute(options) {
+    if (options?.datasource) this._datasource = options.datasource;
+    if (options?.lateMaterialize) this._lateMaterialize = true;
+    if (options?.aggregateLimit !== void 0) this._aggregateLimit = options.aggregateLimit;
+    if (options?.useRawOrderBy) this._useRawOrderBy = true;
+    if (options?.options) this._options = options.options;
+    const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+    const aliasInfo = this._buildAliasInfo();
+    if (aliasInfo.size > 0) {
+      return raw.map((v) => {
+        const result = {};
+        for (const [alias, info] of aliasInfo) {
+          if (info.name in v) {
+            result[alias] = info.transform(v[info.name]);
+          } else {
+            result[alias] = info.getDefault();
+          }
+        }
+        result[Etag] = v["@odata.etag"];
+        return result;
+      });
+    }
+    return raw.map((v) => {
+      const r = this._table.transformValueFromDataverse(v);
+      return r;
+    });
+  }
+  _buildAliasInfo() {
+    const map = /* @__PURE__ */ new Map();
+    this._collectAliases(this, map);
+    return map;
+  }
+  _collectAliases(builder, map) {
+    for (const attr of builder._getEffectiveAttributes()) {
+      const fields = builder._table.fields;
+      const entry = Object.entries(fields).find(
+        ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name
+      );
+      if (entry) {
+        const fieldDef = entry[1];
+        const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+        map.set(attr.alias, {
+          transform: (val) => fieldDef.transformValueFromDataverse(val),
+          getDefault: () => fieldDef.getDefault?.(),
+          name: dataverseName
+        });
+      } else {
+        map.set(attr.alias, {
+          transform: (val) => val,
+          getDefault: () => void 0,
+          name: attr.name
+        });
+      }
+    }
+    for (const link of builder._links) {
+      if (!(link.builder instanceof FilterCollector)) {
+        if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
+          const eb = link.builder;
+          this._collectAliasesFromBuilder(eb, map);
+        }
+      }
+    }
+  }
+  static _isFilterOnlyLinkType(linkType) {
+    return linkType === "any" || linkType === "not any" || linkType === "all" || linkType === "not all" || linkType === "exists" || linkType === "in";
+  }
+  _renderLinkEntity(link, indent) {
+    const lines = [];
+    const linkAttrs = [
+      `name="${link.name}"`,
+      `from="${link.from}"`,
+      `to="${link.to}"`,
+      `alias="${link.alias}"`,
+      `link-type="${link.linkType}"`
+    ];
+    if (link.intersect) linkAttrs.push(`intersect="true"`);
+    lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
+    const childIndent = `${indent}  `;
+    const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
+    const builderFilters = link.builder._filters ?? [];
+    if (builderFilters.length > 0) {
+      lines.push(`${childIndent}<filter type="and">`);
+      for (const c of builderFilters) {
+        lines.push(`${childIndent}  ${c}`);
+      }
+      lines.push(`${childIndent}</filter>`);
+    }
+    if (!filterOnly) {
+      const eb = link.builder;
+      for (const nestedAttr of eb._getEffectiveAttributes()) {
+        const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
+        if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
+        if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
+        if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
+        if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
+        if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
+        lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
+      }
+      for (const order of eb._orders) {
+        const parts = [`attribute='${order.attribute}'`];
+        if (order.descending) parts.push(`descending='true'`);
+        lines.push(`${childIndent}<order ${parts.join(" ")} />`);
+      }
+    }
+    if (!(link.builder instanceof FilterCollector)) {
+      const eb = link.builder;
+      for (const nestedLink of eb._links) {
+        lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+      }
+    }
+    lines.push(`${indent}</link-entity>`);
+    return lines;
+  }
+  _collectAliasesFromBuilder(builder, map) {
+    for (const attr of builder._getEffectiveAttributes()) {
+      const fields = builder._table.fields;
+      const entry = Object.entries(fields).find(
+        ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name
+      );
+      if (entry) {
+        const fieldDef = entry[1];
+        const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+        map.set(attr.alias, {
+          transform: (val) => fieldDef.transformValueFromDataverse(val),
+          getDefault: () => fieldDef.getDefault?.(),
+          name: dataverseName
+        });
+      } else {
+        map.set(attr.alias, {
+          transform: (val) => val,
+          getDefault: () => void 0,
+          name: attr.name
+        });
+      }
+    }
+    for (const link of builder._links) {
+      if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
+        this._collectAliasesFromBuilder(link.builder, map);
+      }
+    }
+  }
+}
+class EntityQueryBuilder {
+  _linkAlias;
+  _table;
+  _attributes = [];
+  _links = [];
+  _orders = [];
+  _filters = [];
+  _isDistinct = false;
+  _proxy;
+  _top;
+  _isAggregate = false;
+  _useRawOrderBy = false;
+  _lateMaterialize = false;
+  _aggregateLimit;
+  _datasource;
+  _options;
   constructor(table, _linkAlias) {
     this._table = table;
     this._linkAlias = _linkAlias ?? { value: 0 };
@@ -2602,22 +2966,10 @@ class EntityQueryBuilder {
   _buildProxy() {
     const proxy = {};
     for (const [key, prop] of Object.entries(this._table.fields)) {
-      proxy[key] = prop.fromDataverseName ?? prop.name;
+      proxy[key] = new FieldRef(prop.fromDataverseName ?? prop.name, prop);
     }
     return proxy;
   }
-  /**
-   * Selects specific fields to include in the FetchXML query.
-   * The result type is narrowed to only include selected fields.
-   * When this method is not called, all value/lookupId/file fields
-   * are automatically included via `_getEffectiveAttributes()`.
-   *
-   * Use `apply()` instead for aggregate queries.
-   *
-   * @example
-   * fetchXml(contactDataverseTable)
-   *   .select(f => ({ name: f.name, email: f.email }))
-   */
   select(selector) {
     if (this._isAggregate) throw new Error("select() is not supported after apply()");
     const fieldsMock = {};
@@ -2631,47 +2983,28 @@ class EntityQueryBuilder {
     }
     return this;
   }
-  /**
-   * Adds grouping and aggregation to the FetchXML query.
-   * The callback receives a field proxy and must return a record where:
-   * - Values created with `groupby()` define grouping fields
-   * - Values created with `sum()`, `average()`, `min()`, `max()`, `count()` define aggregations
-   *
-   * Record keys become the alias names in the response.
-   *
-   * @example
-   * fetchXml(Account).apply(v => ({
-   *   city: groupby(v.city),
-   *   total: sum(v.revenue),
-   *   cnt: count(),
-   * }))
-   */
   apply(expr) {
-    this._isAggregate = true;
     const result = expr(this._proxy);
+    const initialAttributes = [];
     for (const [alias, value] of Object.entries(result)) {
       if (value instanceof GroupByExpr) {
-        this._attributes.push({ name: value.field, alias, groupby: true });
-      } else if (value instanceof Aggregation && value.field) {
-        this._attributes.push({ name: value.field, alias, aggregate: value.operation });
+        initialAttributes.push({ name: value.field, alias, groupby: true });
+      } else if (value instanceof Aggregation) {
+        const fieldName = value.field ? value.field.toString() : this._table.getPrimaryKey().property.name;
+        initialAttributes.push({ name: fieldName, alias, aggregate: value.operation });
       }
     }
-    return this;
+    const aggregateQuery = new FetchXmlAggregateQuery(
+      this._table,
+      initialAttributes,
+      this._linkAlias,
+      this._filters
+    );
+    if (this._datasource) aggregateQuery["_datasource"] = this._datasource;
+    if (this._options) aggregateQuery["_options"] = this._options;
+    return aggregateQuery;
   }
-  /**
-   * Adds a filter condition to the FetchXML query.
-   * Accepts a raw filter string or a callback that receives a field proxy.
-   * Multiple `where()` calls are combined with AND.
-   *
-   * @example
-   * // With typed filter function
-   * fetchXml(contactDataverseTable).where(f => eq(f.status, 1))
-   *
-   * @example
-   * // Raw filter string
-   * fetchXml(contactDataverseTable).where(eq("statuscode", "1"))
-   */
-  where(filter) {
+  filter(filter) {
     let str;
     if (filter instanceof FilterExpr) {
       str = filter.toFetchXml();
@@ -2684,49 +3017,38 @@ class EntityQueryBuilder {
     this._filters.push(str);
     return this;
   }
-  /**
-   * Adds a link-entity join to another table. The result type merges the
-   * joined entity's selected fields.
-   *
-   * For filter-only link types (`any`, `not any`, `all`, `not all`,
-   * `exists`, `in`), only filters are rendered inside `<link-entity>`;
-   * `<attribute>` and `<order>` elements are skipped.
-   *
-   * @example
-   * fetchXml(contactDataverseTable)
-   *   .select(f => ({ name: f.name }))
-   *   .join("inner", accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
-   *     q => q.select(a => ({ accountName: a.name })))
-   */
   join(linkType, table, from, to, subquery, intersect) {
-    const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias);
-    subquery(nestedBuilder);
-    const fromFieldName = table.fields[from].name;
-    const toFieldName = this._table.fields[to].name;
-    const autoAlias = `auto_link_${++this._linkAlias.value}`;
-    const isIntersect = intersect ?? table.intersect === true;
-    this._links.push({
-      name: table.logicalName,
-      from: fromFieldName,
-      to: toFieldName,
-      alias: autoAlias,
-      linkType,
-      builder: nestedBuilder,
-      intersect: isIntersect
-    });
+    const isFilterOnly = EntityQueryBuilder._isFilterOnlyLinkType(linkType);
+    if (isFilterOnly) {
+      const collector = new FilterCollector(table);
+      subquery(collector);
+      const fromFieldName = table.fields[from].name;
+      const toFieldName = this._table.fields[to].name;
+      this._links.push({
+        name: table.logicalName,
+        from: fromFieldName,
+        to: toFieldName,
+        alias: `auto_link_${++this._linkAlias.value}`,
+        linkType,
+        builder: collector,
+        intersect: intersect ?? table.intersect === true
+      });
+    } else {
+      const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias);
+      subquery(nestedBuilder);
+      const fromFieldName = table.fields[from].name;
+      const toFieldName = this._table.fields[to].name;
+      this._links.push({
+        name: table.logicalName,
+        from: fromFieldName,
+        to: toFieldName,
+        alias: `auto_link_${++this._linkAlias.value}`,
+        linkType,
+        builder: nestedBuilder,
+        intersect: intersect ?? table.intersect === true
+      });
+    }
     return this;
-  }
-  /**
-   * Shorthand for `join("inner", ...)`. Adds an inner link-entity join.
-   *
-   * @example
-   * fetchXml(contactDataverseTable)
-   *   .select(f => ({ name: f.name }))
-   *   .innerJoin(accountDataverseTable, a => a.accountid, c => c.parentcustomerid,
-   *     q => q.select(a => ({ accountName: a.name })))
-   */
-  innerJoin(table, from, to, subquery, intersect) {
-    return this.join("inner", table, from, to, subquery, intersect);
   }
   through(intersectTable, subquery) {
     let targetTable;
@@ -2764,19 +3086,18 @@ class EntityQueryBuilder {
     });
     return this;
   }
-  /** Enables distinct (deduplicated) results. */
   distinct() {
     this._isDistinct = true;
     return this;
   }
-  /** Limits the number of returned records. */
   top(n) {
     this._top = n;
     return this;
   }
   orderby(...args) {
     if (typeof args[0] === "function") {
-      const name = args[0](this._proxy);
+      const result = args[0](this._proxy);
+      const name = typeof result === "string" ? result : result.toString();
       const dir = args[1] ?? "asc";
       this._orders.push({ attribute: name, descending: dir === "desc" });
     } else {
@@ -2787,19 +3108,6 @@ class EntityQueryBuilder {
     }
     return this;
   }
-  /**
-   * Returns the full FetchXML string.
-   *
-   * @example
-   * const xml = fetchXml(contactDataverseTable)
-   *   .select(f => ({ name: f.name }))
-   *   .toXml();
-   * // <fetch version="1.0" mapping="logical">
-   * //   <entity name="contact">
-   * //     <attribute name="fullname" alias="name" />
-   * //   </entity>
-   * // </fetch>
-   */
   toXml() {
     const lines = [];
     const fetchAttrs = [`version="1.0"`, `mapping="logical"`];
@@ -2858,16 +3166,18 @@ class EntityQueryBuilder {
     if (link.intersect) linkAttrs.push(`intersect="true"`);
     lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
     const childIndent = `${indent}  `;
-    const filterOnly = EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
-    if (link.builder._filters.length > 0) {
+    const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
+    const builderFilters = link.builder._filters ?? [];
+    if (builderFilters.length > 0) {
       lines.push(`${childIndent}<filter type="and">`);
-      for (const c of link.builder._filters) {
+      for (const c of builderFilters) {
         lines.push(`${childIndent}  ${c}`);
       }
       lines.push(`${childIndent}</filter>`);
     }
     if (!filterOnly) {
-      for (const nestedAttr of link.builder._getEffectiveAttributes()) {
+      const eb = link.builder;
+      for (const nestedAttr of eb._getEffectiveAttributes()) {
         const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
         if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
         if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
@@ -2876,49 +3186,26 @@ class EntityQueryBuilder {
         if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
         lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
       }
-      for (const order of link.builder._orders) {
+      const ebOrders = eb._orders ?? [];
+      for (const order of ebOrders) {
         const parts = [`attribute='${order.attribute}'`];
         if (order.descending) parts.push(`descending='true'`);
         lines.push(`${childIndent}<order ${parts.join(" ")} />`);
       }
     }
-    for (const nestedLink of link.builder._links) {
-      lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+    if (!(link.builder instanceof FilterCollector)) {
+      const eb = link.builder;
+      const ebLinks = eb._links ?? [];
+      for (const nestedLink of ebLinks) {
+        lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+      }
     }
     lines.push(`${indent}</link-entity>`);
     return lines;
   }
-  /**
-   * Returns the URL-encoded query string for use in the Dataverse API.
-   *
-   * @example
-   * fetchXml(contactDataverseTable).select(f => ({ name: f.name })).toString()
-   * // "fetchXml=%3Cfetch%20version%3D%221.0%22..."
-   */
   toString() {
     return `fetchXml=${encodeURIComponent(this.toXml())}`;
   }
-  /**
-   * Executes the FetchXML query against Dataverse and returns the parsed results.
-   *
-   * Each result object includes an `Etag` symbol property (import from
-   * `dataverse-schema`) holding the `@odata.etag` value for optimistic
-   * concurrency. When `select()` is not called, value/lookupId/file fields
-   * are auto-included; missing API fields fall back to the field default.
-   *
-   * @example
-   * const contacts = await fetchXml(contactDataverseTable)
-   *   .select(f => ({ name: f.name, email: f.email }))
-   *   .where(f => eq(f.status, 1))
-   *   .execute();
-   * // contacts: Array<{ name: string; email: string }>
-   *
-   * @example
-   * // With optional execute parameters
-   * const contacts = await fetchXml(contactDataverseTable)
-   *   .select(f => ({ name: f.name }))
-   *   .execute({ useRawOrderBy: true, aggregateLimit: 5000 });
-   */
   async execute(options) {
     if (options?.datasource) this._datasource = options.datasource;
     if (options?.lateMaterialize) this._lateMaterialize = true;
@@ -2984,4 +3271,4 @@ function fetchXml(table) {
   return new EntityQueryBuilder(table);
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FileField, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, collection, collectionIds, compare, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, buildProxyForTable, collection, collectionIds, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };

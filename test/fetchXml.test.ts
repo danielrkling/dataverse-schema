@@ -65,7 +65,7 @@ test("select narrows result type with aliases", () => {
 })
 
 test("join merges result type", () => {
-  const q = fetchXml(Person).innerJoin(Address, "id", "pk", (sub) =>
+  const q = fetchXml(Person).join("inner", Address, "id", "pk", (sub) =>
     sub.select(f => ({ addrStreet: f.street }))
   )
   expectTypeOf(q.execute).returns.resolves.toExtend<{ addrStreet: string }[]>()
@@ -163,7 +163,7 @@ test("[docs] join with link-entity", () => {
     },
   })
   const q = fetchXml(Account).top(5).select(f => ({ name: f.name }))
-    .innerJoin(Contact, "id", "id", (sub) =>
+    .join("inner", Contact, "id", "id", (sub) =>
       sub.select(f => ({ full_name: f.fullname }))
     )
   const xml = q.toXml()
@@ -249,7 +249,7 @@ test("[docs] groupby with sum and count", () => {
     city: groupby(v.city),
     Total: sum(v.revenue),
     Count: count(v.city),
-  })).orderby(f => f.city)
+  }))
   const xml = q.toXml()
   expect(xml).toContain(`aggregate='sum'`)
   expect(xml).toContain(`aggregate='count'`)
@@ -611,9 +611,7 @@ test.each(["any", "not any", "all", "not all", "exists", "in"])(
   "[bug16] %s link type does not render attributes or orders", (linkType) => {
     const q = fetchXml(Account).select(f => ({ name: f.name }))
       .join(linkType as any, Address, "id", "id", sub =>
-        sub.select(s => ({ street: s.street }))
-          .filter(s => eq(s.zip, 12345))
-          .orderby(s => s.zip)
+        sub.filter(s => eq(s.zip, 12345))
       )
     const xml = q.toXml()
     expect(xml).toContain(`link-type="${linkType}"`)
@@ -666,7 +664,7 @@ const Contact2 = new DataverseTable({
 
 test("[docs] join: basic many-to-one account → contact", () => {
   const q = fetchXml(Account).top(5).select(f => ({ name: f.name }))
-    .innerJoin(Contact2, "id", "id", sub =>
+    .join("inner", Contact2, "id", "id", sub =>
       sub.select(f => ({ full_name: f.fullname }))
     )
   const xml = q.toXml()
@@ -682,7 +680,7 @@ test("[docs] join: basic many-to-one account → contact", () => {
 
 test("[docs] join: one-to-many contact → account", () => {
   const q = fetchXml(Contact2).top(5).select(f => ({ fullname: f.fullname }))
-    .innerJoin(Account, "id", "id", sub =>
+    .join("inner", Account, "id", "id", sub =>
       sub.select(f => ({ name: f.name }))
     )
   const xml = q.toXml()

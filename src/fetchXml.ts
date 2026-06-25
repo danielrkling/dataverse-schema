@@ -52,8 +52,25 @@ type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any
     : never
 }
 
+type ApplyAliasProxy<R extends Record<string, any>> = {
+  [K in keyof R]: FieldRef<R[K], K extends string ? K : never>
+}
+
+type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any>> = {
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): SubJoinBuilder<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult>
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>
+    toXml(): string
+    toString(): string
+}
+
+type FilterOnlyLinkType = 'any' | 'not any' | 'all' | 'not all' | 'exists' | 'in'
+
+type NormalLinkType = Exclude<FetchLinkType, FilterOnlyLinkType>
+
 export class FilterCollector<TProps extends GenericProperties = any> {
-    _filters: string[] = []
+    protected _filters: string[] = []
     private _proxy: FieldProxy<TProps>
 
     constructor(table: DataverseTable<TProps>) {
@@ -99,7 +116,8 @@ export class FetchXmlAggregateQuery<
         builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
         intersect?: boolean;
     }> = [];
-    _filters: string[] = [];
+    protected _filters: string[] = [];
+    private _aliasProxy: Record<string, string> = {};
     private _proxy: FieldProxy<TProps>;
     private _top?: number;
     private _useRawOrderBy: boolean = false;
@@ -109,11 +127,15 @@ export class FetchXmlAggregateQuery<
     private _datasource?: string;
     private _options?: string;
 
-    constructor(table: DataverseTable<TProps>, initialAttributes?: AttrDef[], _linkAlias?: { value: number }) {
+    constructor(table: DataverseTable<TProps>, initialAttributes?: AttrDef[], _linkAlias?: { value: number }, initialFilters?: string[]) {
         this._table = table;
         this._linkAlias = _linkAlias ?? { value: 0 };
         this._proxy = this._buildProxy();
         if (initialAttributes) this._attributes = initialAttributes;
+        if (initialFilters) this._filters = [...initialFilters];
+        for (const attr of (initialAttributes ?? [])) {
+            this._aliasProxy[attr.alias] = attr.alias;
+        }
     }
 
     private _buildProxy(): FieldProxy<TProps> {
@@ -151,11 +173,11 @@ export class FetchXmlAggregateQuery<
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
-        subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
+        subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => void,
         intersect?: boolean,
     ): this {
-        const collector = new FilterCollector<TDataverseTable["fields"]>(table);
-        subquery(collector);
+        const nested = new EntityQueryBuilder<TDataverseTable["fields"], {}>(table, this._linkAlias);
+        subquery(nested);
 
         const fromFieldName = table.fields[from].name;
         const toFieldName = this._table.fields[to].name;
@@ -168,7 +190,7 @@ export class FetchXmlAggregateQuery<
             to: toFieldName,
             alias: autoAlias,
             linkType: linkType,
-            builder: collector,
+            builder: nested,
             intersect: isIntersect,
         });
 
@@ -207,7 +229,7 @@ export class FetchXmlAggregateQuery<
 
         const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
         const intersectCollector = new FilterCollector(stubTable);
-        intersectCollector._filters.push(...collector._filters);
+        (intersectCollector as any)._filters.push(...(collector as any)._filters);
 
         const targetAlias = `auto_link_${++this._linkAlias.value}`;
 
@@ -240,13 +262,13 @@ export class FetchXmlAggregateQuery<
     }
 
     public orderby(
-        fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>,
+        fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>,
         direction?: 'asc' | 'desc'
     ): this;
     public orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
     public orderby(...args: any[]): this {
         if (typeof args[0] === 'function') {
-            const result = args[0](this._proxy);
+            const result = args[0](this._aliasProxy as any);
             const name = typeof result === "string" ? result : result.toString();
             const dir = (args[1] as 'asc' | 'desc' | undefined) ?? 'asc';
             this._orders.push({ attribute: name, descending: dir === 'desc' });
@@ -413,9 +435,10 @@ export class FetchXmlAggregateQuery<
         const childIndent = `${indent}  `;
         const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
 
-        if (link.builder._filters.length > 0) {
+        const builderFilters: string[] = (link.builder as any)._filters ?? [];
+        if (builderFilters.length > 0) {
             lines.push(`${childIndent}<filter type="and">`);
-            for (const c of link.builder._filters) {
+            for (const c of builderFilters) {
                 lines.push(`${childIndent}  ${c}`);
             }
             lines.push(`${childIndent}</filter>`);
@@ -423,7 +446,7 @@ export class FetchXmlAggregateQuery<
 
         if (!filterOnly) {
             const eb = link.builder as EntityQueryBuilder<any, any>;
-            for (const nestedAttr of eb._getEffectiveAttributes()) {
+            for (const nestedAttr of (eb as any)._getEffectiveAttributes()) {
                 const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
                 if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
                 if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
@@ -433,7 +456,7 @@ export class FetchXmlAggregateQuery<
                 lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
             }
 
-            for (const order of eb._orders) {
+            for (const order of (eb as any)._orders) {
                 const parts = [`attribute='${order.attribute}'`];
                 if (order.descending) parts.push(`descending='true'`);
                 lines.push(`${childIndent}<order ${parts.join(" ")} />`);
@@ -442,7 +465,7 @@ export class FetchXmlAggregateQuery<
 
         if (!(link.builder instanceof FilterCollector)) {
             const eb = link.builder as EntityQueryBuilder<any, any>;
-            for (const nestedLink of eb._links) {
+            for (const nestedLink of (eb as any)._links) {
                 lines.push(...this._renderLinkEntity(nestedLink, childIndent));
             }
         }
@@ -455,8 +478,8 @@ export class FetchXmlAggregateQuery<
         builder: EntityQueryBuilder<any, any>,
         map: Map<string, AliasInfo>,
     ): void {
-        for (const attr of builder._getEffectiveAttributes()) {
-            const fields = builder._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any; getDefault?: () => any }>;
+        for (const attr of (builder as any)._getEffectiveAttributes()) {
+            const fields = (builder as any)._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any; getDefault?: () => any }>;
             const entry = Object.entries(fields).find(
                 ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
             );
@@ -476,9 +499,9 @@ export class FetchXmlAggregateQuery<
                 });
             }
         }
-        for (const link of builder._links) {
+        for (const link of (builder as any)._links) {
             if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
-                this._collectAliasesFromBuilder(link.builder, map);
+                this._collectAliasesFromBuilder(link.builder as EntityQueryBuilder<any, any>, map);
             }
         }
     }
@@ -488,20 +511,20 @@ export class EntityQueryBuilder<
     TProps extends GenericProperties,
     TResult extends Record<string, any> = {},
 > {
-    _linkAlias: { value: number };
-    _table: DataverseTable<TProps>;
-    _attributes: AttrDef[] = [];
-    _links: Array<{
+    protected _linkAlias: { value: number };
+    private _table: DataverseTable<TProps>;
+    private _attributes: AttrDef[] = [];
+    protected _links: Array<{
         name: string;
         alias: string;
         from: string;
         to: string;
         linkType: FetchLinkType;
-        builder: EntityQueryBuilder<any, any>;
+        builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
         intersect?: boolean;
     }> = [];
-    _orders: OrderDef[] = [];
-    _filters: string[] = [];
+    protected _orders: OrderDef[] = [];
+    protected _filters: string[] = [];
     private _isDistinct: boolean = false;
     private _proxy: FieldProxy<TProps>;
     private _top?: number;
@@ -518,7 +541,7 @@ export class EntityQueryBuilder<
         this._proxy = this._buildProxy();
     }
 
-    _getEffectiveAttributes(): AttrDef[] {
+    private _getEffectiveAttributes(): AttrDef[] {
         if (this._attributes.length > 0) return this._attributes;
         const attrs: AttrDef[] = [];
         for (const [key, prop] of Object.entries(this._table.fields)) {
@@ -573,9 +596,8 @@ export class EntityQueryBuilder<
             this._table,
             initialAttributes,
             this._linkAlias,
+            this._filters,
         );
-
-        aggregateQuery._filters.push(...this._filters);
 
         if (this._datasource) aggregateQuery["_datasource"] = this._datasource;
         if (this._options) aggregateQuery["_options"] = this._options;
@@ -599,55 +621,61 @@ export class EntityQueryBuilder<
         return this;
     }
 
-    public join<
-        TDataverseTable extends DataverseTable<any>,
-        TFrom extends keyof TDataverseTable["fields"],
-        TTo extends keyof TProps,
-        TJoinResult extends Record<string, any>,
-    >(
+    public join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(
+        linkType: FilterOnlyLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
+        intersect?: boolean,
+    ): EntityQueryBuilder<TProps, TResult>
+    public join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
+        linkType: NormalLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
+        intersect?: boolean,
+    ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>
+    public join(
         linkType: FetchLinkType,
-        table: TDataverseTable,
-        from: TFrom,
-        to: TTo,
-        subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>,
+        table: DataverseTable<any>,
+        from: string,
+        to: string,
+        subquery: (q: any) => any,
         intersect?: boolean,
-    ): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>> {
-        const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias);
-        subquery(nestedBuilder);
-
-        const fromFieldName = table.fields[from].name;
-        const toFieldName = this._table.fields[to].name;
-
-        const autoAlias = `auto_link_${++this._linkAlias.value}`;
-
-        const isIntersect = intersect ?? ((table as any).intersect === true);
-
-        this._links.push({
-            name: table.logicalName,
-            from: fromFieldName,
-            to: toFieldName,
-            alias: autoAlias,
-            linkType: linkType,
-            builder: nestedBuilder,
-            intersect: isIntersect,
-        });
-
-        return this as any;
-    }
-
-    public innerJoin<
-        TDataverseTable extends DataverseTable<any>,
-        TFrom extends keyof TDataverseTable["fields"],
-        TTo extends keyof TProps,
-        TJoinResult extends Record<string, any>,
-    >(
-        table: TDataverseTable,
-        from: TFrom,
-        to: TTo,
-        subquery: (q: EntityQueryBuilder<TDataverseTable["fields"], {}>) => EntityQueryBuilder<TDataverseTable["fields"], TJoinResult>,
-        intersect?: boolean,
-    ) {
-        return this.join("inner", table, from, to, subquery, intersect);
+    ): any {
+        const isFilterOnly = EntityQueryBuilder._isFilterOnlyLinkType(linkType as FetchLinkType)
+        if (isFilterOnly) {
+            const collector = new FilterCollector(table)
+            subquery(collector)
+            const fromFieldName = table.fields[from].name;
+            const toFieldName = this._table.fields[to].name;
+            this._links.push({
+                name: table.logicalName,
+                from: fromFieldName,
+                to: toFieldName,
+                alias: `auto_link_${++this._linkAlias.value}`,
+                linkType,
+                builder: collector,
+                intersect: intersect ?? ((table as any).intersect === true),
+            });
+        } else {
+            const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias)
+            subquery(nestedBuilder)
+            const fromFieldName = table.fields[from].name;
+            const toFieldName = this._table.fields[to].name;
+            this._links.push({
+                name: table.logicalName,
+                from: fromFieldName,
+                to: toFieldName,
+                alias: `auto_link_${++this._linkAlias.value}`,
+                linkType,
+                builder: nestedBuilder,
+                intersect: intersect ?? ((table as any).intersect === true),
+            });
+        }
+        return this;
     }
 
     public through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
@@ -682,7 +710,7 @@ export class EntityQueryBuilder<
 
         const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
         const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
-        intersectBuilder._links.push({
+        (intersectBuilder as any)._links.push({
             name: targetTable.logicalName,
             from: targetPkName,
             to: targetPkName,
@@ -789,14 +817,14 @@ export class EntityQueryBuilder<
         return linkType === "any" || linkType === "not any" || linkType === "all" || linkType === "not all" || linkType === "exists" || linkType === "in";
     }
 
-    _renderLinkEntity(
+    private _renderLinkEntity(
         link: {
             name: string;
             alias: string;
             from: string;
             to: string;
             linkType: FetchLinkType;
-            builder: EntityQueryBuilder<any, any>;
+            builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
             intersect?: boolean;
         },
         indent: string,
@@ -814,18 +842,20 @@ export class EntityQueryBuilder<
         lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
 
         const childIndent = `${indent}  `;
-        const filterOnly = EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
+        const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
 
-        if (link.builder._filters.length > 0) {
+        const builderFilters: string[] = (link.builder as any)._filters ?? [];
+        if (builderFilters.length > 0) {
             lines.push(`${childIndent}<filter type="and">`);
-            for (const c of link.builder._filters) {
+            for (const c of builderFilters) {
                 lines.push(`${childIndent}  ${c}`);
             }
             lines.push(`${childIndent}</filter>`);
         }
 
         if (!filterOnly) {
-            for (const nestedAttr of link.builder._getEffectiveAttributes()) {
+            const eb = link.builder as EntityQueryBuilder<any, any>;
+            for (const nestedAttr of eb._getEffectiveAttributes()) {
                 const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
                 if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
                 if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
@@ -835,15 +865,20 @@ export class EntityQueryBuilder<
                 lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
             }
 
-            for (const order of link.builder._orders) {
+            const ebOrders: OrderDef[] = (eb as any)._orders ?? [];
+            for (const order of ebOrders) {
                 const parts = [`attribute='${order.attribute}'`];
                 if (order.descending) parts.push(`descending='true'`);
                 lines.push(`${childIndent}<order ${parts.join(" ")} />`);
             }
         }
 
-        for (const nestedLink of link.builder._links) {
-            lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+        if (!(link.builder instanceof FilterCollector)) {
+            const eb = link.builder as EntityQueryBuilder<any, any>;
+            const ebLinks: any[] = (eb as any)._links ?? [];
+            for (const nestedLink of ebLinks) {
+                lines.push(...this._renderLinkEntity(nestedLink, childIndent));
+            }
         }
 
         lines.push(`${indent}</link-entity>`);
@@ -888,7 +923,7 @@ export class EntityQueryBuilder<
         return map;
     }
 
-    _collectAliases(
+    private _collectAliases(
         builder: EntityQueryBuilder<any, any>,
         map: Map<string, AliasInfo>,
     ): void {
@@ -915,7 +950,7 @@ export class EntityQueryBuilder<
         }
         for (const link of builder._links) {
             if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
-                this._collectAliases(link.builder, map);
+                this._collectAliases(link.builder as EntityQueryBuilder<any, any>, map);
             }
         }
     }
