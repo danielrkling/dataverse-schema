@@ -2,8 +2,8 @@ import { expect, test } from "vitest"
 import {
   select, orderby, expand, and, or, not, eq, ne, gt, ge, lt, le,
   contains, startsWith, endsWith, isNull, isNotNull, isActive, isInactive,
-  asc, desc, keys, compare,
-  wrapString, isNonEmptyString,
+  asc, desc, keys,
+  wrapString, isNonEmptyString, FieldRef,
   Above, AboveOrEqual, Between, In, NotIn, Under, UnderOrEqual, NotUnder,
   On, OnOrAfter, OnOrBefore, NotBetween,
   Today, Tomorrow, Yesterday,
@@ -95,43 +95,43 @@ test("expand formats with filter and orderby", () => {
 // --- FilterExpr tests ---
 
 test("eq wraps field eq value", () => {
-  expect(eq("name", "John").toOdata()).toBe("(name eq 'John')")
+  expect(eq(new FieldRef("name"), "John").toOdata()).toBe("(name eq 'John')")
 })
 
 test("eq with number does not quote", () => {
-  expect(eq("age", 25).toOdata()).toBe("(age eq 25)")
+  expect(eq(new FieldRef("age"), 25).toOdata()).toBe("(age eq 25)")
 })
 
 test("eq with boolean does not quote", () => {
-  expect(eq("active", true).toOdata()).toBe("(active eq true)")
+  expect(eq(new FieldRef("active"), true).toOdata()).toBe("(active eq true)")
 })
 
 test("eq with null", () => {
-  expect(eq("field", null).toOdata()).toBe("(field eq null)")
+  expect(eq(new FieldRef("field"), null).toOdata()).toBe("(field eq null)")
 })
 
 test("ne formats correctly", () => {
-  expect(ne("name", "John").toOdata()).toBe("(name ne 'John')")
+  expect(ne(new FieldRef("name"), "John").toOdata()).toBe("(name ne 'John')")
 })
 
 test("gt formats correctly", () => {
-  expect(gt("age", 18).toOdata()).toBe("(age gt 18)")
+  expect(gt(new FieldRef("age"), 18).toOdata()).toBe("(age gt 18)")
 })
 
 test("ge formats correctly", () => {
-  expect(ge("age", 18).toOdata()).toBe("(age ge 18)")
+  expect(ge(new FieldRef("age"), 18).toOdata()).toBe("(age ge 18)")
 })
 
 test("lt formats correctly", () => {
-  expect(lt("age", 65).toOdata()).toBe("(age lt 65)")
+  expect(lt(new FieldRef("age"), 65).toOdata()).toBe("(age lt 65)")
 })
 
 test("le formats correctly", () => {
-  expect(le("age", 65).toOdata()).toBe("(age le 65)")
+  expect(le(new FieldRef("age"), 65).toOdata()).toBe("(age le 65)")
 })
 
 test("and joins multiple conditions", () => {
-  expect(and(gt("age", 20), eq("name", "John")).toOdata()).toBe("((age gt 20) and (name eq 'John'))")
+  expect(and(gt(new FieldRef("age"), 20), eq(new FieldRef("name"), "John")).toOdata()).toBe("((age gt 20) and (name eq 'John'))")
 })
 
 test("and returns empty for no conditions", () => {
@@ -139,11 +139,11 @@ test("and returns empty for no conditions", () => {
 })
 
 test("and handles single condition", () => {
-  expect(and(gt("age", 20)).toOdata()).toBe("((age gt 20))")
+  expect(and(gt(new FieldRef("age"), 20)).toOdata()).toBe("((age gt 20))")
 })
 
 test("or joins multiple conditions", () => {
-  expect(or(lt("age", 10), gt("age", 20)).toOdata()).toBe("((age lt 10) or (age gt 20))")
+  expect(or(lt(new FieldRef("age"), 10), gt(new FieldRef("age"), 20)).toOdata()).toBe("((age lt 10) or (age gt 20))")
 })
 
 test("or returns empty for no conditions", () => {
@@ -151,27 +151,27 @@ test("or returns empty for no conditions", () => {
 })
 
 test("not wraps condition", () => {
-  expect(not(eq("age", 20)).toOdata()).toBe("not((age eq 20))")
+  expect(not(eq(new FieldRef("age"), 20)).toOdata()).toBe("not((age eq 20))")
 })
 
 test("contains wraps field in OData contains", () => {
-  expect(contains("name", "ohn").toOdata()).toBe("contains(name,'ohn')")
+  expect(contains(new FieldRef("name"), "ohn").toOdata()).toBe("contains(name,'ohn')")
 })
 
 test("startsWith wraps field in OData startswith", () => {
-  expect(startsWith("name", "Jo").toOdata()).toBe("startswith(name,'Jo')")
+  expect(startsWith(new FieldRef("name"), "Jo").toOdata()).toBe("startswith(name,'Jo')")
 })
 
 test("endsWith wraps field in OData endswith", () => {
-  expect(endsWith("name", "hn").toOdata()).toBe("endswith(name,'hn')")
+  expect(endsWith(new FieldRef("name"), "hn").toOdata()).toBe("endswith(name,'hn')")
 })
 
 test("isNull formats correctly", () => {
-  expect(isNull("email").toOdata()).toBe("email eq null")
+  expect(isNull(new FieldRef("email")).toOdata()).toBe("email eq null")
 })
 
 test("isNotNull formats correctly", () => {
-  expect(isNotNull("email").toOdata()).toBe("email ne null")
+  expect(isNotNull(new FieldRef("email")).toOdata()).toBe("email ne null")
 })
 
 test("isActive returns statecode eq 0", () => {
@@ -182,16 +182,24 @@ test("isInactive returns statecode eq 1", () => {
   expect(isInactive().toOdata()).toBe("(statecode eq 1)")
 })
 
-test("compare compares two fields", () => {
-  expect(compare("modifiedon", "gt", "createdon").toOdata()).toBe("(modifiedon gt createdon)")
+test("eq with FieldRef value creates field-to-field comparison", () => {
+  expect(eq(new FieldRef("modifiedon"), new FieldRef("createdon")).toOdata()).toBe("(modifiedon eq createdon)")
+})
+
+test("ne with FieldRef value creates field-to-field comparison", () => {
+  expect(ne(new FieldRef("field1"), new FieldRef("field2")).toOdata()).toBe("(field1 ne field2)")
+})
+
+test("gt with FieldRef value creates field-to-field comparison", () => {
+  expect(gt(new FieldRef("field1"), new FieldRef("field2")).toOdata()).toBe("(field1 gt field2)")
 })
 
 test("and filters empty conditions", () => {
-  expect(and(eq("a", 1), "").toOdata()).toBe("((a eq 1))")
+  expect(and(eq(new FieldRef("a"), 1), "").toOdata()).toBe("((a eq 1))")
 })
 
 test("or filters empty conditions", () => {
-  expect(or(eq("a", 1), "").toOdata()).toBe("((a eq 1))")
+  expect(or(eq(new FieldRef("a"), 1), "").toOdata()).toBe("((a eq 1))")
 })
 
 // --- OData value helpers ---
@@ -219,153 +227,153 @@ test("keys encodes single quotes", () => {
 // --- Dataverse-specific filter operators ---
 
 test("Above", () => {
-  expect(Above("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.Above")
+  expect(Above(new FieldRef("field"), "value").toString()).toContain("Microsoft.Dynamics.CRM.Above")
 })
 
 test("AboveOrEqual", () => {
-  expect(AboveOrEqual("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.AboveOrEqual")
+  expect(AboveOrEqual(new FieldRef("field"), "value").toString()).toContain("Microsoft.Dynamics.CRM.AboveOrEqual")
 })
 
 test("Between", () => {
-  expect(Between("field", 10, 20).toString()).toContain("Microsoft.Dynamics.CRM.Between")
-  expect(Between("field", 10, 20).toString()).toContain("PropertyValues=[10,20]")
+  expect(Between(new FieldRef("field"), 10, 20).toString()).toContain("Microsoft.Dynamics.CRM.Between")
+  expect(Between(new FieldRef("field"), 10, 20).toString()).toContain("PropertyValues=[10,20]")
 })
 
 test("NotBetween", () => {
-  expect(NotBetween("field", 10, 20).toString()).toContain("Microsoft.Dynamics.CRM.NotBetween")
+  expect(NotBetween(new FieldRef("field"), 10, 20).toString()).toContain("Microsoft.Dynamics.CRM.NotBetween")
 })
 
 test("In", () => {
-  expect(In("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.In")
-  expect(In("field", ["a", "b"]).toString()).toContain("PropertyValues=['a','b']")
+  expect(In(new FieldRef("field"), ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.In")
+  expect(In(new FieldRef("field"), ["a", "b"]).toString()).toContain("PropertyValues=['a','b']")
 })
 
 test("NotIn", () => {
-  expect(NotIn("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.NotIn")
+  expect(NotIn(new FieldRef("field"), ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.NotIn")
 })
 
 test("ContainsValues", () => {
-  expect(ContainsValues("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.ContainsValues")
+  expect(ContainsValues(new FieldRef("field"), ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.ContainsValues")
 })
 
 test("DoesNotContainValues", () => {
-  expect(DoesNotContainValues("field", ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.DoesNotContainValues")
+  expect(DoesNotContainValues(new FieldRef("field"), ["a", "b"]).toString()).toContain("Microsoft.Dynamics.CRM.DoesNotContainValues")
 })
 
 test("Under", () => {
-  expect(Under("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.Under")
+  expect(Under(new FieldRef("field"), "value").toString()).toContain("Microsoft.Dynamics.CRM.Under")
 })
 
 test("UnderOrEqual", () => {
-  expect(UnderOrEqual("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.UnderOrEqual")
+  expect(UnderOrEqual(new FieldRef("field"), "value").toString()).toContain("Microsoft.Dynamics.CRM.UnderOrEqual")
 })
 
 test("NotUnder", () => {
-  expect(NotUnder("field", "value").toString()).toContain("Microsoft.Dynamics.CRM.NotUnder")
+  expect(NotUnder(new FieldRef("field"), "value").toString()).toContain("Microsoft.Dynamics.CRM.NotUnder")
 })
 
 test("On / OnOrAfter / OnOrBefore", () => {
-  expect(On("field", "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.On")
-  expect(OnOrAfter("field", "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.OnOrAfter")
-  expect(OnOrBefore("field", "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.OnOrBefore")
+  expect(On(new FieldRef("field"), "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.On")
+  expect(OnOrAfter(new FieldRef("field"), "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.OnOrAfter")
+  expect(OnOrBefore(new FieldRef("field"), "2024-01-01").toString()).toContain("Microsoft.Dynamics.CRM.OnOrBefore")
 })
 
 test("EqualUserId", () => {
-  expect(EqualUserId("ownerid").toString()).toContain("Microsoft.Dynamics.CRM.EqualUserId")
+  expect(EqualUserId(new FieldRef("ownerid")).toString()).toContain("Microsoft.Dynamics.CRM.EqualUserId")
 })
 
 test("EqualUserOrUserHierarchy", () => {
-  expect(EqualUserOrUserHierarchy("ownerid").toString()).toContain("Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy")
+  expect(EqualUserOrUserHierarchy(new FieldRef("ownerid")).toString()).toContain("Microsoft.Dynamics.CRM.EqualUserOrUserHierarchy")
 })
 
 test("EqualUserOrUserHierarchyAndTeams", () => {
-  expect(EqualUserOrUserHierarchyAndTeams("ownerid").toString()).toContain("EqualUserOrUserHierarchyAndTeams")
+  expect(EqualUserOrUserHierarchyAndTeams(new FieldRef("ownerid")).toString()).toContain("EqualUserOrUserHierarchyAndTeams")
 })
 
 test("EqualUserOrUserTeams", () => {
-  expect(EqualUserOrUserTeams("ownerid").toString()).toContain("EqualUserOrUserTeams")
+  expect(EqualUserOrUserTeams(new FieldRef("ownerid")).toString()).toContain("EqualUserOrUserTeams")
 })
 
 test("EqualUserLanguage", () => {
-  expect(EqualUserLanguage("language").toString()).toContain("EqualUserLanguage")
+  expect(EqualUserLanguage(new FieldRef("language")).toString()).toContain("EqualUserLanguage")
 })
 
 test("EqualBusinessId", () => {
-  expect(EqualBusinessId("businessunitid").toString()).toContain("EqualBusinessId")
+  expect(EqualBusinessId(new FieldRef("businessunitid")).toString()).toContain("EqualBusinessId")
 })
 
 test("NotEqualBusinessId", () => {
-  expect(NotEqualBusinessId("businessunitid").toString()).toContain("NotEqualBusinessId")
+  expect(NotEqualBusinessId(new FieldRef("businessunitid")).toString()).toContain("NotEqualBusinessId")
 })
 
 test("Today / Tomorrow / Yesterday", () => {
-  expect(Today("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Today")
-  expect(Tomorrow("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Tomorrow")
-  expect(Yesterday("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Yesterday")
+  expect(Today(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.Today")
+  expect(Tomorrow(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.Tomorrow")
+  expect(Yesterday(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.Yesterday")
 })
 
 test("Last7Days / Next7Days", () => {
-  expect(Last7Days("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Last7Days")
-  expect(Next7Days("createdon").toString()).toContain("Microsoft.Dynamics.CRM.Next7Days")
+  expect(Last7Days(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.Last7Days")
+  expect(Next7Days(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.Next7Days")
 })
 
 test("LastMonth / NextMonth / ThisMonth", () => {
-  expect(LastMonth("createdon").toString()).toContain("Microsoft.Dynamics.CRM.LastMonth")
-  expect(NextMonth("createdon").toString()).toContain("Microsoft.Dynamics.CRM.NextMonth")
-  expect(ThisMonth("createdon").toString()).toContain("Microsoft.Dynamics.CRM.ThisMonth")
+  expect(LastMonth(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.LastMonth")
+  expect(NextMonth(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.NextMonth")
+  expect(ThisMonth(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.ThisMonth")
 })
 
 test("LastWeek / NextWeek / ThisWeek", () => {
-  expect(LastWeek("createdon").toString()).toContain("Microsoft.Dynamics.CRM.LastWeek")
-  expect(NextWeek("createdon").toString()).toContain("Microsoft.Dynamics.CRM.NextWeek")
-  expect(ThisWeek("createdon").toString()).toContain("Microsoft.Dynamics.CRM.ThisWeek")
+  expect(LastWeek(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.LastWeek")
+  expect(NextWeek(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.NextWeek")
+  expect(ThisWeek(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.ThisWeek")
 })
 
 test("LastYear / NextYear / ThisYear", () => {
-  expect(LastYear("createdon").toString()).toContain("Microsoft.Dynamics.CRM.LastYear")
-  expect(NextYear("createdon").toString()).toContain("Microsoft.Dynamics.CRM.NextYear")
-  expect(ThisYear("createdon").toString()).toContain("Microsoft.Dynamics.CRM.ThisYear")
+  expect(LastYear(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.LastYear")
+  expect(NextYear(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.NextYear")
+  expect(ThisYear(new FieldRef("createdon")).toString()).toContain("Microsoft.Dynamics.CRM.ThisYear")
 })
 
 test("LastXDays / NextXDays / OlderThanXDays", () => {
-  expect(LastXDays("createdon", 7).toString()).toContain("Microsoft.Dynamics.CRM.LastXDays")
-  expect(NextXDays("createdon", 7).toString()).toContain("Microsoft.Dynamics.CRM.NextXDays")
-  expect(OlderThanXDays("createdon", 30).toString()).toContain("Microsoft.Dynamics.CRM.OlderThanXDays")
+  expect(LastXDays(new FieldRef("createdon"), 7).toString()).toContain("Microsoft.Dynamics.CRM.LastXDays")
+  expect(NextXDays(new FieldRef("createdon"), 7).toString()).toContain("Microsoft.Dynamics.CRM.NextXDays")
+  expect(OlderThanXDays(new FieldRef("createdon"), 30).toString()).toContain("Microsoft.Dynamics.CRM.OlderThanXDays")
 })
 
 test("OlderThanXHours / OlderThanXMinutes", () => {
-  expect(OlderThanXHours("createdon", 2).toString()).toContain("OlderThanXHours")
-  expect(OlderThanXMinutes("createdon", 30).toString()).toContain("OlderThanXMinutes")
+  expect(OlderThanXHours(new FieldRef("createdon"), 2).toString()).toContain("OlderThanXHours")
+  expect(OlderThanXMinutes(new FieldRef("createdon"), 30).toString()).toContain("OlderThanXMinutes")
 })
 
 test("Fiscal period filters", () => {
-  expect(ThisFiscalPeriod("createdon").toString()).toContain("ThisFiscalPeriod")
-  expect(ThisFiscalYear("createdon").toString()).toContain("ThisFiscalYear")
-  expect(LastFiscalPeriod("createdon").toString()).toContain("LastFiscalPeriod")
-  expect(LastFiscalYear("createdon").toString()).toContain("LastFiscalYear")
-  expect(NextFiscalPeriod("createdon").toString()).toContain("NextFiscalPeriod")
-  expect(NextFiscalYear("createdon").toString()).toContain("NextFiscalYear")
-  expect(InFiscalPeriod("createdon", 1).toString()).toContain("InFiscalPeriod")
-  expect(InFiscalYear("createdon", 2024).toString()).toContain("InFiscalYear")
-  expect(InFiscalPeriodAndYear("createdon", 1, 2024).toString()).toContain("InFiscalPeriodAndYear")
-  expect(InOrAfterFiscalPeriodAndYear("createdon", 1, 2024).toString()).toContain("InOrAfterFiscalPeriodAndYear")
-  expect(InOrBeforeFiscalPeriodAndYear("createdon", 1, 2024).toString()).toContain("InOrBeforeFiscalPeriodAndYear")
+  expect(ThisFiscalPeriod(new FieldRef("createdon")).toString()).toContain("ThisFiscalPeriod")
+  expect(ThisFiscalYear(new FieldRef("createdon")).toString()).toContain("ThisFiscalYear")
+  expect(LastFiscalPeriod(new FieldRef("createdon")).toString()).toContain("LastFiscalPeriod")
+  expect(LastFiscalYear(new FieldRef("createdon")).toString()).toContain("LastFiscalYear")
+  expect(NextFiscalPeriod(new FieldRef("createdon")).toString()).toContain("NextFiscalPeriod")
+  expect(NextFiscalYear(new FieldRef("createdon")).toString()).toContain("NextFiscalYear")
+  expect(InFiscalPeriod(new FieldRef("createdon"), 1).toString()).toContain("InFiscalPeriod")
+  expect(InFiscalYear(new FieldRef("createdon"), 2024).toString()).toContain("InFiscalYear")
+  expect(InFiscalPeriodAndYear(new FieldRef("createdon"), 1, 2024).toString()).toContain("InFiscalPeriodAndYear")
+  expect(InOrAfterFiscalPeriodAndYear(new FieldRef("createdon"), 1, 2024).toString()).toContain("InOrAfterFiscalPeriodAndYear")
+  expect(InOrBeforeFiscalPeriodAndYear(new FieldRef("createdon"), 1, 2024).toString()).toContain("InOrBeforeFiscalPeriodAndYear")
 })
 
 test("LastX / NextX for various time periods", () => {
-  expect(LastXHours("createdon", 4).toString()).toContain("LastXHours")
-  expect(LastXMonths("createdon", 3).toString()).toContain("LastXMonths")
-  expect(LastXWeeks("createdon", 2).toString()).toContain("LastXWeeks")
-  expect(LastXYears("createdon", 5).toString()).toContain("LastXYears")
-  expect(LastXFiscalPeriods("createdon", 2).toString()).toContain("LastXFiscalPeriods")
-  expect(LastXFiscalYears("createdon", 3).toString()).toContain("LastXFiscalYears")
-  expect(NextXHours("createdon", 4).toString()).toContain("NextXHours")
-  expect(NextXMonths("createdon", 3).toString()).toContain("NextXMonths")
-  expect(NextXWeeks("createdon", 2).toString()).toContain("NextXWeeks")
-  expect(NextXYears("createdon", 5).toString()).toContain("NextXYears")
-  expect(NextXFiscalPeriods("createdon", 2).toString()).toContain("NextXFiscalPeriods")
-  expect(NextXFiscalYears("createdon", 3).toString()).toContain("NextXFiscalYears")
-  expect(OlderThanXMonths("createdon", 6).toString()).toContain("OlderThanXMonths")
-  expect(OlderThanXWeeks("createdon", 4).toString()).toContain("OlderThanXWeeks")
-  expect(OlderThanXYears("createdon", 2).toString()).toContain("OlderThanXYears")
+  expect(LastXHours(new FieldRef("createdon"), 4).toString()).toContain("LastXHours")
+  expect(LastXMonths(new FieldRef("createdon"), 3).toString()).toContain("LastXMonths")
+  expect(LastXWeeks(new FieldRef("createdon"), 2).toString()).toContain("LastXWeeks")
+  expect(LastXYears(new FieldRef("createdon"), 5).toString()).toContain("LastXYears")
+  expect(LastXFiscalPeriods(new FieldRef("createdon"), 2).toString()).toContain("LastXFiscalPeriods")
+  expect(LastXFiscalYears(new FieldRef("createdon"), 3).toString()).toContain("LastXFiscalYears")
+  expect(NextXHours(new FieldRef("createdon"), 4).toString()).toContain("NextXHours")
+  expect(NextXMonths(new FieldRef("createdon"), 3).toString()).toContain("NextXMonths")
+  expect(NextXWeeks(new FieldRef("createdon"), 2).toString()).toContain("NextXWeeks")
+  expect(NextXYears(new FieldRef("createdon"), 5).toString()).toContain("NextXYears")
+  expect(NextXFiscalPeriods(new FieldRef("createdon"), 2).toString()).toContain("NextXFiscalPeriods")
+  expect(NextXFiscalYears(new FieldRef("createdon"), 3).toString()).toContain("NextXFiscalYears")
+  expect(OlderThanXMonths(new FieldRef("createdon"), 6).toString()).toContain("OlderThanXMonths")
+  expect(OlderThanXWeeks(new FieldRef("createdon"), 4).toString()).toContain("OlderThanXWeeks")
+  expect(OlderThanXYears(new FieldRef("createdon"), 2).toString()).toContain("OlderThanXYears")
 })

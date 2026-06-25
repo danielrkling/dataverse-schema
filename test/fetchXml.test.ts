@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchXml, eq, gt, compare, and, or, Infer,
+import { FieldRef, fetchXml, eq, gt, and, or, Infer,
   Today, Tomorrow, Yesterday, Last7Days, Next7Days, LastMonth, NextMonth, ThisMonth,
   LastWeek, NextWeek, ThisWeek, LastYear, NextYear, ThisYear,
   LastXDays, NextXDays, OlderThanXDays,
@@ -95,7 +95,7 @@ test("[docs] select multiple columns", () => {
 
 test("[docs] filter with eq condition", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .where(f => eq(f.city, "Redmond"))
+    .filter(f => eq(f.city, "Redmond"))
   const xml = q.toXml()
   expect(xml).toContain(`<filter type="and">`)
   expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Redmond" />`)
@@ -104,7 +104,7 @@ test("[docs] filter with eq condition", () => {
 // --- MS Docs Example: OR filter with multiple conditions ---
 test("[docs] or filter with multiple eq conditions", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
-    .where(f => or(
+    .filter(f => or(
       eq(f.city, "Redmond"),
       eq(f.city, "Seattle"),
       eq(f.city, "Bellevue")
@@ -122,7 +122,7 @@ test("[docs] or filter with multiple eq conditions", () => {
 
 test("[docs] in operator with value elements", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
-    .where(
+    .filter(
       `<condition attribute="address1_city" operator="in"><value>Redmond</value><value>Seattle</value><value>Bellevue</value></condition>`
     )
   const xml = q.toXml()
@@ -135,7 +135,7 @@ test("[docs] in operator with value elements", () => {
 // --- MS Docs Example: eq-userid operator (no value) ---
 
 test("[docs] eq-userid operator", () => {
-  const q = fetchXml(Account).where(`<condition attribute='ownerid' operator='eq-userid' />`)
+  const q = fetchXml(Account).filter(`<condition attribute='ownerid' operator='eq-userid' />`)
   const xml = q.toXml()
   expect(xml).toContain(`operator='eq-userid'`)
 })
@@ -143,7 +143,7 @@ test("[docs] eq-userid operator", () => {
 // --- MS Docs Example: between operator with value elements ---
 
 test("[docs] between operator with values", () => {
-  const q = fetchXml(Account).where(
+  const q = fetchXml(Account).filter(
     `<condition attribute="numberofemployees" operator="between"><value>6</value><value>20</value></condition>`
   )
   const xml = q.toXml()
@@ -293,27 +293,27 @@ test("[docs] aggregateLimit via execute option", async () => {
 // --- Existing tests preserved ---
 
 test("where with field proxy resolves Dataverse names", () => {
-  const q = fetchXml(Person).where(f => eq(f.name, "John"))
+  const q = fetchXml(Person).filter(f => eq(f.name, "John"))
   expect(q.toXml()).toContain(`attribute="fullname"`)
 })
 
 test("multiple where calls accumulate in single filter", () => {
   const q = fetchXml(Person)
-    .where(f => eq(f.name, "John"))
-    .where(f => gt(f.age, 20))
+    .filter(f => eq(f.name, "John"))
+    .filter(f => gt(f.age, 20))
   const xml = q.toXml()
   expect(xml.match(/<filter type="and">/g)).toHaveLength(1)
   expect(xml.match(/<condition/g)).toHaveLength(2)
 })
 
 test("where with existing filter functions", () => {
-  const q = fetchXml(Person).where(f => eq(f.name, "John"))
+  const q = fetchXml(Person).filter(f => eq(f.name, "John"))
   expect(q.toXml()).toContain("fullname")
   expect(q.toXml()).toContain("John")
 })
 
 test("where with and/greaterThan filter functions", () => {
-  const q = fetchXml(Person).where(f => and(eq(f.name, "John"), gt(f.age, 20)))
+  const q = fetchXml(Person).filter(f => and(eq(f.name, "John"), gt(f.age, 20)))
   expect(q.toXml()).toContain("fullname")
   expect(q.toXml()).toContain("person_age")
 })
@@ -446,22 +446,22 @@ test("through narrows result type to selected fields", () => {
 // --- FetchXML serialization of CRM functions ---
 
 test("CRM function Today produces correct FetchXML", () => {
-  expect(Today("createdon").toFetchXml()).toContain(`operator="today"`)
+  expect(Today(new FieldRef("createdon")).toFetchXml()).toContain(`operator="today"`)
 })
 
 test("CRM function EqualUserId produces correct FetchXML", () => {
-  expect(EqualUserId("ownerid").toFetchXml()).toContain(`operator="eq-userid"`)
+  expect(EqualUserId(new FieldRef("ownerid")).toFetchXml()).toContain(`operator="eq-userid"`)
 })
 
 test("CRM function Between produces correct FetchXML with value children", () => {
-  const xml = Between("field", 10, 20).toFetchXml()
+  const xml = Between(new FieldRef("field"), 10, 20).toFetchXml()
   expect(xml).toContain(`operator="between"`)
   expect(xml).toContain(`<value>10</value>`)
   expect(xml).toContain(`<value>20</value>`)
 })
 
 test("CRM function In produces correct FetchXML with value children", () => {
-  const xml = In("field", ["a", "b"]).toFetchXml()
+  const xml = In(new FieldRef("field"), ["a", "b"]).toFetchXml()
   expect(xml).toContain(`operator="in"`)
   expect(xml).toContain(`<value>a</value>`)
   expect(xml).toContain(`<value>b</value>`)
@@ -469,7 +469,7 @@ test("CRM function In produces correct FetchXML with value children", () => {
 
 test("CRM function Today can be used in fetchXml where clause", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .where(Today("createdon"))
+    .filter(Today(new FieldRef("createdon")))
   const xml = q.toXml()
   expect(xml).toContain(`operator="today"`)
   expect(xml).toContain(`attribute="createdon"`)
@@ -598,7 +598,7 @@ test("execute transforms joined date fields via alias map", async () => {
 // --- Bug 8: field-to-field comparison uses valueof ---
 
 test("compare filter function uses valueof in fetchXml", () => {
-  const q = fetchXml(Person).where(f => compare(f.name, "eq", f.age))
+  const q = fetchXml(Person).filter(f => eq(f.name, f.age))
   const xml = q.toXml()
   expect(xml).toContain(`valueof="person_age"`)
   expect(xml).toContain(`attribute="fullname"`)
@@ -612,7 +612,7 @@ test.each(["any", "not any", "all", "not all", "exists", "in"])(
     const q = fetchXml(Account).select(f => ({ name: f.name }))
       .join(linkType as any, Address, "id", "id", sub =>
         sub.select(s => ({ street: s.street }))
-          .where(s => eq(s.zip, 12345))
+          .filter(s => eq(s.zip, 12345))
           .orderby(s => s.zip)
       )
     const xml = q.toXml()
@@ -626,7 +626,7 @@ test.each(["any", "not any", "all", "not all", "exists", "in"])(
 test("[bug16] exists link type only outputs where conditions inside link-entity", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
     .join("exists", Address, "id", "id", sub =>
-      sub.where(s => eq(s.zip, 12345))
+      sub.filter(s => eq(s.zip, 12345))
     )
   const xml = q.toXml()
   expect(xml).toContain(`link-type="exists"`)
@@ -639,7 +639,7 @@ test("[bug16] exists link type only outputs where conditions inside link-entity"
 test("[bug16] filter-only link types do not auto-populate attributes inside link-entity", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
     .join("any", Address, "id", "id", sub =>
-      sub.where(s => eq(s.zip, 12345))
+      sub.filter(s => eq(s.zip, 12345))
     )
   const xml = q.toXml()
   expect(xml).toContain(`link-type="any"`)
@@ -733,7 +733,7 @@ test("[docs] join: left outer find accounts with no contacts", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
     .orderby(f => f.name)
     .join("outer", Contact2, "parentcustomerid", "id", sub => sub)
-    .where(`<condition entityname='auto_link_1' attribute='parentcustomerid' operator='null' />`)
+    .filter(`<condition entityname='auto_link_1' attribute='parentcustomerid' operator='null' />`)
   const xml = q.toXml()
   expect(xml).toContain(`link-type="outer"`)
   expect(xml).toContain(`from="parentcustomerid"`)
@@ -744,7 +744,7 @@ test("[docs] join: left outer find accounts with no contacts", () => {
 test("[docs] join: exists link type", () => {
   const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
     .join("exists", Account, "primarycontactid", "id", sub =>
-      sub.where(`<condition attribute="statecode" operator="eq" value="1" />`)
+      sub.filter(`<condition attribute="statecode" operator="eq" value="1" />`)
     )
   const xml = q.toXml()
   expect(xml).toContain(`link-type="exists"`)
@@ -757,7 +757,7 @@ test("[docs] join: exists link type", () => {
 test("[docs] join: in link type", () => {
   const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
     .join("in", Account, "primarycontactid", "id", sub =>
-      sub.where(`<condition attribute="statecode" operator="eq" value="1" />`)
+      sub.filter(`<condition attribute="statecode" operator="eq" value="1" />`)
     )
   const xml = q.toXml()
   expect(xml).toContain(`link-type="in"`)
@@ -798,7 +798,7 @@ test("[docs] select: multiple columns", () => {
 
 test("[docs] filter: eq city", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name }))
-    .where(f => eq(f.city, "Redmond"))
+    .filter(f => eq(f.city, "Redmond"))
   const xml = q.toXml()
   expect(xml).toContain(`<filter type="and">`)
   expect(xml).toContain(`<condition attribute="address1_city" operator="eq" value="Redmond" />`)
@@ -806,7 +806,7 @@ test("[docs] filter: eq city", () => {
 
 test("[docs] filter: or multiple cities", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
-    .where(f => or(
+    .filter(f => or(
       eq(f.city, "Redmond"),
       eq(f.city, "Seattle"),
       eq(f.city, "Bellevue"),
@@ -821,7 +821,7 @@ test("[docs] filter: or multiple cities", () => {
 
 test("[docs] filter: in operator with values", () => {
   const q = fetchXml(Account).select(f => ({ name: f.name, city: f.city }))
-    .where(In("address1_city", ["Redmond", "Seattle", "Bellevue"]))
+    .filter(In(new FieldRef("address1_city"), ["Redmond", "Seattle", "Bellevue"]))
   const xml = q.toXml()
   expect(xml).toContain(`operator="in"`)
   expect(xml).toContain(`<value>Redmond</value>`)
@@ -830,13 +830,13 @@ test("[docs] filter: in operator with values", () => {
 })
 
 test("[docs] filter: eq-userid no value", () => {
-  const q = fetchXml(Account).where(EqualUserId("ownerid"))
+  const q = fetchXml(Account).filter(EqualUserId(new FieldRef("ownerid")))
   const xml = q.toXml()
   expect(xml).toContain(`operator="eq-userid"`)
 })
 
 test("[docs] filter: between with value elements", () => {
-  const q = fetchXml(Account).where(Between("numberofemployees", 6, 20))
+  const q = fetchXml(Account).filter(Between(new FieldRef("numberofemployees"), 6, 20))
   const xml = q.toXml()
   expect(xml).toContain(`operator="between"`)
   expect(xml).toContain(`<value>6</value>`)
@@ -845,7 +845,7 @@ test("[docs] filter: between with value elements", () => {
 
 test("[docs] filter: column valueof comparison (same row)", () => {
   const q = fetchXml(Contact2).select(f => ({ firstname: f.firstname }))
-    .where(f => compare(f.firstname, "eq", f.lastname))
+    .filter(f => eq(f.firstname, f.lastname))
   const xml = q.toXml()
   expect(xml).toContain(`<condition attribute="firstname" operator="eq" valueof="lastname" />`)
 })
@@ -855,7 +855,7 @@ test("[docs] filter: cross-table valueof with alias", () => {
     .join("outer", Account, "id", "parentcustomerid", sub =>
       sub.select(f => ({ name: f.name }))
     )
-    .where(`<condition attribute="fullname" operator="eq" valueof="auto_link_1.name" />`)
+    .filter(`<condition attribute="fullname" operator="eq" valueof="auto_link_1.name" />`)
   const xml = q.toXml()
   expect(xml).toContain(`condition attribute="fullname"`)
   expect(xml).toContain(`valueof="auto_link_1.name"`)
@@ -864,8 +864,8 @@ test("[docs] filter: cross-table valueof with alias", () => {
 
 test("[docs] filter: link-type any in filter", () => {
   const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
-    .where(f => or(
-      eq(f.statecode, "1"),
+    .filter(f => or(
+      eq(f.statecode, 1),
       `<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
         <filter type='and'>
           <condition attribute='name' operator='eq' value='Contoso' />
@@ -880,7 +880,7 @@ test("[docs] filter: link-type any in filter", () => {
 
 test("[docs] filter: link-type not any", () => {
   const q = fetchXml(Contact2).select(f => ({ fullname: f.fullname }))
-    .where(`<link-entity name='account' from='primarycontactid' to='contactid' link-type='not any'>
+    .filter(`<link-entity name='account' from='primarycontactid' to='contactid' link-type='not any'>
       <filter type='and'>
         <condition attribute='name' operator='eq' value='Contoso' />
       </filter>

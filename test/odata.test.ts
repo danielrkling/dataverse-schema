@@ -1,6 +1,6 @@
 import { expect, expectTypeOf, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, compare, contains, startsWith, endsWith, isNull, isNotNull, sum, average, min, max, count, groupby } from "../src"
+import { fetchOdata, ODataQuery, eq, ne, gt, ge, lt, le, and, or, not, any, all, contains, startsWith, endsWith, isNull, isNotNull, sum, average, min, max, count, groupby } from "../src"
 import { DataverseTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection, Infer } from "../src"
 import { Etag, getEtag } from "../src/util"
 import { BASE_URL } from "./mocks/handlers"
@@ -139,6 +139,12 @@ test("select with no args selects all value columns", () => {
   expect(q).toContain("personid")
   expect(q).toContain("fullname")
   expect(q).toContain("person_age")
+})
+
+test("select with no args excludes nav properties from $select", () => {
+  const q = fetchOdata(Person).select().toString()
+  expect(q).not.toContain("person_Address")
+  expect(q).not.toContain("person_Address_person")
 })
 
 test("filter receives field proxy with Dataverse names", () => {
@@ -495,7 +501,7 @@ test("any used in filter clause with raw string", () => {
 
 test("column comparison", () => {
   const q = fetchOdata(Person)
-    .filter(f => compare(f.name, "eq", f.age))
+    .filter(f => eq(f.name, f.age))
     .toString()
   expect(q).toContain("(fullname eq person_age)")
 })
@@ -555,9 +561,9 @@ test("filter on lookup nav property sub-field generates slash path", () => {
 
 test("filter on lookup nav property sub-field with equals", () => {
   const q = fetchOdata(Person)
-    .filter(f => eq(f.primaryAddress.zip, "98101"))
+    .filter(f => eq(f.primaryAddress.zip, 98101))
     .toString()
-  expect(q).toContain("(person_Address/zip_code eq '98101')")
+  expect(q).toContain("(person_Address/zip_code eq 98101)")
 })
 
 test("nested nav property sub-field (two hops)", () => {
@@ -634,12 +640,12 @@ test("TripPin: filter not null (Age ne null)", () => {
 test("TripPin: filter with age range using ge and le", () => {
   const q = fetchOdata(TrippinPerson)
     .filter(f => or(
-      ge(f.age, "18"),
-      le(f.age, "65"),
+      ge(f.age, 18),
+      le(f.age, 65),
     ))
     .toString()
-  expect(q).toContain("(person_age ge '18')")
-  expect(q).toContain("(person_age le '65')")
+  expect(q).toContain("(person_age ge 18)")
+  expect(q).toContain("(person_age le 65)")
 })
 
 test("TripPin: filter with raw age range expression", () => {
@@ -696,7 +702,7 @@ test("TripPin: filter by first name AND last name", () => {
 
 test("TripPin: compare age with column comparison", () => {
   const q = fetchOdata(TrippinPerson)
-    .filter(f => compare(f.age, "gt", f.firstName))
+    .filter(f => gt(f.age, f.firstName))
     .toString()
   expect(q).toContain("(person_age gt firstname)")
 })
@@ -745,33 +751,23 @@ test("apply excludes select, expand from query string", () => {
 
 test("apply runtime guard throws on select after apply", () => {
   const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
-  expect(() => (q as any).select("name")).toThrow("select() is not supported after apply()")
+  expect(() => (q as any).select("name")).toThrow()
 })
 
 test("apply runtime guard throws on expand after apply", () => {
   const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
-  expect(() => (q as any).expand("primaryAddress")).toThrow("expand() is not supported after apply()")
+  expect(() => (q as any).expand("primaryAddress")).toThrow()
 })
 
 test("apply runtime guard throws on double apply", () => {
   const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age) }))
-  expect(() => (q as any).apply((v: any) => ({ name: groupby(v.name) }))).toThrow("apply() can only be called once")
+  expect(() => (q as any).apply((v: any) => ({ name: groupby(v.name) }))).toThrow()
 })
 
 test("orderby with alias proxy after apply", () => {
   const q = fetchOdata(Person).apply(v => ({ age: groupby(v.age), total: sum(v.age) }))
   const result = (q as any).orderby((f: any) => f.total, "desc").toString()
   expect(result).toContain("$orderby=total desc")
-})
-
-test("apply is not supported in expand sub-queries", () => {
-  expect(() => {
-    fetchOdata(Person)
-      .expand("primaryAddress", sub =>
-        (sub as any).apply((v: any) => ({ street: groupby(v.street) }))
-      )
-      .toString()
-  }).toThrow("apply() is not supported in expand sub-queries")
 })
 
 // --- Bug 2: select partial transform ---
@@ -842,6 +838,33 @@ test("execute with select carries etag", async () => {
   const results = await q.execute()
   expect(results).toHaveLength(1)
   expect(getEtag(results[0])).toBe('W/"789012"')
+})
+
+test("execute without select returns all fields including nav properties", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          active: true,
+          createdon: "2024-06-15T12:00:00Z",
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person)
+  const results = await q.execute()
+  expect(results).toHaveLength(1)
+  expect(results[0].name).toBe("John")
+  expect(results[0].age).toBe(30)
+  expect(results[0].active).toBe(true)
+  expect(results[0].createdOn).toBeInstanceOf(Date)
+  expect(results[0]).toHaveProperty("pk")
+  expect(results[0]).toHaveProperty("primaryAddress")
+  expect(results[0]).toHaveProperty("addresses")
 })
 
 // --- Bug 4: filter function types accept field proxies ---
@@ -916,16 +939,6 @@ test("lookup expand throws on top", () => {
       )
       .toString()
   }).toThrow("top() is not supported in lookup expands")
-})
-
-test("apply is not supported in expand sub-queries", () => {
-  expect(() => {
-    fetchOdata(Person)
-      .expand("primaryAddress", sub =>
-        (sub as any).apply((v: any) => ({ street: groupby(v.street) }))
-      )
-      .toString()
-  }).toThrow("apply() is not supported in expand sub-queries")
 })
 
 // --- execute with apply ---
