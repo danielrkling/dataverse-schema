@@ -59,6 +59,30 @@ type ApplyAliasProxy<R extends Record<string, any>> = {
 type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any>> = {
     select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): SubJoinBuilder<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult>
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(
+        linkType: FilterOnlyLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
+        intersect?: boolean,
+    ): SubJoinBuilder<TProps, TResult>
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
+        linkType: NormalLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
+        intersect?: boolean,
+    ): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>
+    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+        intersectTable: DataverseIntersectTable<TProps, T2>,
+        subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
+    ): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>
+    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+        intersectTable: DataverseIntersectTable<T1, TProps>,
+        subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>,
+    ): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>
     toXml(): string
@@ -68,6 +92,86 @@ type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<str
 type FilterOnlyLinkType = 'any' | 'not any' | 'all' | 'not all' | 'exists' | 'in'
 
 type NormalLinkType = Exclude<FetchLinkType, FilterOnlyLinkType>
+
+// --- Post-select builder interface (no apply/select) ---
+
+export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(
+        linkType: FilterOnlyLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
+        intersect?: boolean,
+    ): FetchXmlSelectQuery<TProps, TResult>
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
+        linkType: NormalLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
+        intersect?: boolean,
+    ): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>
+    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+        intersectTable: DataverseIntersectTable<TProps, T2>,
+        subquery: (q: EntityQueryBuilder<T2, {}>) => EntityQueryBuilder<T2, TJoinResult>,
+    ): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>
+    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+        intersectTable: DataverseIntersectTable<T1, TProps>,
+        subquery: (q: EntityQueryBuilder<T1, {}>) => EntityQueryBuilder<T1, TJoinResult>,
+    ): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>
+    distinct(): FetchXmlSelectQuery<TProps, TResult>
+    top(n: number): FetchXmlSelectQuery<TProps, TResult>
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>
+    toXml(): string
+    toString(): string
+    execute(options?: ExecuteOptions): Promise<TResult[]>
+}
+
+// --- Initial entry point interface (forces select or apply first) ---
+
+export interface FetchXmlInitial<TProps extends GenericProperties> {
+    select(): FetchXmlSelectQuery<TProps, TProps>
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
+        expr: (f: FieldProxy<TProps>) => R,
+    ): FetchXmlAggregateQuery<TProps, ApplyResultType<R>>
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps>
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(
+        linkType: FilterOnlyLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
+        intersect?: boolean,
+    ): FetchXmlInitial<TProps>
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
+        linkType: NormalLinkType,
+        table: TDataverseTable,
+        from: TFrom,
+        to: TTo,
+        subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
+        intersect?: boolean,
+    ): FetchXmlInitial<TProps>
+    through<T2 extends GenericProperties>(
+        intersectTable: DataverseIntersectTable<TProps, T2>,
+        subquery: (q: FilterCollector<T2>) => void,
+    ): FetchXmlInitial<TProps>
+    through<T1 extends GenericProperties>(
+        intersectTable: DataverseIntersectTable<T1, TProps>,
+        subquery: (q: FilterCollector<T1>) => void,
+    ): FetchXmlInitial<TProps>
+    distinct(): FetchXmlInitial<TProps>
+    top(n: number): FetchXmlInitial<TProps>
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>
+    toXml(): string
+    toString(): string
+    execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>
+}
 
 export class FilterCollector<TProps extends GenericProperties = any> {
     protected _filters: string[] = []
@@ -956,6 +1060,79 @@ export class EntityQueryBuilder<
     }
 }
 
-export function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): EntityQueryBuilder<TProps, Infer<TProps>> {
-    return new EntityQueryBuilder(table);
+export function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps> {
+    return new FetchXmlInitialImpl(table);
+}
+
+// --- Initial query implementation ---
+
+class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlInitial<TProps> {
+    #builder: EntityQueryBuilder<TProps, Infer<TProps>>
+
+    constructor(table: DataverseTable<TProps>) {
+        this.#builder = new EntityQueryBuilder(table)
+    }
+
+    select(): FetchXmlSelectQuery<TProps, TProps>
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
+    select(selector?: any): any {
+        if (selector) {
+            return this.#builder.select(selector)
+        }
+        return this.#builder.select((f) => {
+            const result = {} as Record<string, any>
+            for (const key of Object.keys(f)) {
+                result[key] = key
+            }
+            return result
+        })
+    }
+
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
+        expr: (f: FieldProxy<TProps>) => R,
+    ): FetchXmlAggregateQuery<TProps, ApplyResultType<R>> {
+        return this.#builder.apply(expr)
+    }
+
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps> {
+        this.#builder.filter(filter)
+        return this
+    }
+
+    join(...args: any[]): FetchXmlInitial<TProps> {
+        ;(this.#builder as any).join(...args)
+        return this
+    }
+
+    through(...args: any[]): FetchXmlInitial<TProps> {
+        ;(this.#builder as any).through(...args)
+        return this
+    }
+
+    distinct(): FetchXmlInitial<TProps> {
+        this.#builder.distinct()
+        return this
+    }
+
+    top(n: number): FetchXmlInitial<TProps> {
+        this.#builder.top(n)
+        return this
+    }
+
+    orderby(...args: any[]): FetchXmlInitial<TProps> {
+        ;(this.#builder as any).orderby(...args)
+        return this
+    }
+
+    toXml(): string {
+        return this.#builder.toXml()
+    }
+
+    toString(): string {
+        return this.#builder.toString()
+    }
+
+    async execute(options?: ExecuteOptions): Promise<Infer<TProps>[]> {
+        return this.#builder.execute(options)
+    }
 }

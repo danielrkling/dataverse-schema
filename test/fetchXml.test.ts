@@ -65,7 +65,7 @@ test("select narrows result type with aliases", () => {
 })
 
 test("join merges result type", () => {
-  const q = fetchXml(Person).join("inner", Address, "id", "pk", (sub) =>
+  const q = fetchXml(Person).select().join("inner", Address, "id", "pk", (sub) =>
     sub.select(f => ({ addrStreet: f.street }))
   )
   expectTypeOf(q.execute).returns.resolves.toExtend<{ addrStreet: string }[]>()

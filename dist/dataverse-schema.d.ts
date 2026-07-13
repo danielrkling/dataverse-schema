@@ -32,6 +32,17 @@ declare type ApplyAliasProxy_2<R extends Record<string, any>> = {
     [K in keyof R]: FieldRef<R[K], K extends string ? K : never>;
 };
 
+export declare interface ApplyQuery<T extends GenericProperties, TResult extends Record<string, any>> {
+    filter(filter: string): ApplyQuery<T, TResult>;
+    filter(filter: FilterExpr): ApplyQuery<T, TResult>;
+    filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): ApplyQuery<T, TResult>;
+    orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): ApplyQuery<T, TResult>;
+    orderby(alias: string, direction?: "asc" | "desc"): ApplyQuery<T, TResult>;
+    top(n: number): ApplyQuery<T, TResult>;
+    toString(): string;
+    execute(): Promise<TResult[]>;
+}
+
 declare type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
     [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V : R[K] extends Aggregation<infer V> ? V : never;
 };
@@ -93,8 +104,6 @@ export declare class BooleanField extends Schema<boolean> {
 
 export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
 
-export declare function buildProxyForTable<T extends GenericProperties>(table: DataverseTable<T>, prefix?: string): ODataFieldProxy<T>;
-
 /**
  * Creates a one-to-many (collection) navigation property definition. The related records
  * can be expanded via OData `$expand` or fetched through the table API.
@@ -153,6 +162,22 @@ export declare class CollectionProperty<TProperties extends GenericProperties> e
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties>[];
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+}
+
+export declare interface CollectionSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
+    select<K extends ValueKeys<TAll>>(...keys: K[]): CollectionSubQuery<TAll, {
+        [P in K]: TAll[P];
+    }, {
+        [P in K]: Infer<TAll[P]>;
+    }>;
+    expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>): CollectionSubQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>;
+    expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>): CollectionSubQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>;
+    filter(filter: string): CollectionSubQuery<TAll, TChosen, TResult>;
+    filter(filter: FilterExpr): CollectionSubQuery<TAll, TChosen, TResult>;
+    filter(filter: (f: ODataFieldProxy<TAll>) => string | FilterExpr): CollectionSubQuery<TAll, TChosen, TResult>;
+    orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): CollectionSubQuery<TAll, TChosen, TResult>;
+    orderby(alias: string, direction?: "asc" | "desc"): CollectionSubQuery<TAll, TChosen, TResult>;
+    top(n: number): CollectionSubQuery<TAll, TChosen, TResult>;
 }
 
 export declare function contains<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
@@ -991,8 +1016,6 @@ export declare interface ExpandObject {
     [key: string]: ExpandValue;
 }
 
-declare type ExpandResult<T extends GenericProperties, K extends keyof T, R> = T[K] extends CollectionProperty<any> ? R[] : R;
-
 export declare type ExpandValue = string | {
     select?: (Name)[];
     expand?: ExpandObject;
@@ -1004,9 +1027,9 @@ export declare type ExpandValue = string | {
 
 export declare type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in" | "matchfirstrowusingcrossapply";
 
-export declare function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): ODataQuery<T, Infer<T>>;
+export declare function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): InitialQuery<T>;
 
-export declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): EntityQueryBuilder<TProps, Infer<TProps>>;
+export declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 
 export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
     private _linkAlias;
@@ -1043,6 +1066,44 @@ export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TR
     private static _isFilterOnlyLinkType;
     private _renderLinkEntity;
     private _collectAliasesFromBuilder;
+}
+
+export declare interface FetchXmlInitial<TProps extends GenericProperties> {
+    select(): FetchXmlSelectQuery<TProps, TProps>;
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, {
+        [K in keyof R]: Infer<TProps[R[K]]>;
+    }>;
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): FetchXmlAggregateQuery<TProps, ApplyResultType_2<R>>;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlInitial<TProps>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlInitial<TProps>;
+    through<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): FetchXmlInitial<TProps>;
+    through<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: FilterCollector<T1>) => void): FetchXmlInitial<TProps>;
+    distinct(): FetchXmlInitial<TProps>;
+    top(n: number): FetchXmlInitial<TProps>;
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
+    toXml(): string;
+    toString(): string;
+    execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>;
+}
+
+export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
+    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, {
+        [K in keyof R]: Infer<TProps[R[K]]>;
+    }>;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlSelectQuery<TProps, TResult>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>;
+    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: EntityQueryBuilder<T2, {}>) => EntityQueryBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>;
+    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: EntityQueryBuilder<T1, {}>) => EntityQueryBuilder<T1, TJoinResult>): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>;
+    distinct(): FetchXmlSelectQuery<TProps, TResult>;
+    top(n: number): FetchXmlSelectQuery<TProps, TResult>;
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
+    toXml(): string;
+    toString(): string;
+    execute(options?: ExecuteOptions): Promise<TResult[]>;
 }
 
 export declare type FieldProxy<T extends GenericProperties> = {
@@ -1252,15 +1313,25 @@ export declare function In<T extends string | number>(field: FieldRef<T>, values
  *
  * @template T The Dataverse schema definition.
  */
-export declare type Infer<T> = T extends DataverseTable<infer U> ? Infer<U> : T extends GenericProperties ? {
+export declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends Schema<infer U> ? U : {
     [K in keyof T]: Infer<T[K]>;
-} : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends Schema<infer U> ? U : never;
+};
 
 export declare function InFiscalPeriod(field: FieldRef<any>, value: number): FilterExpr;
 
 export declare function InFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
 
 export declare function InFiscalYear(field: FieldRef<any>, value: number): FilterExpr;
+
+export declare interface InitialQuery<TAll extends GenericProperties> {
+    select(): SelectQuery<TAll, TAll>;
+    select<K extends ValueKeys<TAll>>(...keys: K[]): SelectQuery<TAll, {
+        [P in K]: TAll[P];
+    }, {
+        [P in K]: Infer<TAll[P]>;
+    }>;
+    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: ODataFieldProxy<TAll>) => R): ApplyQuery<TAll, ApplyResultType<R>>;
+}
 
 export declare function InOrAfterFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
 
@@ -1417,6 +1488,16 @@ export declare class LookupProperty<TProperties extends GenericProperties> exten
     getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
 }
 
+export declare interface LookupSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
+    select<K extends ValueKeys<TAll>>(...keys: K[]): LookupSubQuery<TAll, {
+        [P in K]: TAll[P];
+    }, {
+        [P in K]: Infer<TAll[P]>;
+    }>;
+    expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>): LookupSubQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>;
+    expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>): LookupSubQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>;
+}
+
 export declare function lt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
 
 export declare function mapChoices(data: any): {
@@ -1465,6 +1546,10 @@ export declare function maxLength(max: number): (v: {
  * maxAge65(70); // returns "Must be no more than 65" (invalid)
  */
 export declare function maxValue(max: number): Validator<number>;
+
+declare type MergeExpand<T, K extends string, V> = {
+    [P in keyof T | K]: P extends K ? V : P extends keyof T ? T[P] : never;
+};
 
 /**
  * Retains references to previous recrods if ETag value is unchanged
@@ -1542,6 +1627,8 @@ export declare type Name = string | {
 export declare type NarrowKeysByValue<T extends object, V> = {
     [K in keyof T]: T[K] extends V ? K : never;
 }[keyof T];
+
+declare type NavKeys<T extends GenericProperties> = CollectionKeys<T> | LookupKeys<T>;
 
 export declare function ne<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
 
@@ -1730,41 +1817,6 @@ declare type ODataLambdaProxy<P extends GenericProperties> = {
 declare type ODataLookupNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
-
-export declare class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
-    private _table;
-    private _fields;
-    private _selectedKeys;
-    private _filters;
-    private _expands;
-    private _orderby;
-    private _top?;
-    private _expandMode;
-    private _proxy;
-    constructor(table: DataverseTable<T>);
-    private _buildProxy;
-    select(): ODataQuery<T, Infer<T>>;
-    select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, {
-        [P in K]: Infer<T[P]>;
-    }>;
-    filter(filter: string): this;
-    filter(filter: FilterExpr): this;
-    filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
-    expand<K extends CollectionKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'apply' | 'execute' | 'toString'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
-        [P in K]: ExpandResult<T, P, R>;
-    }>;
-    expand<K extends LookupKeys<T>, R>(key: K, sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'apply' | 'execute' | 'toString'>) => ODataQuery<RelatedProps<T, K>, R>): ODataQuery<T, Omit<TResult, K & keyof TResult> & {
-        [P in K]: ExpandResult<T, P, R>;
-    }>;
-    orderby(fieldSelector: (f: ODataFieldProxy<T>) => string | FieldRef<any>, direction?: "asc" | "desc"): this;
-    orderby(alias: string, direction?: "asc" | "desc"): this;
-    top(n: number): this;
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: ODataFieldProxy<T>) => R): ODataApplyQuery<T, ApplyResultType<R>>;
-    protected _build(forExpand?: boolean): string;
-    toString(): string;
-    private _partialTransform;
-    execute(): Promise<TResult[]>;
-}
 
 export declare function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr;
 
@@ -2005,6 +2057,20 @@ export declare class Schema<T> implements StandardSchemaV1<T> {
 
 export declare function select(...values: (Name)[]): string;
 
+export declare interface SelectQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
+    expand<K extends NavKeys<TAll>>(key: K): SelectQuery<TAll, MergeExpand<TChosen, K & string, TAll[K]>, MergeExpand<TResult, K & string, Infer<TAll[K]>>>;
+    expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>): SelectQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>;
+    expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>): SelectQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>;
+    filter(filter: string): SelectQuery<TAll, TChosen, TResult>;
+    filter(filter: FilterExpr): SelectQuery<TAll, TChosen, TResult>;
+    filter(filter: (f: ODataFieldProxy<TAll>) => string | FilterExpr): SelectQuery<TAll, TChosen, TResult>;
+    orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>;
+    orderby(alias: string, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>;
+    top(n: number): SelectQuery<TAll, TChosen, TResult>;
+    toString(): string;
+    execute(): Promise<TResult[]>;
+}
+
 declare type Simplify<T> = {
     [Key in keyof T]: T[Key];
 } & {};
@@ -2036,6 +2102,10 @@ declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Re
         [K in keyof R]: Infer<TProps[R[K]]>;
     }>;
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubJoinBuilder<TProps, TResult>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
+    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
+    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>;
     toXml(): string;

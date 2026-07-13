@@ -2322,7 +2322,7 @@ class ODataApplyQuery {
     if (filter instanceof FilterExpr) {
       str = filter.toOdata();
     } else if (typeof filter === "function") {
-      const result = filter(buildProxyForTable(this._table));
+      const result = filter(_buildProxyForTable(this._table));
       str = result instanceof FilterExpr ? result.toOdata() : result;
     } else {
       str = filter;
@@ -2372,35 +2372,66 @@ class ODataApplyQuery {
   }
 }
 class ODataQuery {
-  _table;
-  _fields = [];
-  _selectedKeys = [];
-  _filters = [];
-  _expands = [];
-  _orderby = [];
-  _top;
-  _expandMode = "full";
-  _proxy;
-  constructor(table) {
-    this._table = table;
-    this._proxy = this._buildProxy();
+  #table;
+  #fields = [];
+  #selectedKeys = [];
+  #filters = [];
+  #expands = [];
+  #expandMeta = [];
+  #orderby = [];
+  #top;
+  #proxy;
+  #subQueryMode;
+  constructor(table, subQueryMode) {
+    this.#table = table;
+    this.#proxy = _buildProxyForTable(table);
+    this.#subQueryMode = subQueryMode;
   }
-  _buildProxy() {
-    return buildProxyForTable(this._table);
+  get _table() {
+    return this.#table;
+  }
+  get _proxy() {
+    return this.#proxy;
+  }
+  get _expandMeta() {
+    return this.#expandMeta;
   }
   select(...keys) {
     if (keys.length === 0) {
-      this._fields = [];
-      this._selectedKeys = [];
-      for (const prop of Object.values(this._table.fields)) {
+      this.#fields = [];
+      this.#selectedKeys = [];
+      for (const [key, prop] of Object.entries(this.#table.fields)) {
         if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
-          this._fields.push(prop.fromDataverseName ?? prop.name);
+          this.#fields.push(prop.fromDataverseName ?? prop.name);
+          this.#selectedKeys.push(key);
         }
       }
     } else {
-      this._fields = keys.map((k) => this._proxy[k].toString());
-      this._selectedKeys = keys;
+      this.#fields = keys.map((k) => this.#proxy[k].toString());
+      this.#selectedKeys = keys;
     }
+    return this;
+  }
+  expand(key, sub) {
+    const prop = this.#table.fields[key];
+    const isCollection = prop.type === "collection";
+    if (this.#subQueryMode === "collection" && isCollection) {
+      throw new Error("expand() within a collection expand only supports lookup navigation properties");
+    }
+    const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
+    const result = sub?.(child);
+    const q = result ?? child;
+    this.#expands.push({ name: prop.name, key, query: q._buildForExpand() });
+    const childSelectedKeys = q._getSelectedKeys();
+    const childExpandMeta = q._expandMeta;
+    const subQueryProvided = !!sub;
+    this.#expandMeta.push({
+      key,
+      dvName: prop.name,
+      isCollection,
+      selectedKeys: subQueryProvided ? childSelectedKeys.length > 0 ? childSelectedKeys : null : null,
+      subExpands: subQueryProvided && childExpandMeta.length > 0 ? childExpandMeta : null
+    });
     return this;
   }
   filter(filter) {
@@ -2408,44 +2439,31 @@ class ODataQuery {
     if (filter instanceof FilterExpr) {
       str = filter.toOdata();
     } else if (typeof filter === "function") {
-      const result = filter(this._proxy);
+      const result = filter(this.#proxy);
       str = result instanceof FilterExpr ? result.toOdata() : result;
     } else {
       str = filter;
     }
-    this._filters.push(str);
-    return this;
-  }
-  expand(key, sub) {
-    const prop = this._table.fields[key];
-    const isCollection = prop.type === "collection";
-    if (this._expandMode === "collection" && isCollection) {
-      throw new Error("expand() within a collection expand only supports lookup navigation properties");
-    }
-    const child = new ODataQuery(prop.table);
-    child._expandMode = isCollection ? "collection" : "lookup";
-    const result = sub?.(child);
-    const q = result ?? child;
-    this._expands.push({ name: prop.name, key, query: q._build(true) });
+    this.#filters.push(str);
     return this;
   }
   orderby(nameOrSelector, direction = "asc") {
-    if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
+    if (this.#subQueryMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
     if (typeof nameOrSelector === "function") {
-      const result = nameOrSelector(this._proxy);
-      this._orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
+      const result = nameOrSelector(this.#proxy);
+      this.#orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
     } else {
-      this._orderby.push({ name: nameOrSelector, dir: direction });
+      this.#orderby.push({ name: nameOrSelector, dir: direction });
     }
     return this;
   }
   top(n) {
-    if (this._expandMode === "lookup") throw new Error("top() is not supported in lookup expands");
-    this._top = n;
+    if (this.#subQueryMode === "lookup") throw new Error("top() is not supported in lookup expands");
+    this.#top = n;
     return this;
   }
   apply(expr) {
-    const result = expr(this._proxy);
+    const result = expr(this.#proxy);
     const groupByFields = [];
     const aggParts = [];
     const aliasProxy = {};
@@ -2466,45 +2484,62 @@ class ODataQuery {
       applyStr = `aggregate(${aggParts.join(",")})`;
     }
     return new ODataApplyQuery(
-      this._table,
+      this.#table,
       applyStr,
       aliasProxy,
-      this._filters.length > 0 ? this._filters : void 0
+      this.#filters.length > 0 ? this.#filters : void 0
     );
   }
-  _build(forExpand = false) {
+  _buildForExpand() {
     const parts = [];
-    const joinChar = forExpand ? ";" : "&";
-    if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`);
-    if (this._filters.length === 1) {
-      parts.push(`$filter=${this._filters[0]}`);
-    } else if (this._filters.length > 1) {
-      parts.push(`$filter=${this._filters.join(" and ")}`);
+    if (this.#fields.length) parts.push(`$select=${this.#fields.join(",")}`);
+    if (this.#filters.length === 1) {
+      parts.push(`$filter=${this.#filters[0]}`);
+    } else if (this.#filters.length > 1) {
+      parts.push(`$filter=${this.#filters.join(" and ")}`);
     }
-    if (this._orderby.length) {
-      parts.push(`$orderby=${this._orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+    if (this.#orderby.length) {
+      parts.push(`$orderby=${this.#orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
     }
-    if (this._expands.length) {
-      parts.push(`$expand=${this._expands.map((e) => {
-        return e.query ? `${e.name}(${e.query})` : e.name;
-      }).join(",")}`);
+    if (this.#expands.length) {
+      parts.push(`$expand=${this.#expands.map(
+        (e) => e.query ? `${e.name}(${e.query})` : e.name
+      ).join(",")}`);
     }
-    if (this._top !== void 0) parts.push(`$top=${this._top}`);
-    return parts.join(joinChar);
+    if (this.#top !== void 0) parts.push(`$top=${this.#top}`);
+    return parts.join(";");
   }
   toString() {
-    return this._build();
+    const parts = [];
+    if (this.#fields.length) parts.push(`$select=${this.#fields.join(",")}`);
+    if (this.#filters.length === 1) {
+      parts.push(`$filter=${this.#filters[0]}`);
+    } else if (this.#filters.length > 1) {
+      parts.push(`$filter=${this.#filters.join(" and ")}`);
+    }
+    if (this.#orderby.length) {
+      parts.push(`$orderby=${this.#orderby.map((o) => `${o.name} ${o.dir}`).join(",")}`);
+    }
+    if (this.#expands.length) {
+      parts.push(`$expand=${this.#expands.map(
+        (e) => e.query ? `${e.name}(${e.query})` : e.name
+      ).join(",")}`);
+    }
+    if (this.#top !== void 0) parts.push(`$top=${this.#top}`);
+    return parts.join("&");
+  }
+  _getSelectedKeys() {
+    return this.#selectedKeys;
   }
   _partialTransform(value) {
     const result = {};
-    for (const key of this._selectedKeys) {
-      const prop = this._table.fields[key];
+    for (const key of this.#selectedKeys) {
+      const prop = this.#table.fields[key];
       result[key] = prop.transformValueFromDataverse(value[prop.fromDataverseName]);
     }
-    for (const expand of this._expands) {
-      const prop = this._table.fields[expand.key];
-      if (prop && value[expand.name] !== void 0) {
-        result[expand.key] = prop.transformValueFromDataverse(value[expand.name]);
+    for (const expand of this.#expandMeta) {
+      if (value[expand.dvName] !== void 0) {
+        result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
       }
     }
     result[Etag] = value["@odata.etag"];
@@ -2512,15 +2547,72 @@ class ODataQuery {
   }
   async execute() {
     const qs = this.toString();
-    if (!qs) return this._table.getRecords();
-    const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
-    if (this._selectedKeys.length > 0) {
+    if (!qs) return this.#table.getRecords();
+    const raw = await this.#table.client.getRecords(this.#table.entitySetName, qs);
+    if (this.#selectedKeys.length > 0) {
       return raw.map((v) => this._partialTransform(v));
     }
-    return raw.map((v) => this._table.transformValueFromDataverse(v));
+    if (this.#expandMeta.some((e) => e.selectedKeys)) {
+      return raw.map((v) => this._partialTransform(v));
+    }
+    return raw.map((v) => this.#table.transformValueFromDataverse(v));
   }
 }
-function buildProxyForTable(table, prefix) {
+class InitialQueryImpl {
+  #table;
+  constructor(table) {
+    this.#table = table;
+  }
+  select(...keys) {
+    const q = new ODataQuery(this.#table);
+    if (keys.length === 0) {
+      q.select();
+    } else {
+      q.select(...keys);
+    }
+    return q;
+  }
+  apply(expr) {
+    return new ODataQuery(this.#table).apply(expr);
+  }
+}
+function _processExpand(raw, expand, table) {
+  if (raw === null || raw === void 0) return null;
+  const navProp = table.fields[expand.key];
+  const relatedTable = navProp.table;
+  if (expand.isCollection) {
+    const items = Array.from(raw ?? []);
+    if (expand.selectedKeys) {
+      return items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands));
+    } else {
+      return navProp.transformValueFromDataverse(raw);
+    }
+  } else {
+    if (expand.selectedKeys) {
+      return _partialTransformItem(relatedTable, expand.selectedKeys, raw, expand.subExpands);
+    } else {
+      return navProp.transformValueFromDataverse(raw);
+    }
+  }
+}
+function _partialTransformItem(table, selectedKeys, raw, subExpands) {
+  const result = {};
+  for (const key of selectedKeys) {
+    const prop = table.fields[key];
+    if (prop) {
+      result[key] = prop.transformValueFromDataverse(raw[prop.fromDataverseName]);
+    }
+  }
+  if (subExpands) {
+    for (const expand of subExpands) {
+      if (raw[expand.dvName] !== void 0) {
+        result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
+      }
+    }
+  }
+  return result;
+}
+function _buildProxyForTable(table, prefix) {
   const proxy = {};
   const fields = table.fields;
   for (const [key, prop] of Object.entries(fields)) {
@@ -2534,7 +2626,7 @@ function buildProxyForTable(table, prefix) {
       Object.defineProperty(proxy, key, {
         get: () => {
           if (!cached) {
-            const sub = buildProxyForTable(navProp.table, currentPrefix);
+            const sub = _buildProxyForTable(navProp.table, currentPrefix);
             sub.toString = () => currentPrefix;
             if (isCollection) proxyTableMap.set(sub, navProp.table);
             cached = sub;
@@ -2591,7 +2683,7 @@ function all(proxy, condition) {
   return new FilterExpr({ type: "lambda", field: String(proxy), operator: "all", alias, condition: result instanceof FilterExpr ? result.toOdata() : result });
 }
 function fetchOdata(table) {
-  return new ODataQuery(table);
+  return new InitialQueryImpl(table);
 }
 
 class FilterCollector {
@@ -3268,7 +3360,61 @@ class EntityQueryBuilder {
   }
 }
 function fetchXml(table) {
-  return new EntityQueryBuilder(table);
+  return new FetchXmlInitialImpl(table);
+}
+class FetchXmlInitialImpl {
+  #builder;
+  constructor(table) {
+    this.#builder = new EntityQueryBuilder(table);
+  }
+  select(selector) {
+    if (selector) {
+      return this.#builder.select(selector);
+    }
+    return this.#builder.select((f) => {
+      const result = {};
+      for (const key of Object.keys(f)) {
+        result[key] = key;
+      }
+      return result;
+    });
+  }
+  apply(expr) {
+    return this.#builder.apply(expr);
+  }
+  filter(filter) {
+    this.#builder.filter(filter);
+    return this;
+  }
+  join(...args) {
+    this.#builder.join(...args);
+    return this;
+  }
+  through(...args) {
+    this.#builder.through(...args);
+    return this;
+  }
+  distinct() {
+    this.#builder.distinct();
+    return this;
+  }
+  top(n) {
+    this.#builder.top(n);
+    return this;
+  }
+  orderby(...args) {
+    this.#builder.orderby(...args);
+    return this;
+  }
+  toXml() {
+    return this.#builder.toXml();
+  }
+  toString() {
+    return this.#builder.toString();
+  }
+  async execute(options) {
+    return this.#builder.execute(options);
+  }
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, ODataQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, buildProxyForTable, collection, collectionIds, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, collection, collectionIds, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };

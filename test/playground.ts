@@ -30,6 +30,7 @@ import {
   FieldRef,
   GroupByExpr,
   LookupProperty,
+  fetchXml,
 } from "../src";
 import {
   DataverseTable,
@@ -79,30 +80,33 @@ const Person = new DataverseTable({
   logicalName: "person",
   fields: {
     pk: primaryKey("personid"),
-    // name: string("fullname"),
-    // age: number("person_age"),
-    // active: boolean("active"),
-    // primaryAddressId: lookupId("person_Address", () => Address),
+    name: string("fullname"),
+    age: number("person_age"),
+    active: boolean("active"),
+    primaryAddressId: lookupId("person_Address", () => Address),
     primaryAddress: lookup("person_Address", () => Address),
-    // addresses: collection("person_Address_person", () => Address),
-    // createdOn: datetime("createdon"),
+    addresses: collection("person_Address_person", () => Address),
+    createdOn: datetime("createdon"),
   },
 });
 
-const q = fetchOdata(Person)
-  .select()
-  .expand("primaryAddress", (s) => s.select("zip"));
-
-// Deeply nested expand types work correctly.
-// r1.primaryAddress shows zip, location, and location.name
-const q1 = fetchOdata(Person)
-  .select()
-  .expand("primaryAddress", (s) =>
-    s.select("zip").expand("location", (v) => v.select("name")),
-  )
+const q1 = fetchXml(Person)
+  .select((v) => ({
+    name: v.name,
+    myAge: v.age,
+  }))
+  .join("inner", Address, "id", "primaryAddressId", (v) =>
+    v
+      .select((s) => ({
+        street: s.street,
+      }))
+      .join("inner", Location, "id", "locationId", (s1) =>
+        s1.select((s2) => ({
+          n: s2.name,
+        })),
+      )
+  );
 const r1 = await q1.execute();
-
-r1.at(0)?.primaryAddress?.location?.name;
 
 // r1 type:
 // const r1: {
