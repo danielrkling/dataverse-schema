@@ -69,8 +69,8 @@ test("TripPin: select + top returns correct fields", async () => {
 
 test("TripPin: filter by gender enum", async () => {
   const q = fetchOdata(TrippinPerson)
-    .filter(f => eq(f.gender, "Female"))
     .select("userName", "gender")
+    .filter(f => eq(f.gender, "Female"))
     .top(3)
   const data = await trippinFetch<{ value: Record<string, unknown>[] }>("People", q.toString())
   expect(data.value.length).toBeGreaterThan(0)
@@ -164,7 +164,7 @@ test("TripPin: combined query (filter + orderby + top + select)", async () => {
 })
 
 test("TripPin: default select includes all fields", async () => {
-  const q = fetchOdata(TrippinPerson).top(1)
+  const q = fetchOdata(TrippinPerson).select().top(1)
   const data = await trippinFetch<{ value: Record<string, unknown>[] }>("People", q.toString())
   expect(data.value).toHaveLength(1)
   const person = data.value[0]

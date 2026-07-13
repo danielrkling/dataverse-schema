@@ -79,19 +79,17 @@ export type NarrowKeysByValue<T extends object, V> = {
  *
  * @template T The Dataverse schema definition.
  */
-export type Infer<T> = T extends DataverseTable<infer U>
-  ? Infer<U> // If it's a Table, infer from its properties.
-  : T extends GenericProperties
-  ? {
-      [K in keyof T]: Infer<T[K]>;
-    } // If it's GenericProperties, infer each property's type.
+export type Infer<T> = T extends null | undefined
+  ? T
+  : T extends DataverseTable<infer U>
+  ? Infer<U>
   : T extends CollectionProperty<infer U>
-  ? Infer<U>[] // If it's a CollectionProperty, infer the type of the items in the collection and make it an array.
+  ? Infer<U>[]
   : T extends LookupProperty<infer U>
-  ? Infer<U> | null // If it's an ExpandProperty, infer the type of the expanded entity and allow null (for optional expansion).
+  ? Infer<U> | null
   : T extends Schema<infer U>
-  ? U // If it's a Property, extract the underlying type.
-  : never;
+  ? U
+  : { [K in keyof T]: Infer<T[K]> }
 
 /**
  * Represents a generic object of properties, where the keys are property names

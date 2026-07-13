@@ -4,6 +4,8 @@ import { LookupProperty, CollectionProperty } from "./fields"
 import { Etag } from "./util"
 import { FilterExpr, FieldRef } from "./filter"
 
+// --- Internal proxy & key types ---
+
 const proxyTableMap = new WeakMap<object, DataverseTable<any>>()
 
 type ODataLambdaProxy<P extends GenericProperties> = {
@@ -37,6 +39,12 @@ type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any
     : never
 }
 
+type MergeExpand<T, K extends string, V> = {
+  [P in keyof T | K]: P extends K ? V : P extends keyof T ? T[P] : never
+}
+
+// --- Aggregation classes ---
+
 export class GroupByExpr<V = any> {
   field: string
   constructor(field: string) { this.field = field }
@@ -54,9 +62,86 @@ export class Aggregation<V = any> {
   }
 }
 
+// --- Alias proxy for apply orderby ---
+
 type ApplyAliasProxy<R extends Record<string, any>> = {
   [K in keyof R]: FieldRef<R[K], K extends string ? K : never>
 }
+
+// --- ApplyQuery interface ---
+
+export interface ApplyQuery<T extends GenericProperties, TResult extends Record<string, any>> {
+  filter(filter: string): ApplyQuery<T, TResult>
+  filter(filter: FilterExpr): ApplyQuery<T, TResult>
+  filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): ApplyQuery<T, TResult>
+  orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): ApplyQuery<T, TResult>
+  orderby(alias: string, direction?: "asc" | "desc"): ApplyQuery<T, TResult>
+  top(n: number): ApplyQuery<T, TResult>
+  toString(): string
+  execute(): Promise<TResult[]>
+}
+
+// --- State-machine interfaces ---
+
+export interface InitialQuery<TAll extends GenericProperties> {
+  select(): SelectQuery<TAll, TAll>
+  select<K extends ValueKeys<TAll>>(...keys: K[]): SelectQuery<TAll, { [P in K]: TAll[P] }, { [P in K]: Infer<TAll[P]> }>
+  apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
+    expr: (f: ODataFieldProxy<TAll>) => R,
+  ): ApplyQuery<TAll, ApplyResultType<R>>
+}
+
+export interface SelectQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
+  expand<K extends NavKeys<TAll>>(key: K): SelectQuery<TAll, MergeExpand<TChosen, K & string, TAll[K]>, MergeExpand<TResult, K & string, Infer<TAll[K]>>>
+  expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(
+    key: K,
+    sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>,
+  ): SelectQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>
+  expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(
+    key: K,
+    sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>,
+  ): SelectQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>
+  filter(filter: string): SelectQuery<TAll, TChosen, TResult>
+  filter(filter: FilterExpr): SelectQuery<TAll, TChosen, TResult>
+  filter(filter: (f: ODataFieldProxy<TAll>) => string | FilterExpr): SelectQuery<TAll, TChosen, TResult>
+  orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>
+  orderby(alias: string, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>
+  top(n: number): SelectQuery<TAll, TChosen, TResult>
+  toString(): string
+  execute(): Promise<TResult[]>
+}
+
+export interface CollectionSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
+  select<K extends ValueKeys<TAll>>(...keys: K[]): CollectionSubQuery<TAll, { [P in K]: TAll[P] }, { [P in K]: Infer<TAll[P]> }>
+  expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(
+    key: K,
+    sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>,
+  ): CollectionSubQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>
+  expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(
+    key: K,
+    sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>,
+  ): CollectionSubQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>
+  filter(filter: string): CollectionSubQuery<TAll, TChosen, TResult>
+  filter(filter: FilterExpr): CollectionSubQuery<TAll, TChosen, TResult>
+  filter(filter: (f: ODataFieldProxy<TAll>) => string | FilterExpr): CollectionSubQuery<TAll, TChosen, TResult>
+  orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): CollectionSubQuery<TAll, TChosen, TResult>
+  orderby(alias: string, direction?: "asc" | "desc"): CollectionSubQuery<TAll, TChosen, TResult>
+  top(n: number): CollectionSubQuery<TAll, TChosen, TResult>
+}
+
+export interface LookupSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
+  select<K extends ValueKeys<TAll>>(...keys: K[]): LookupSubQuery<TAll, { [P in K]: TAll[P] }, { [P in K]: Infer<TAll[P]> }>
+  expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(
+    key: K,
+    sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>,
+  ): LookupSubQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>
+  expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(
+    key: K,
+    sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>,
+  ): LookupSubQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>
+}
+
+// --- ApplyQuery class ---
 
 export class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
   private _table: DataverseTable<T>
@@ -86,7 +171,7 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
     if (filter instanceof FilterExpr) {
       str = filter.toOdata()
     } else if (typeof filter === "function") {
-      const result = filter(buildProxyForTable(this._table))
+      const result = filter(_buildProxyForTable(this._table))
       str = result instanceof FilterExpr ? result.toOdata() : result
     } else {
       str = filter
@@ -143,42 +228,91 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
   }
 }
 
-export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
-  private _table: DataverseTable<T>
-  private _fields: string[] = []
-  private _selectedKeys: string[] = []
-  private _filters: string[] = []
-  private _expands: Array<{ name: string; key: string; query: string }> = []
-  private _orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
-  private _top?: number
-  private _expandMode: "full" | "collection" | "lookup" = "full"
-  private _proxy: ODataFieldProxy<T>
+// --- Internal expand metadata ---
 
-  constructor(table: DataverseTable<T>) {
-    this._table = table
-    this._proxy = this._buildProxy()
+interface ExpandMeta {
+  key: string
+  dvName: string
+  isCollection: boolean
+  selectedKeys: string[] | null
+  subExpands: ExpandMeta[] | null
+}
+
+// --- Internal sub-query mode ---
+
+type SubQueryMode = "collection" | "lookup"
+
+// --- Main query builder class (internal) ---
+
+class ODataQuery<T extends GenericProperties> {
+  #table: DataverseTable<T>
+  #fields: string[] = []
+  #selectedKeys: string[] = []
+  #filters: string[] = []
+  #expands: Array<{ name: string; key: string; query: string }> = []
+  #expandMeta: ExpandMeta[] = []
+  #orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
+  #top?: number
+  #proxy: ODataFieldProxy<T>
+  #subQueryMode?: SubQueryMode
+
+  constructor(table: DataverseTable<T>, subQueryMode?: SubQueryMode) {
+    this.#table = table
+    this.#proxy = _buildProxyForTable(table) as any
+    this.#subQueryMode = subQueryMode
   }
 
-  private _buildProxy(): ODataFieldProxy<T> {
-    return buildProxyForTable(this._table) as any
-  }
+  get _table() { return this.#table }
+  get _proxy() { return this.#proxy }
+  get _expandMeta() { return this.#expandMeta }
 
-  select(): ODataQuery<T, Infer<T>>
-  select<K extends ValueKeys<T>>(...keys: K[]): ODataQuery<T, { [P in K]: Infer<T[P]> }>
-  select<K extends ValueKeys<T>>(...keys: K[]): any {
+  select(): this
+  select<K extends ValueKeys<T>>(...keys: K[]): this
+  select(...keys: any[]): this {
     if (keys.length === 0) {
-      this._fields = []
-      this._selectedKeys = []
-      for (const prop of Object.values(this._table.fields) as any[]) {
+      this.#fields = []
+      this.#selectedKeys = []
+      for (const [key, prop] of Object.entries(this.#table.fields) as [string, any][]) {
         if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
-          this._fields.push(prop.fromDataverseName ?? prop.name)
+          this.#fields.push(prop.fromDataverseName ?? prop.name)
+          this.#selectedKeys.push(key)
         }
       }
     } else {
-      this._fields = keys.map(k => this._proxy[k].toString() as string)
-      this._selectedKeys = keys as string[]
+      this.#fields = keys.map((k: any) => this.#proxy[k].toString() as string)
+      this.#selectedKeys = keys as string[]
     }
-    return this as any
+    return this
+  }
+
+  expand<K extends string & NavKeys<T>>(key: K, sub?: (q: any) => any): this {
+    const prop = this.#table.fields[key] as LookupProperty<any> | CollectionProperty<any>
+    const isCollection = prop.type === "collection"
+    if (this.#subQueryMode === "collection" && isCollection) {
+      throw new Error("expand() within a collection expand only supports lookup navigation properties")
+    }
+
+    const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup") as any
+    const result = sub?.(child)
+    const q = result ?? child
+
+    this.#expands.push({ name: prop.name, key, query: q._buildForExpand() })
+
+    // Track expand metadata for partial transforms
+    const childSelectedKeys = q._getSelectedKeys()
+    const childExpandMeta = q._expandMeta
+    const subQueryProvided = !!sub
+    this.#expandMeta.push({
+      key,
+      dvName: prop.name,
+      isCollection,
+      selectedKeys: subQueryProvided
+        ? (childSelectedKeys.length > 0 ? childSelectedKeys : null)
+        : null,
+      subExpands: subQueryProvided && childExpandMeta.length > 0 ? childExpandMeta : null,
+    })
+
+    return this
   }
 
   filter(filter: string): this
@@ -189,63 +323,38 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     if (filter instanceof FilterExpr) {
       str = filter.toOdata()
     } else if (typeof filter === "function") {
-      const result = filter(this._proxy)
+      const result = filter(this.#proxy)
       str = result instanceof FilterExpr ? result.toOdata() : result
     } else {
       str = filter
     }
-    this._filters.push(str)
-    return this
-  }
-
-  expand<K extends CollectionKeys<T>, R>(
-    key: K,
-    sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'apply' | 'execute' | 'toString'>) => ODataQuery<RelatedProps<T, K>, R>,
-  ): ODataQuery<T, Omit<TResult, K & keyof TResult> & { [P in K]: ExpandResult<T, P, R> }>
-  expand<K extends LookupKeys<T>, R>(
-    key: K,
-    sub?: (q: Omit<ODataQuery<RelatedProps<T, K>>, 'orderby' | 'top' | 'apply' | 'execute' | 'toString'>) => ODataQuery<RelatedProps<T, K>, R>,
-  ): ODataQuery<T, Omit<TResult, K & keyof TResult> & { [P in K]: ExpandResult<T, P, R> }>
-  expand<K extends string & NavKeys<T>, R>(
-    key: K,
-    sub?: (q: any) => any,
-  ): any {
-    const prop = this._table.fields[key] as LookupProperty<any> | CollectionProperty<any>
-    const isCollection = prop.type === "collection"
-    if (this._expandMode === "collection" && isCollection) {
-      throw new Error("expand() within a collection expand only supports lookup navigation properties")
-    }
-    const child = new ODataQuery(prop.table) as unknown as ODataQuery<RelatedProps<T, K>>
-    child._expandMode = isCollection ? "collection" : "lookup"
-    const result = sub?.(child)
-    const q = result ?? child
-    this._expands.push({ name: prop.name, key, query: q._build(true) })
+    this.#filters.push(str)
     return this
   }
 
   orderby(fieldSelector: (f: ODataFieldProxy<T>) => string | FieldRef<any>, direction?: "asc" | "desc"): this
   orderby(alias: string, direction?: "asc" | "desc"): this
   orderby(nameOrSelector: string | ((f: any) => string | FieldRef<any>), direction: "asc" | "desc" = "asc"): this {
-    if (this._expandMode === "lookup") throw new Error("orderby() is not supported in lookup expands")
+    if (this.#subQueryMode === "lookup") throw new Error("orderby() is not supported in lookup expands")
     if (typeof nameOrSelector === "function") {
-      const result = nameOrSelector(this._proxy)
-      this._orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction })
+      const result = nameOrSelector(this.#proxy)
+      this.#orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction })
     } else {
-      this._orderby.push({ name: nameOrSelector, dir: direction })
+      this.#orderby.push({ name: nameOrSelector, dir: direction })
     }
     return this
   }
 
   top(n: number): this {
-    if (this._expandMode === "lookup") throw new Error("top() is not supported in lookup expands")
-    this._top = n
+    if (this.#subQueryMode === "lookup") throw new Error("top() is not supported in lookup expands")
+    this.#top = n
     return this
   }
 
   apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
     expr: (f: ODataFieldProxy<T>) => R,
   ): ODataApplyQuery<T, ApplyResultType<R>> {
-    const result = expr(this._proxy as any)
+    const result = expr(this.#proxy as any)
     const groupByFields: string[] = []
     const aggParts: string[] = []
     const aliasProxy: Record<string, string> = {}
@@ -269,68 +378,155 @@ export class ODataQuery<T extends GenericProperties, TResult = Infer<T>> {
     }
 
     return new ODataApplyQuery<T, ApplyResultType<R>>(
-      this._table,
+      this.#table,
       applyStr,
       aliasProxy,
-      this._filters.length > 0 ? this._filters : undefined,
+      this.#filters.length > 0 ? this.#filters : undefined,
     )
   }
 
-  protected _build(forExpand = false): string {
+  _buildForExpand(): string {
     const parts: string[] = []
-    const joinChar = forExpand ? ";" : "&"
-
-    if (this._fields.length) parts.push(`$select=${this._fields.join(",")}`)
-    if (this._filters.length === 1) {
-      parts.push(`$filter=${this._filters[0]}`)
-    } else if (this._filters.length > 1) {
-      parts.push(`$filter=${this._filters.join(" and ")}`)
+    if (this.#fields.length) parts.push(`$select=${this.#fields.join(",")}`)
+    if (this.#filters.length === 1) {
+      parts.push(`$filter=${this.#filters[0]}`)
+    } else if (this.#filters.length > 1) {
+      parts.push(`$filter=${this.#filters.join(" and ")}`)
     }
-    if (this._orderby.length) {
-      parts.push(`$orderby=${this._orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
+    if (this.#orderby.length) {
+      parts.push(`$orderby=${this.#orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
     }
-    if (this._expands.length) {
-      parts.push(`$expand=${this._expands.map(e => {
-        return e.query ? `${e.name}(${e.query})` : e.name
-      }).join(",")}`)
+    if (this.#expands.length) {
+      parts.push(`$expand=${this.#expands.map(e =>
+        e.query ? `${e.name}(${e.query})` : e.name
+      ).join(",")}`)
     }
-    if (this._top !== undefined) parts.push(`$top=${this._top}`)
-
-    return parts.join(joinChar)
+    if (this.#top !== undefined) parts.push(`$top=${this.#top}`)
+    return parts.join(";")
   }
 
   toString(): string {
-    return this._build()
+    const parts: string[] = []
+    if (this.#fields.length) parts.push(`$select=${this.#fields.join(",")}`)
+    if (this.#filters.length === 1) {
+      parts.push(`$filter=${this.#filters[0]}`)
+    } else if (this.#filters.length > 1) {
+      parts.push(`$filter=${this.#filters.join(" and ")}`)
+    }
+    if (this.#orderby.length) {
+      parts.push(`$orderby=${this.#orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
+    }
+    if (this.#expands.length) {
+      parts.push(`$expand=${this.#expands.map(e =>
+        e.query ? `${e.name}(${e.query})` : e.name
+      ).join(",")}`)
+    }
+    if (this.#top !== undefined) parts.push(`$top=${this.#top}`)
+    return parts.join("&")
+  }
+
+  _getSelectedKeys(): string[] {
+    return this.#selectedKeys
   }
 
   private _partialTransform(value: any): Record<string, any> {
     const result: Record<string | symbol, any> = {}
-    for (const key of this._selectedKeys) {
-      const prop = this._table.fields[key]
+    for (const key of this.#selectedKeys) {
+      const prop = this.#table.fields[key]
       result[key] = prop.transformValueFromDataverse(value[prop.fromDataverseName])
     }
-    for (const expand of this._expands) {
-      const prop = this._table.fields[expand.key]
-      if (prop && value[expand.name] !== undefined) {
-        result[expand.key] = (prop as any).transformValueFromDataverse(value[expand.name])
+    for (const expand of this.#expandMeta) {
+      if (value[expand.dvName] !== undefined) {
+        result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table)
       }
     }
     result[Etag] = value["@odata.etag"]
     return result
   }
 
-  async execute(): Promise<TResult[]> {
+  async execute(): Promise<any[]> {
     const qs = this.toString()
-    if (!qs) return this._table.getRecords() as Promise<TResult[]>
-    const raw = await this._table.client.getRecords(this._table.entitySetName, qs)
-    if (this._selectedKeys.length > 0) {
-      return raw.map((v: unknown) => this._partialTransform(v)) as TResult[]
+    if (!qs) return this.#table.getRecords() as Promise<any[]>
+    const raw = await this.#table.client.getRecords(this.#table.entitySetName, qs)
+    if (this.#selectedKeys.length > 0) {
+      return raw.map((v: unknown) => this._partialTransform(v))
     }
-    return raw.map((v: unknown) => this._table.transformValueFromDataverse(v)) as TResult[]
+    if (this.#expandMeta.some(e => e.selectedKeys)) {
+      return raw.map((v: unknown) => this._partialTransform(v))
+    }
+    return raw.map((v: unknown) => this.#table.transformValueFromDataverse(v)) as any[]
   }
 }
 
-export function buildProxyForTable<T extends GenericProperties>(
+// --- InitialQuery (forces select or apply first) ---
+
+class InitialQueryImpl<T extends GenericProperties> {
+  #table: DataverseTable<T>
+
+  constructor(table: DataverseTable<T>) {
+    this.#table = table
+  }
+
+  select(): SelectQuery<T, T>
+  select<K extends ValueKeys<T>>(...keys: K[]): SelectQuery<T, { [P in K]: T[P] }>
+  select(...keys: any[]): any {
+    const q = new ODataQuery(this.#table)
+    if (keys.length === 0) {
+      q.select()
+    } else {
+      q.select(...keys)
+    }
+    return q
+  }
+
+  apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
+    expr: (f: ODataFieldProxy<T>) => R,
+  ): ApplyQuery<T, ApplyResultType<R>> {
+    return new ODataQuery(this.#table).apply(expr) as unknown as ApplyQuery<T, ApplyResultType<R>>
+  }
+}
+
+// --- Helpers ---
+
+function _processExpand(raw: any, expand: ExpandMeta, table: DataverseTable<any>): any {
+  if (raw === null || raw === undefined) return null
+  const navProp = table.fields[expand.key] as any
+  const relatedTable = navProp.table as DataverseTable<any>
+  if (expand.isCollection) {
+    const items = Array.from(raw ?? [])
+    if (expand.selectedKeys) {
+      return items.map((item: any) => _partialTransformItem(relatedTable, expand.selectedKeys!, item, expand.subExpands))
+    } else {
+      return navProp.transformValueFromDataverse(raw)
+    }
+  } else {
+    if (expand.selectedKeys) {
+      return _partialTransformItem(relatedTable, expand.selectedKeys, raw, expand.subExpands)
+    } else {
+      return navProp.transformValueFromDataverse(raw)
+    }
+  }
+}
+
+function _partialTransformItem(table: DataverseTable<any>, selectedKeys: string[], raw: any, subExpands?: ExpandMeta[] | null): Record<string, any> {
+  const result: Record<string, any> = {}
+  for (const key of selectedKeys) {
+    const prop = table.fields[key]
+    if (prop) {
+      result[key] = prop.transformValueFromDataverse(raw[prop.fromDataverseName])
+    }
+  }
+  if (subExpands) {
+    for (const expand of subExpands) {
+      if (raw[expand.dvName] !== undefined) {
+        result[expand.key] = _processExpand(raw[expand.dvName], expand, table)
+      }
+    }
+  }
+  return result
+}
+
+function _buildProxyForTable<T extends GenericProperties>(
   table: DataverseTable<T>,
   prefix?: string,
 ): ODataFieldProxy<T> {
@@ -347,7 +543,7 @@ export function buildProxyForTable<T extends GenericProperties>(
       Object.defineProperty(proxy, key, {
         get: () => {
           if (!cached) {
-            const sub = buildProxyForTable(navProp.table, currentPrefix) as Record<string, any>
+            const sub = _buildProxyForTable(navProp.table, currentPrefix) as Record<string, any>
             sub.toString = () => currentPrefix
             if (isCollection) proxyTableMap.set(sub, navProp.table)
             cached = sub
@@ -363,6 +559,8 @@ export function buildProxyForTable<T extends GenericProperties>(
   }
   return proxy as ODataFieldProxy<T>
 }
+
+// --- Aggregation helpers ---
 
 export function sum<V>(field: FieldRef<V> | string): Aggregation<V> {
   return new Aggregation("sum", field instanceof FieldRef ? field.toString() : field)
@@ -382,6 +580,8 @@ export function count<V>(field?: FieldRef<V> | string): Aggregation<number> {
 export function groupby<V>(field: FieldRef<V> | string): GroupByExpr<V> {
   return new GroupByExpr(field instanceof FieldRef ? field.toString() : field)
 }
+
+// --- Lambda helpers ---
 
 export function buildLambdaProxy<P extends GenericProperties>(
   alias: string,
@@ -417,6 +617,8 @@ export function all<P extends GenericProperties>(
   return new FilterExpr({ type: "lambda", field: String(proxy), operator: "all", alias, condition: result instanceof FilterExpr ? result.toOdata() : result })
 }
 
-export function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): ODataQuery<T, Infer<T>> {
-  return new ODataQuery(table)
+// --- Entry point ---
+
+export function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): InitialQuery<T> {
+  return new InitialQueryImpl(table) as any
 }
