@@ -147,7 +147,17 @@ class DataverseClient {
     if (this._processChangeset(resource, options)) return;
     if (this._processBatch(resource, options)) return;
     const url = resource.startsWith("http") ? resource : `${this.options.url}/api/data/v9.2/${resource}`;
-    const { headers, impersonateByAAId, impersonateByUserId, token } = this.options;
+    const {
+      headers,
+      impersonateByAAId,
+      impersonateByUserId,
+      token,
+      prefer,
+      consistency,
+      solutionUniqueName,
+      suppressDuplicateDetection,
+      bypassCustomPluginExecution
+    } = this.options;
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -159,6 +169,11 @@ class DataverseClient {
         ...impersonateByUserId ? { MSCRMCallerID: impersonateByUserId } : {},
         ...impersonateByAAId ? { CallerObjectId: impersonateByAAId } : {},
         ...token ? { Authorization: `Bearer ${token}` } : {},
+        ...prefer?.length ? { Prefer: this._resolvePrefer(prefer) } : {},
+        ...consistency ? { Consistency: consistency } : {},
+        ...solutionUniqueName ? { "MSCRM.SolutionUniqueName": solutionUniqueName } : {},
+        ...suppressDuplicateDetection !== void 0 ? { "MSCRM.SuppressDuplicateDetection": String(suppressDuplicateDetection) } : {},
+        ...bypassCustomPluginExecution !== void 0 ? { "MSCRM.BypassCustomPluginExecution": String(bypassCustomPluginExecution) } : {},
         ...headers,
         ...options.headers
       }
@@ -187,6 +202,17 @@ class DataverseClient {
   //
   // --- PRIVATE HELPER METHODS ---
   //
+  _resolvePrefer(prefer) {
+    return prefer.map((p) => {
+      if (typeof p === "string") return p;
+      if ("annotations" in p) {
+        const v = Array.isArray(p.annotations) ? p.annotations.join(",") : p.annotations;
+        return `odata.include-annotations="${v}"`;
+      }
+      if ("maxPageSize" in p) return `odata.maxpagesize=${p.maxPageSize}`;
+      return "";
+    }).filter(Boolean).join(",");
+  }
   async _getNextLink(result) {
     if (result["@odata.nextLink"]) {
       const nextResult = await this.fetch(result["@odata.nextLink"]);
@@ -1635,6 +1661,55 @@ class ListField extends Schema {
     });
   }
 }
+class ChoiceField extends Schema {
+  kind = "value";
+  type = "choice";
+  #options;
+  constructor(name, options) {
+    const firstKey = Object.keys(options)[0];
+    super(name, options[Number(firstKey)]);
+    this.#options = options;
+    this.check((v) => {
+      if (v !== null && !Object.values(options).includes(v)) {
+        return `${v} not in [${Object.values(options)}]`;
+      }
+    });
+  }
+  transformValueFromDataverse(value) {
+    return this.#options[value];
+  }
+  transformValueToDataverse(value) {
+    for (const [k, v] of Object.entries(this.#options)) {
+      if (v === value) return Number(k);
+    }
+    return value;
+  }
+}
+class NullableChoiceField extends Schema {
+  kind = "value";
+  type = "choice";
+  #options;
+  constructor(name, options) {
+    super(name, null);
+    this.#options = options;
+    this.check((v) => {
+      if (v !== null && !Object.values(options).includes(v)) {
+        return `${v} not in [${Object.values(options)}]`;
+      }
+    });
+  }
+  transformValueFromDataverse(value) {
+    if (value === null) return null;
+    return this.#options[value];
+  }
+  transformValueToDataverse(value) {
+    if (value === null) return null;
+    for (const [k, v] of Object.entries(this.#options)) {
+      if (v === value) return Number(k);
+    }
+    return value;
+  }
+}
 class DateTimeField extends Schema {
   kind = "value";
   type = "date";
@@ -1744,6 +1819,12 @@ function primaryKey(name) {
 }
 function list(name, list2) {
   return new ListField(name, list2);
+}
+function choice(name, options) {
+  return new ChoiceField(name, options);
+}
+function nullableChoice(name, options) {
+  return new NullableChoiceField(name, options);
 }
 function datetime(name) {
   return new DateTimeField(name);
@@ -2695,7 +2776,7 @@ class FilterCollector {
   _buildProxy(table) {
     const proxy = {};
     for (const [key, prop] of Object.entries(table.fields)) {
-      proxy[key] = new FieldRef(prop.fromDataverseName ?? prop.name, prop);
+      proxy[key] = new FieldRef(prop.name, prop);
     }
     return proxy;
   }
@@ -2741,7 +2822,7 @@ class FetchXmlAggregateQuery {
   _buildProxy() {
     const proxy = {};
     for (const [key, prop] of Object.entries(this._table.fields)) {
-      proxy[key] = new FieldRef(prop.fromDataverseName ?? prop.name, prop);
+      proxy[key] = new FieldRef(prop.name, prop);
     }
     return proxy;
   }
@@ -2779,7 +2860,7 @@ class FetchXmlAggregateQuery {
     });
     return this;
   }
-  through(intersectTable, subquery) {
+  intersect(intersectTable, subquery) {
     let targetTable;
     if (intersectTable.table1 === this._table) {
       targetTable = intersectTable.table2;
@@ -3049,7 +3130,7 @@ class EntityQueryBuilder {
     for (const [key, prop] of Object.entries(this._table.fields)) {
       const p = prop;
       if (p.kind === "value" || p.type === "lookupId" || p.type === "file") {
-        attrs.push({ name: p.fromDataverseName ?? p.name, alias: key });
+        attrs.push({ name: p.name, alias: key });
       }
     }
     return attrs;
@@ -3057,7 +3138,7 @@ class EntityQueryBuilder {
   _buildProxy() {
     const proxy = {};
     for (const [key, prop] of Object.entries(this._table.fields)) {
-      proxy[key] = new FieldRef(prop.fromDataverseName ?? prop.name, prop);
+      proxy[key] = new FieldRef(prop.name, prop);
     }
     return proxy;
   }
@@ -3141,7 +3222,7 @@ class EntityQueryBuilder {
     }
     return this;
   }
-  through(intersectTable, subquery) {
+  intersect(intersectTable, subquery) {
     let targetTable;
     if (intersectTable.table1 === this._table) {
       targetTable = intersectTable.table2;
@@ -3389,8 +3470,8 @@ class FetchXmlInitialImpl {
     this.#builder.join(...args);
     return this;
   }
-  through(...args) {
-    this.#builder.through(...args);
+  intersect(...args) {
+    this.#builder.intersect(...args);
     return this;
   }
   distinct() {
@@ -3416,4 +3497,4 @@ class FetchXmlInitialImpl {
   }
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, collection, collectionIds, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, choice, collection, collectionIds, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };

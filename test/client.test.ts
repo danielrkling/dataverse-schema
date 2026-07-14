@@ -486,3 +486,199 @@ test("updatePropertyValue with etag sends If-Match header", async () => {
   await client.updatePropertyValue("accounts", "a1b2c3d4-e5f6-7890-1234-567890abcdef", "name", "New Name", '"etag-value"')
   expect(capturedIfMatch).toBe('"etag-value"')
 })
+
+//
+// --- TYPED HEADER OPTIONS ---
+//
+
+test("prefer with string values resolves to comma-separated header", async () => {
+  let capturedPrefer = ""
+  const preferClient = new DataverseClient({
+    url: BASE_URL,
+    prefer: ["return=representation", "odata.track-changes"],
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await preferClient.getRecords("accounts")
+  expect(capturedPrefer).toBe("return=representation,odata.track-changes")
+})
+
+test("prefer with annotations object resolves correctly", async () => {
+  let capturedPrefer = ""
+  const preferClient = new DataverseClient({
+    url: BASE_URL,
+    prefer: [{ annotations: "*" }],
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await preferClient.getRecords("accounts")
+  expect(capturedPrefer).toBe('odata.include-annotations="*"')
+})
+
+test("prefer with annotations array resolves correctly", async () => {
+  let capturedPrefer = ""
+  const preferClient = new DataverseClient({
+    url: BASE_URL,
+    prefer: [{ annotations: ["OData.Community.Display.V1.FormattedValue", "Microsoft.PowerApps.CDS.HelpLink"] }],
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await preferClient.getRecords("accounts")
+  expect(capturedPrefer).toBe('odata.include-annotations="OData.Community.Display.V1.FormattedValue,Microsoft.PowerApps.CDS.HelpLink"')
+})
+
+test("prefer with maxPageSize object resolves correctly", async () => {
+  let capturedPrefer = ""
+  const preferClient = new DataverseClient({
+    url: BASE_URL,
+    prefer: [{ maxPageSize: 500 }],
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await preferClient.getRecords("accounts")
+  expect(capturedPrefer).toBe("odata.maxpagesize=500")
+})
+
+test("prefer with mixed string and object values", async () => {
+  let capturedPrefer = ""
+  const preferClient = new DataverseClient({
+    url: BASE_URL,
+    prefer: ["return=representation", { annotations: "*" }, { maxPageSize: 200 }],
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await preferClient.getRecords("accounts")
+  expect(capturedPrefer).toBe('return=representation,odata.include-annotations="*",odata.maxpagesize=200')
+})
+
+test("empty prefer array does not set Prefer header", async () => {
+  let capturedPrefer = ""
+  const preferClient = new DataverseClient({
+    url: BASE_URL,
+    prefer: [],
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await preferClient.getRecords("accounts")
+  expect(capturedPrefer).toBe("")
+})
+
+test("consistency header is set when specified", async () => {
+  let capturedConsistency = ""
+  const consistencyClient = new DataverseClient({
+    url: BASE_URL,
+    consistency: "Strong",
+  })
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedConsistency = request.headers.get("Consistency") ?? ""
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await consistencyClient.getRecords("accounts")
+  expect(capturedConsistency).toBe("Strong")
+})
+
+test("solutionUniqueName header is set when specified", async () => {
+  let capturedSolution = ""
+  const solutionClient = new DataverseClient({
+    url: BASE_URL,
+    solutionUniqueName: "mySolution",
+  })
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedSolution = request.headers.get("MSCRM.SolutionUniqueName") ?? ""
+      return HttpResponse.json({ accountid: "new-id", name: "Test" })
+    }),
+  )
+  await solutionClient.postRecordGetId("accounts", { name: "Test" })
+  expect(capturedSolution).toBe("mySolution")
+})
+
+test("suppressDuplicateDetection true sends string true", async () => {
+  let capturedHeader = ""
+  const dupClient = new DataverseClient({
+    url: BASE_URL,
+    suppressDuplicateDetection: true,
+  })
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedHeader = request.headers.get("MSCRM.SuppressDuplicateDetection") ?? ""
+      return HttpResponse.json({ accountid: "new-id", name: "Test" })
+    }),
+  )
+  await dupClient.postRecordGetId("accounts", { name: "Test" })
+  expect(capturedHeader).toBe("true")
+})
+
+test("suppressDuplicateDetection false sends string false", async () => {
+  let capturedHeader = ""
+  const dupClient = new DataverseClient({
+    url: BASE_URL,
+    suppressDuplicateDetection: false,
+  })
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedHeader = request.headers.get("MSCRM.SuppressDuplicateDetection") ?? ""
+      return HttpResponse.json({ accountid: "new-id", name: "Test" })
+    }),
+  )
+  await dupClient.postRecordGetId("accounts", { name: "Test" })
+  expect(capturedHeader).toBe("false")
+})
+
+test("bypassCustomPluginExecution true sends string true", async () => {
+  let capturedHeader = ""
+  const pluginClient = new DataverseClient({
+    url: BASE_URL,
+    bypassCustomPluginExecution: true,
+  })
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedHeader = request.headers.get("MSCRM.BypassCustomPluginExecution") ?? ""
+      return HttpResponse.json({ accountid: "new-id", name: "Test" })
+    }),
+  )
+  await pluginClient.postRecordGetId("accounts", { name: "Test" })
+  expect(capturedHeader).toBe("true")
+})
+
+test("undefined typed options do not emit headers", async () => {
+  let capturedHeaders: Record<string, string> = {}
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      request.headers.forEach((value, key) => { capturedHeaders[key.toLowerCase()] = value })
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await client.getRecords("accounts")
+  expect(capturedHeaders["prefer"]).toBeUndefined()
+  expect(capturedHeaders["consistency"]).toBeUndefined()
+  expect(capturedHeaders["mscrm.solutionuniquename"]).toBeUndefined()
+  expect(capturedHeaders["mscrm.suppressduplicatedetection"]).toBeUndefined()
+  expect(capturedHeaders["mscrm.bypasscustompluginexecution"]).toBeUndefined()
+})

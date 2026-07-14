@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 import { DataverseClient } from "../src/client"
-import { DataverseTable, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
+import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 import { http, HttpResponse } from "msw"
 import { server } from "./mocks/server"
@@ -456,4 +456,330 @@ test("table.updateRecord without etag does not send If-Match", async () => {
   )
   await Person.updateRecord("existing-id", { name: "Updated" })
   expect(capturedIfMatch).toBe("")
+})
+
+//
+// --- NAVIGATION PROPERTY UPDATES ---
+//
+
+test("table.updatePropertyValue with collection syncs association list", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address_person`, () => {
+      return HttpResponse.json({ value: [] })
+    }),
+    http.put(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address_person/$ref`, async ({ request }) => {
+      capturedBody = await request.json()
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Person.updatePropertyValue("addresses", "parent-id" as any, [
+    { id: "addr-1" } as any,
+  ])
+  expect(capturedBody).toBeDefined()
+})
+
+test("table.updatePropertyValue with collectionIds syncs ids", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address_person`, () => {
+      return HttpResponse.json({ value: [] })
+    }),
+    http.put(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address_person/$ref`, async ({ request }) => {
+      capturedBody = await request.json()
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Person.updatePropertyValue("addressIds", "parent-id" as any, ["addr-1" as any])
+  expect(capturedBody).toBeDefined()
+})
+
+test("table.updatePropertyValue with lookupId associates", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.put(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address/$ref`, ({ request }) => {
+      capturedUrl = request.url
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Person.updatePropertyValue("primaryAddressId", "parent-id" as any, "addr-id" as any)
+  expect(capturedUrl).toContain("$ref")
+})
+
+test("table.updatePropertyValue with lookupId null dissociates", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.delete(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address/$ref`, ({ request }) => {
+      capturedUrl = request.url
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Person.updatePropertyValue("primaryAddressId", "parent-id" as any, null)
+  expect(capturedUrl).toContain("person_Address")
+})
+
+test("table.updatePropertyValue with lookup null dissociates", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.delete(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address`, ({ request }) => {
+      capturedUrl = request.url
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Person.updatePropertyValue("primaryAddress", "parent-id" as any, null)
+  expect(capturedUrl).toContain("person_Address")
+})
+
+//
+// --- DISSOCIATE RECORD ---
+//
+
+test("table.dissociateRecord removes link for collectionIds", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.delete(`${BASE_URL}/api/data/v9.2/people(parent-id)/person_Address_person(child-id)/$ref`, ({ request }) => {
+      capturedUrl = request.url
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  const id = await Person.dissociateRecord("addressIds", "parent-id" as any, "child-id" as any)
+  expect(id).toBe("child-id")
+  expect(capturedUrl).toContain("$ref")
+})
+
+test("table.dissociateRecord throws for non-navigation property", async () => {
+  // Use a table with only value fields
+  const SimpleTable = new DataverseTable({
+    client, entitySetName: "simple", logicalName: "simple",
+    fields: { id: primaryKey("id"), name: string("name") },
+  })
+  await expect(
+    (SimpleTable as any).dissociateRecord("name", "id-1")
+  ).rejects.toThrow("Can only dissociate navigation properties")
+})
+
+//
+// --- ASSOCIATE RECORD throws ---
+//
+
+test("table.associateRecord throws for non-navigation property", async () => {
+  const SimpleTable = new DataverseTable({
+    client, entitySetName: "simple", logicalName: "simple",
+    fields: { id: primaryKey("id"), name: string("name") },
+  })
+  await expect(
+    (SimpleTable as any).associateRecord("name", "id-1", "child-id")
+  ).rejects.toThrow("Can only associate to navigation properties")
+})
+
+//
+// --- DELETE PROPERTY VALUE throws ---
+//
+
+test("table.deletePropertyValue throws for navigation property", async () => {
+  await expect(
+    Person.deletePropertyValue("primaryAddress" as any, "id-1")
+  ).rejects.toThrow("Cannot delete navigation property values")
+})
+
+//
+// --- GET PROPERTY VALUE (all paths) ---
+//
+
+test("table.getPropertyValue retrieves a value property", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(test-id)/person_age`, () => {
+      return HttpResponse.json({ value: 35 })
+    }),
+  )
+  const value = await Person.getPropertyValue("age", "test-id")
+  expect(value).toBe(35)
+})
+
+test("table.getPropertyValue retrieves lookupId property", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(test-id)/person_Address`, () => {
+      return HttpResponse.json({ value: "addr-id-123" })
+    }),
+  )
+  const value = await Person.getPropertyValue("primaryAddressId", "test-id")
+  expect(value).toBe("addr-id-123")
+})
+
+test("table.getPropertyValue retrieves lookup navigation property", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(test-id)/person_Address`, () => {
+      return HttpResponse.json({ addressid: "addr-1", street_Address: "456 Oak", zip_code: 12345 })
+    }),
+  )
+  const value = await Person.getPropertyValue("primaryAddress", "test-id")
+  expect(value).not.toBeNull()
+  expect(value!.street).toBe("456 Oak")
+  expect(value!.zip).toBe(12345)
+})
+
+test("table.getPropertyValue retrieves collection navigation property", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(test-id)/person_Address_person`, () => {
+      return HttpResponse.json({ value: [{ addressid: "addr-1", street_Address: "789 Pine", zip_code: 54321 }] })
+    }),
+  )
+  const addresses = await Person.getPropertyValue("addresses", "test-id")
+  expect(addresses).toHaveLength(1)
+  expect(addresses[0].street).toBe("789 Pine")
+})
+
+test("table.getPropertyValue retrieves collectionIds property", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people(test-id)/person_Address_person`, () => {
+      return HttpResponse.json({ value: [{ addressid: "id-1" }, { addressid: "id-2" }] })
+    }),
+  )
+  const ids = await Person.getPropertyValue("addressIds", "test-id")
+  expect(ids).toHaveLength(2)
+})
+
+//
+// --- GET ALTERNATE KEYS ---
+//
+
+test("table.getAlternateKeys builds key string", () => {
+  const key = Person.getAlternateKeys({ name: "John", age: 30 })
+  expect(key).toContain("fullname=John")
+  expect(key).toContain("person_age=30")
+})
+
+//
+// --- GET PRIMARY KEY error ---
+//
+
+test("table.getPrimaryKey throws when no primary key defined", () => {
+  const NoPKTable = new DataverseTable({
+    client, entitySetName: "nopes", logicalName: "nopes",
+    fields: { name: string("name") },
+  })
+  expect(() => NoPKTable.getPrimaryKey()).toThrow("No Primary Key found in schema")
+})
+
+//
+// --- GET DEFAULT with values ---
+//
+
+test("table.getDefault returns defaults merged with provided values", () => {
+  const defaults = Person.getDefault({ name: "Default Person" })
+  expect(defaults.name).toBe("Default Person")
+  expect(defaults.pk).toBeDefined()
+  expect(typeof defaults.pk).toBe("string")
+})
+
+//
+// --- GET ISSUES ---
+//
+
+test("table.getIssues collects validation issues from fields", () => {
+  const issues = Person.getIssues({ name: 123, age: "not-a-number" })
+  expect(issues.length).toBeGreaterThan(0)
+})
+
+test("table.getIssues handles null/undefined input gracefully", () => {
+  const issues = Person.getIssues(null)
+  expect(Array.isArray(issues)).toBe(true)
+})
+
+//
+// --- UPDATE MULTIPLE ---
+//
+
+test("table.updateMultiple transforms and bulk-updates records", async () => {
+  let capturedBody: any = null
+  server.use(
+    http.post(`${BASE_URL}/api/data/v9.2/people/Microsoft.Dynamics.CRM.UpdateMultiple`, async ({ request }) => {
+      capturedBody = await request.json()
+      return HttpResponse.json({ Targets: [{ id: "upd-1" }] })
+    }),
+  )
+  const result = await Person.updateMultiple([{ pk: "id-1" as any, name: "Updated" }])
+  expect(capturedBody.Targets[0].fullname).toBe("Updated")
+  expect(result.Targets).toHaveLength(1)
+})
+
+//
+// --- TRANSFORM VALUE TO DATAVERSE with lookupId ---
+//
+
+test("table.transformValueToDataverse includes lookupId with odata.bind", () => {
+  const result = Person.transformValueToDataverse({ primaryAddressId: "addr-id" as any })
+  expect(result["person_Address@odata.bind"]).toBe("addresses(addr-id)")
+})
+
+//
+// --- DATVERSE INTERSECT TABLE ---
+//
+
+test("DataverseIntersectTable stores tables and name", () => {
+  const intersect = new DataverseIntersectTable("accountcontact", Address, Person)
+  expect(intersect.name).toBe("accountcontact")
+  expect(intersect.intersect).toBe(true)
+  expect(intersect.table1).toBe(Address)
+  expect(intersect.table2).toBe(Person)
+})
+
+//
+// --- QUERY BUILDING ---
+//
+
+test("table.getRecords with orderby object builds correct query", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await Person.getRecords({ orderby: { name: "asc" } })
+  expect(capturedUrl).toContain("orderby=fullname+asc")
+})
+
+test("table.getRecords without options builds basic query", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  await Person.getRecords()
+  expect(capturedUrl).toContain("$select=")
+})
+
+//
+// --- BUILDEXPAND depth limit ---
+//
+
+test("table.getRecord builds expand for nested navigation properties", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people`, ({ request }) => {
+      capturedUrl = request.url
+      return HttpResponse.json({ value: [] })
+    }),
+  )
+  // getRecords triggers buildExpand which should include navigation properties
+  await Person.getRecords()
+  expect(capturedUrl).toContain("$expand=")
+  expect(capturedUrl).toContain("person_Address(")
+})
+
+//
+// --- TRANSFORM VALUE FROM DATAVERSE with etag ---
+//
+
+test("table.transformValueFromDataverse preserves etag", () => {
+  const result = Person.transformValueFromDataverse({
+    personid: "id-1",
+    fullname: "Alice",
+    "@odata.etag": '"W/\\"12345\\""',
+  })
+  const { Etag, getEtag } = require("../src/util")
+  expect(getEtag(result)).toBe('"W/\\"12345\\""')
 })

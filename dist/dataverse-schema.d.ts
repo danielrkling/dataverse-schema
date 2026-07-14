@@ -105,6 +105,30 @@ export declare class BooleanField extends Schema<boolean> {
 export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
 
 /**
+ * Creates a choice/option-set column definition. Maps Dataverse numeric option values
+ * to human-readable string labels.
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param options An object mapping numeric option values to string labels.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   status: choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" }),
+ * });
+ * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
+ */
+export declare function choice<T extends Record<number, string>>(name: string, options: T): ChoiceField<T>;
+
+export declare class ChoiceField<T extends Record<number, string>> extends Schema<T[keyof T]> {
+    #private;
+    kind: "value";
+    type: "choice";
+    constructor(name: string, options: T);
+    transformValueFromDataverse(value: any): T[keyof T];
+    transformValueToDataverse(value: any): number;
+}
+
+/**
  * Creates a one-to-many (collection) navigation property definition. The related records
  * can be expanded via OData `$expand` or fetched through the table API.
  *
@@ -222,6 +246,7 @@ export declare class DataverseClient {
      * })
      */
     fetch(resource: string, options?: RequestInit): Promise<any>;
+    private _resolvePrefer;
     private _getNextLink;
     /**
      * Retrieves a single record by ID.
@@ -522,6 +547,23 @@ export declare type DataverseClientOptions = {
     impersonateByAAId?: string;
     /** Dataverse user ID to impersonate (sets MSCRMCallerID header). */
     impersonateByUserId?: string;
+    /**
+     * OData Prefer header values. Accepts an array of strings or structured objects.
+     *
+     * @example
+     * ```ts
+     * prefer: ["return=representation", { annotations: "*" }, { maxPageSize: 500 }]
+     * ```
+     */
+    prefer?: PreferOption[];
+    /** Use `"Strong"` to bypass caching and get the latest version. */
+    consistency?: "Strong";
+    /** Solution unique name — associates the request with an unmanaged solution. */
+    solutionUniqueName?: string;
+    /** Set to `true` to enable duplicate detection on create/update. */
+    suppressDuplicateDetection?: boolean;
+    /** Set to `true` to bypass custom plug-in execution (requires prvBypassCustomPlugins privilege). */
+    bypassCustomPluginExecution?: boolean;
     /** Additional headers to include on every request. */
     headers?: Record<string, string>;
 };
@@ -529,16 +571,16 @@ export declare type DataverseClientOptions = {
 /**
  * Represents a Dataverse many-to-many intersect (association) table.
  *
- * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.through through()}
+ * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.intersect intersect()}
  * method. It does NOT extend {@link DataverseTable} — it is not a queryable entity on its own.
  *
  * @example
  * const AccountContact = new DataverseIntersectTable("accountcontact", Account, Contact);
  *
- * // Use in FetchXML via through():
+ * // Use in FetchXML via intersect():
  * fetchXml(Account)
  *   .select(f => ({ name: f.name }))
- *   .through(AccountContact, sub =>
+ *   .intersect(AccountContact, sub =>
  *     sub.select(f => ({ accountName: f.name }))
  *   )
  */
@@ -970,9 +1012,9 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): FetchXmlAggregateQuery<TProps, ApplyResultType_2<R>>;
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): EntityQueryBuilder<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: EntityQueryBuilder<T2, {}>) => EntityQueryBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: EntityQueryBuilder<T1, {}>) => EntityQueryBuilder<T1, TJoinResult>): EntityQueryBuilder<TProps, Simplify<TResult & TJoinResult>>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
     distinct(): this;
     top(n: number): this;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
@@ -1053,8 +1095,8 @@ export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TR
     private _getEffectiveAttributes;
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FetchLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"]>) => void, intersect?: boolean): this;
-    through<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2>) => void): this;
-    through<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubAggregateJoinBuilder<T1>) => void): this;
+    intersect<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2>) => SubAggregateJoinBuilder<T2>): this;
+    intersect<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubAggregateJoinBuilder<T1>) => SubAggregateJoinBuilder<T1>): this;
     top(n: number): this;
     orderby(fieldSelector: (f: ApplyAliasProxy_2<TResult>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
@@ -1077,8 +1119,8 @@ export declare interface FetchXmlInitial<TProps extends GenericProperties> {
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlInitial<TProps>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlInitial<TProps>;
-    through<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): FetchXmlInitial<TProps>;
-    through<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: FilterCollector<T1>) => void): FetchXmlInitial<TProps>;
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlInitial<TProps>;
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): FetchXmlInitial<TProps>;
     distinct(): FetchXmlInitial<TProps>;
     top(n: number): FetchXmlInitial<TProps>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
@@ -1094,9 +1136,9 @@ export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, T
     }>;
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlSelectQuery<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>;
-    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>;
-    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): FetchXmlSelectQuery<TProps, Simplify<TResult & TJoinResult>>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
     distinct(): FetchXmlSelectQuery<TProps, TResult>;
     top(n: number): FetchXmlSelectQuery<TProps, TResult>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
@@ -1251,7 +1293,7 @@ export declare type GenericProperty = GenericNavigationProperty | GenericValuePr
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-export declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField;
+export declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField | ChoiceField<Record<number, string>> | NullableChoiceField<Record<number, string>>;
 
 export declare function getEtag(v: any): string | undefined;
 
@@ -1662,6 +1704,8 @@ export declare function NextYear(field: FieldRef<any>): FilterExpr;
 
 declare type NonNullType<T> = T extends Date | null ? Date : Exclude<T, null>;
 
+declare type NoOverlap<T extends Record<string, any>, U extends Record<string, any>> = Extract<keyof T, keyof U> extends never ? Simplify<T & U> : never;
+
 declare type NormalLinkType = Exclude<FetchLinkType, FilterOnlyLinkType>;
 
 export declare function not(condition: FilterExpr | string): FilterExpr;
@@ -1675,6 +1719,29 @@ export declare function NotEqualUserId(field: FieldRef<any>): FilterExpr;
 export declare function NotIn<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
 
 export declare function NotUnder(field: FieldRef<any>, value: string): FilterExpr;
+
+/**
+ * Creates a nullable choice/option-set column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param options An object mapping numeric option values to string labels.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" }),
+ * });
+ * // Infer<typeof table>["priority"] → "Low" | "High" | null
+ */
+export declare function nullableChoice<T extends Record<number, string>>(name: string, options: T): NullableChoiceField<T>;
+
+export declare class NullableChoiceField<T extends Record<number, string>> extends Schema<T[keyof T] | null> {
+    #private;
+    kind: "value";
+    type: "choice";
+    constructor(name: string, options: T);
+    transformValueFromDataverse(value: any): T[keyof T] | null;
+    transformValueToDataverse(value: any): number | null;
+}
 
 /**
  * Creates a nullable date-only column definition (allows `null`).
@@ -1858,6 +1925,28 @@ export declare class OrderSpec {
 export declare function parseDateOnly(dateString: string): Date;
 
 export declare function pattern(regex: RegExp, message?: string): Validator<string>;
+
+/**
+ * A single Prefer value — either a raw string or a structured object
+ * for annotations and page size.
+ *
+ * @example
+ * // String form
+ * const options: PreferOption[] = ["return=representation", "odata.track-changes"];
+ *
+ * @example
+ * // Object form for annotations
+ * const options: PreferOption[] = [{ annotations: "*" }];
+ *
+ * @example
+ * // Object form for page size
+ * const options: PreferOption[] = [{ maxPageSize: 500 }];
+ */
+export declare type PreferOption = "return=representation" | "respond-async" | "odata.track-changes" | {
+    annotations: "*" | string[];
+} | {
+    maxPageSize: number;
+};
 
 /**
  * Creates a primary key (GUID) column definition for a Dataverse table.
@@ -2097,30 +2186,30 @@ export declare class StringField extends Schema<string> {
     transformValueFromDataverse(value: any): string;
 }
 
-declare type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> = {
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): SubAggregateJoinBuilder<TProps, ApplyResultType_2<R>>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubAggregateJoinBuilder<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubAggregateJoinBuilder<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubAggregateJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    through<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2>) => void): SubAggregateJoinBuilder<TProps, TResult>;
-    through<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubAggregateJoinBuilder<T1>) => void): SubAggregateJoinBuilder<TProps, TResult>;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult>;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult>;
+declare type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}, TApplied extends boolean = false> = {
+    apply: TApplied extends true ? never : <R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R) => SubAggregateJoinBuilder<TProps, ApplyResultType_2<R>, true>;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
+    intersect<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    intersect<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubAggregateJoinBuilder<T1>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
     toXml(): string;
     toString(): string;
 };
 
-declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any>> = {
-    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): SubJoinBuilder<TProps, {
+declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any>, TSelected extends boolean = false> = {
+    select: TSelected extends true ? never : <R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R) => SubJoinBuilder<TProps, {
         [K in keyof R]: Infer<TProps[R[K]]>;
-    }>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubJoinBuilder<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): SubJoinBuilder<TProps, Simplify<TResult & TJoinResult>>;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult>;
+    }, true>;
+    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult, TSelected>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubJoinBuilder<TProps, TResult, TSelected>;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
+    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>;
+    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>;
     toXml(): string;
     toString(): string;
 };

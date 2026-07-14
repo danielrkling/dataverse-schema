@@ -4,6 +4,29 @@ import { wrapString } from "./util";
 
 const parenthesesRegEx = /\(([^)]+)\)/;
 
+/**
+ * A single Prefer value — either a raw string or a structured object
+ * for annotations and page size.
+ *
+ * @example
+ * // String form
+ * const options: PreferOption[] = ["return=representation", "odata.track-changes"];
+ *
+ * @example
+ * // Object form for annotations
+ * const options: PreferOption[] = [{ annotations: "*" }];
+ *
+ * @example
+ * // Object form for page size
+ * const options: PreferOption[] = [{ maxPageSize: 500 }];
+ */
+export type PreferOption =
+    | "return=representation"
+    | "respond-async"
+    | "odata.track-changes"
+    | { annotations: "*" | string[] }
+    | { maxPageSize: number };
+
 /** Options for configuring a DataverseClient instance. */
 export type DataverseClientOptions = {
     /** Base URL of the Dataverse environment (defaults to `location.origin`). */
@@ -14,6 +37,23 @@ export type DataverseClientOptions = {
     impersonateByAAId?: string;
     /** Dataverse user ID to impersonate (sets MSCRMCallerID header). */
     impersonateByUserId?: string;
+    /**
+     * OData Prefer header values. Accepts an array of strings or structured objects.
+     *
+     * @example
+     * ```ts
+     * prefer: ["return=representation", { annotations: "*" }, { maxPageSize: 500 }]
+     * ```
+     */
+    prefer?: PreferOption[];
+    /** Use `"Strong"` to bypass caching and get the latest version. */
+    consistency?: "Strong";
+    /** Solution unique name — associates the request with an unmanaged solution. */
+    solutionUniqueName?: string;
+    /** Set to `true` to enable duplicate detection on create/update. */
+    suppressDuplicateDetection?: boolean;
+    /** Set to `true` to bypass custom plug-in execution (requires prvBypassCustomPlugins privilege). */
+    bypassCustomPluginExecution?: boolean;
     /** Additional headers to include on every request. */
     headers?: Record<string, string>;
 };
@@ -66,7 +106,11 @@ export class DataverseClient {
         // Handle full URLs from @odata.nextLink
         const url = resource.startsWith("http") ? resource : `${this.options.url}/api/data/v9.2/${resource}`;
 
-        const { headers, impersonateByAAId, impersonateByUserId, token } = this.options;
+        const {
+            headers, impersonateByAAId, impersonateByUserId, token,
+            prefer, consistency, solutionUniqueName,
+            suppressDuplicateDetection, bypassCustomPluginExecution,
+        } = this.options;
 
         const response = await fetch(url, {
             ...options,
@@ -79,6 +123,11 @@ export class DataverseClient {
                 ...(impersonateByUserId ? { MSCRMCallerID: impersonateByUserId } : {}),
                 ...(impersonateByAAId ? { CallerObjectId: impersonateByAAId } : {}),
                 ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                ...(prefer?.length ? { Prefer: this._resolvePrefer(prefer) } : {}),
+                ...(consistency ? { Consistency: consistency } : {}),
+                ...(solutionUniqueName ? { "MSCRM.SolutionUniqueName": solutionUniqueName } : {}),
+                ...(suppressDuplicateDetection !== undefined ? { "MSCRM.SuppressDuplicateDetection": String(suppressDuplicateDetection) } : {}),
+                ...(bypassCustomPluginExecution !== undefined ? { "MSCRM.BypassCustomPluginExecution": String(bypassCustomPluginExecution) } : {}),
                 ...headers,
                 ...options.headers,
             },
@@ -115,6 +164,21 @@ export class DataverseClient {
     //
     // --- PRIVATE HELPER METHODS ---
     //
+
+    private _resolvePrefer(prefer: PreferOption[]): string {
+        return prefer
+            .map((p) => {
+                if (typeof p === "string") return p;
+                if ("annotations" in p) {
+                    const v = Array.isArray(p.annotations) ? p.annotations.join(",") : p.annotations;
+                    return `odata.include-annotations="${v}"`;
+                }
+                if ("maxPageSize" in p) return `odata.maxpagesize=${p.maxPageSize}`;
+                return "";
+            })
+            .filter(Boolean)
+            .join(",");
+    }
 
     private async _getNextLink(result: any): Promise<any[]> {
         if (result["@odata.nextLink"]) {
