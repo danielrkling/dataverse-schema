@@ -323,7 +323,7 @@ test("filter-only join: no fields in result (TResult={})", () => {
 
 test("through subquery has select and filter — not apply", () => {
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Address)
-  fetchXml(Person).select().through(PersonAccount, (sub) => {
+  fetchXml(Person).select().intersect(PersonAccount, (sub) => {
     expectTypeOf(sub.select).toBeFunction()
     expectTypeOf(sub.filter).toBeFunction()
     expectTypeOf(sub).not.toHaveProperty("apply")
@@ -345,7 +345,7 @@ test("aggregate through subquery has apply — not select", () => {
   const PersonAccount = { name: "personaccount", table1: Person, table2: Address, intersect: true } as any
   fetchXml(Person).apply(f => ({
     totalAge: sum(f.age),
-  })).through(PersonAccount, (sub) => {
+  })).intersect(PersonAccount, (sub) => {
     expectTypeOf(sub.apply).toBeFunction()
     return sub.apply(f => ({ street: groupby(f.street) }))
   })

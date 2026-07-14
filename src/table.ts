@@ -730,16 +730,16 @@ function buildExpand(table: DataverseTable<GenericProperties>, depth = 0): strin
 /**
  * Represents a Dataverse many-to-many intersect (association) table.
  *
- * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.through through()}
+ * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.intersect intersect()}
  * method. It does NOT extend {@link DataverseTable} — it is not a queryable entity on its own.
  *
  * @example
  * const AccountContact = new DataverseIntersectTable("accountcontact", Account, Contact);
  *
- * // Use in FetchXML via through():
+ * // Use in FetchXML via intersect():
  * fetchXml(Account)
  *   .select(f => ({ name: f.name }))
- *   .through(AccountContact, sub =>
+ *   .intersect(AccountContact, sub =>
  *     sub.select(f => ({ accountName: f.name }))
  *   )
  */

@@ -77,11 +77,11 @@ type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<str
         subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>
-    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
     ): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>
-    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>,
     ): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>
@@ -123,11 +123,11 @@ type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends R
         subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>
-    through<T2 extends GenericProperties>(
+    intersect<T2 extends GenericProperties>(
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubAggregateJoinBuilder<T2>) => void,
     ): SubAggregateJoinBuilder<TProps, TResult, TApplied>
-    through<T1 extends GenericProperties>(
+    intersect<T1 extends GenericProperties>(
         intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: SubAggregateJoinBuilder<T1>) => void,
     ): SubAggregateJoinBuilder<TProps, TResult, TApplied>
@@ -158,11 +158,11 @@ export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult e
         subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>
-    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
     ): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>
-    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>,
     ): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>
@@ -200,11 +200,11 @@ export interface FetchXmlInitial<TProps extends GenericProperties> {
         subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
     ): FetchXmlInitial<TProps>
-    through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
     ): FetchXmlInitial<TProps>
-    through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>,
     ): FetchXmlInitial<TProps>
@@ -345,15 +345,15 @@ export class FetchXmlAggregateQuery<
         return this;
     }
 
-    public through<T2 extends GenericProperties>(
+    public intersect<T2 extends GenericProperties>(
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubAggregateJoinBuilder<T2>) => SubAggregateJoinBuilder<T2>,
     ): this;
-    public through<T1 extends GenericProperties>(
+    public intersect<T1 extends GenericProperties>(
         intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: SubAggregateJoinBuilder<T1>) => SubAggregateJoinBuilder<T1>,
     ): this;
-    public through(
+    public intersect(
         intersectTable: DataverseIntersectTable<any, any>,
         subquery: (q: SubAggregateJoinBuilder<any>) => void,
     ): this {
@@ -824,15 +824,15 @@ export class EntityQueryBuilder<
         return this;
     }
 
-    public through<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    public intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
     ): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    public through<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
+    public intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(
         intersectTable: DataverseIntersectTable<T1, TProps>,
         subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>,
     ): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    public through(
+    public intersect(
         intersectTable: DataverseIntersectTable<any, any>,
         subquery: (q: SubJoinBuilder<any, {}>) => SubJoinBuilder<any, Record<string, any>>,
     ): EntityQueryBuilder<TProps, any> {
@@ -1146,8 +1146,8 @@ class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlI
         return this
     }
 
-    through(...args: any[]): FetchXmlInitial<TProps> {
-        ;(this.#builder as any).through(...args)
+    intersect(...args: any[]): FetchXmlInitial<TProps> {
+        ;(this.#builder as any).intersect(...args)
         return this
     }
 
