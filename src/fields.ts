@@ -88,6 +88,61 @@ export class ListField<T extends string | number> extends Schema<T | null> {
   }
 }
 
+export class ChoiceField<T extends Record<number, string>> extends Schema<T[keyof T]> {
+  kind = "value" as const;
+  type = "choice" as const;
+  #options: T;
+  constructor(name: string, options: T) {
+    const firstKey = Object.keys(options)[0];
+    super(name, options[Number(firstKey) as keyof T]);
+    this.#options = options;
+    this.check((v) => {
+      if (v !== null && !Object.values(options).includes(v as string)) {
+        return `${v} not in [${Object.values(options)}]`;
+      }
+    });
+  }
+
+  transformValueFromDataverse(value: any): T[keyof T] {
+    return this.#options[value as keyof T];
+  }
+
+  transformValueToDataverse(value: any): number {
+    for (const [k, v] of Object.entries(this.#options)) {
+      if (v === value) return Number(k);
+    }
+    return value as any;
+  }
+}
+
+export class NullableChoiceField<T extends Record<number, string>> extends Schema<T[keyof T] | null> {
+  kind = "value" as const;
+  type = "choice" as const;
+  #options: T;
+  constructor(name: string, options: T) {
+    super(name, null);
+    this.#options = options;
+    this.check((v) => {
+      if (v !== null && !Object.values(options).includes(v as string)) {
+        return `${v} not in [${Object.values(options)}]`;
+      }
+    });
+  }
+
+  transformValueFromDataverse(value: any): T[keyof T] | null {
+    if (value === null) return null;
+    return this.#options[value as keyof T];
+  }
+
+  transformValueToDataverse(value: any): number | null {
+    if (value === null) return null;
+    for (const [k, v] of Object.entries(this.#options)) {
+      if (v === value) return Number(k);
+    }
+    return value as any;
+  }
+}
+
 export class DateTimeField extends Schema<Date> {
   kind = "value" as const;
   type = "date" as const;
@@ -289,6 +344,39 @@ export function primaryKey(name: string) {
  */
 export function list<T extends string | number>(name: string, list: Array<T>) {
   return new ListField<T>(name, list);
+}
+
+/**
+ * Creates a choice/option-set column definition. Maps Dataverse numeric option values
+ * to human-readable string labels.
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param options An object mapping numeric option values to string labels.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   status: choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" }),
+ * });
+ * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
+ */
+export function choice<T extends Record<number, string>>(name: string, options: T) {
+  return new ChoiceField<T>(name, options);
+}
+
+/**
+ * Creates a nullable choice/option-set column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param options An object mapping numeric option values to string labels.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" }),
+ * });
+ * // Infer<typeof table>["priority"] → "Low" | "High" | null
+ */
+export function nullableChoice<T extends Record<number, string>>(name: string, options: T) {
+  return new NullableChoiceField<T>(name, options);
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   string, nullableString, number, nullableNumber, boolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted,
   collection, collectionIds, lookupId, lookup, DataverseTable,
+  choice, nullableChoice,
 } from "../src"
 import { required } from "../src/validators"
 import { DataverseClient } from "../src/client"
@@ -124,6 +125,70 @@ test("list field issues for invalid value", () => {
   const issues = f.getIssues("X")
   expect(issues).toHaveLength(1)
   expect(issues[0].message).toContain("not in")
+})
+
+test("choice field type and defaults", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" })
+  expect(f.type).toBe("choice")
+  expect(f.kind).toBe("value")
+  expect(f.name).toBe("statuscode")
+  expect(f.getDefault()).toBe("Active")
+})
+
+test("choice transformValueFromDataverse maps number to string", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" })
+  expect(f.transformValueFromDataverse(1)).toBe("Active")
+  expect(f.transformValueFromDataverse(2)).toBe("Inactive")
+  expect(f.transformValueFromDataverse(3)).toBe("Archived")
+})
+
+test("choice transformValueToDataverse maps string to number", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" })
+  expect(f.transformValueToDataverse("Active")).toBe(1)
+  expect(f.transformValueToDataverse("Inactive")).toBe(2)
+  expect(f.transformValueToDataverse("Archived")).toBe(3)
+})
+
+test("choice validates against option values", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
+  expect(f.parse("Active")).toBe("Active")
+  expect(f.parse("Inactive")).toBe("Inactive")
+  expect(() => f.parse("Unknown" as any)).toThrow()
+})
+
+test("choice issues for invalid value", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
+  const issues = f.getIssues("Bogus")
+  expect(issues).toHaveLength(1)
+  expect(issues[0].message).toContain("not in")
+})
+
+test("nullableChoice field defaults to null", () => {
+  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  expect(f.type).toBe("choice")
+  expect(f.getDefault()).toBeNull()
+})
+
+test("nullableChoice transformValueFromDataverse handles null", () => {
+  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("nullableChoice transformValueFromDataverse maps number to string", () => {
+  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  expect(f.transformValueFromDataverse(1)).toBe("Low")
+  expect(f.transformValueFromDataverse(2)).toBe("High")
+})
+
+test("nullableChoice transformValueToDataverse handles null", () => {
+  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  expect(f.transformValueToDataverse(null)).toBeNull()
+})
+
+test("nullableChoice transformValueToDataverse maps string to number", () => {
+  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  expect(f.transformValueToDataverse("Low")).toBe(1)
+  expect(f.transformValueToDataverse("High")).toBe(2)
 })
 
 test("image field type", () => {

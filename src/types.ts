@@ -15,6 +15,8 @@ import {
   NullableDateTimeField,
   NullableDateField,
   FileField,
+  ChoiceField,
+  NullableChoiceField,
 } from "./fields";
 import { DateField } from "./fields";
 import { Schema } from "./schema";
@@ -126,6 +128,8 @@ export type GenericValueProperty =
   | ImageField // Represents an image value.
   | ListField<string | number> // Represents a list of strings or numbers
   | FileField
+  | ChoiceField<Record<number, string>>
+  | NullableChoiceField<Record<number, string>>
 
 /**
  * Represents a generic property in a Dataverse entity.  A property can be
