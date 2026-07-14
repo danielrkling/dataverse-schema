@@ -2790,30 +2790,29 @@ class FetchXmlAggregateQuery {
         `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
       );
     }
-    const collector = new FilterCollector(targetTable);
-    subquery(collector);
+    const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
+    subquery(targetBuilder);
     const pkName = this._table.getPrimaryKey().property.name;
     const targetPkName = targetTable.getPrimaryKey().property.name;
     const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
-    const intersectCollector = new FilterCollector(stubTable);
-    intersectCollector._filters.push(...collector._filters);
-    const targetAlias = `auto_link_${++this._linkAlias.value}`;
-    const intersectAlias = `auto_link_${++this._linkAlias.value}`;
-    this._links.push({
+    const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
+    intersectBuilder._links.push({
       name: targetTable.logicalName,
       from: targetPkName,
       to: targetPkName,
-      alias: targetAlias,
+      alias: `auto_link_${++this._linkAlias.value}`,
       linkType: "inner",
-      builder: collector
+      builder: targetBuilder
     });
+    `auto_link_${++this._linkAlias.value}`;
+    const intersectAlias = `auto_link_${++this._linkAlias.value}`;
     this._links.push({
       name: intersectTable.name,
       from: pkName,
       to: pkName,
       alias: intersectAlias,
       linkType: "inner",
-      builder: intersectCollector,
+      builder: intersectBuilder,
       intersect: true
     });
     return this;

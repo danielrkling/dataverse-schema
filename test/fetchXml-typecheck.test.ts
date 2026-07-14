@@ -1,6 +1,6 @@
 import { expectTypeOf, test } from "vitest"
 import { fetchXml, Infer, FieldRef, eq, FetchXmlInitial, FetchXmlSelectQuery } from "../src"
-import { DataverseTable, primaryKey, string, number, boolean, lookup, lookupId, collection } from "../src"
+import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection } from "../src"
 import { DataverseClient } from "../src/client"
 import { sum, count, groupby } from "../src"
 
@@ -134,13 +134,17 @@ test("SubJoinBuilder.select returns exact merged type", () => {
   expectTypeOf<R>().toEqualTypeOf<{ personName: string; a: string; b: number }>()
 })
 
-test("join without sub-select merges empty result", () => {
-  const q = fetchXml(Person)
+test("join without sub-select is a type error (must call select)", () => {
+  // SubJoinInitial only has .select(), so returning sub directly is a type error
+  // This test verifies the callback return type must come from .select()
+  fetchXml(Person)
     .select(f => ({ personName: f.name }))
-    .join("inner", Address, "id", "pk", (sub) => sub)
-  type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
-
-  expectTypeOf<R>().toEqualTypeOf<{ personName: string }>()
+    .join("inner", Address, "id", "pk", (sub) => {
+      // sub is SubJoinInitial, only has select
+      expectTypeOf(sub.select).toBeFunction()
+      // Must call select and return the result
+      return sub.select(f => ({ addrStreet: f.street }))
+    })
 })
 
 test("filter after join uses original table fields and preserves join results", () => {
@@ -275,4 +279,111 @@ test("initial→select→join returns FetchXmlSelectQuery", () => {
 
   expectTypeOf(q).toHaveProperty("select")
   expectTypeOf(q).not.toHaveProperty("apply")
+})
+
+// --- Subquery builder type tests ---
+
+test("join subquery has select, filter, join — but not apply", () => {
+  fetchXml(Person).select().join("inner", Address, "id", "pk", (sub) => {
+    // SubJoinBuilder has select
+    expectTypeOf(sub.select).toBeFunction()
+    // SubJoinBuilder has filter
+    expectTypeOf(sub.filter).toBeFunction()
+    // SubJoinBuilder has join (for nested joins)
+    expectTypeOf(sub.join).toBeFunction()
+    // SubJoinBuilder does NOT have apply
+    expectTypeOf(sub).not.toHaveProperty("apply")
+    return sub.select(f => ({ street: f.street }))
+  })
+})
+
+test("join subquery: select disappears after use", () => {
+  fetchXml(Person).select().join("inner", Address, "id", "pk", (sub) => {
+    const afterSelect = sub.select(f => ({ street: f.street }))
+    // afterSelect has filter
+    expectTypeOf(afterSelect.filter).toBeFunction()
+    // afterSelect.select is never (disappeared)
+    expectTypeOf(afterSelect.select).toBeNever()
+    // but filter returns the same type (still no select)
+    const afterFilter = afterSelect.filter(f => eq(f.street, "123"))
+    expectTypeOf(afterFilter.select).toBeNever()
+    return afterFilter
+  })
+})
+
+test("filter-only join: no fields in result (TResult={})", () => {
+  const q = fetchXml(Person)
+    .select(f => ({ personName: f.name }))
+    .join("inner", Address, "id", "pk", (sub) => sub.filter(f => eq(f.street, "123")))
+  type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
+
+  expectTypeOf<R["personName"]>().toBeString()
+  expectTypeOf<R>().not.toHaveProperty("street")
+})
+
+test("through subquery has select and filter — not apply", () => {
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Address)
+  fetchXml(Person).select().through(PersonAccount, (sub) => {
+    expectTypeOf(sub.select).toBeFunction()
+    expectTypeOf(sub.filter).toBeFunction()
+    expectTypeOf(sub).not.toHaveProperty("apply")
+    return sub.select(f => ({ street: f.street }))
+  })
+})
+
+test("aggregate join subquery has apply — not select", () => {
+  fetchXml(Person).apply(f => ({
+    totalAge: sum(f.age),
+  })).join("inner", Address, "id", "pk", (sub) => {
+    expectTypeOf(sub.apply).toBeFunction()
+    expectTypeOf(sub.filter).toBeFunction()
+    return sub.apply(f => ({ street: groupby(f.street) }))
+  })
+})
+
+test("aggregate through subquery has apply — not select", () => {
+  const PersonAccount = { name: "personaccount", table1: Person, table2: Address, intersect: true } as any
+  fetchXml(Person).apply(f => ({
+    totalAge: sum(f.age),
+  })).through(PersonAccount, (sub) => {
+    expectTypeOf(sub.apply).toBeFunction()
+    return sub.apply(f => ({ street: groupby(f.street) }))
+  })
+})
+
+test("aggregate join subquery: apply disappears after use", () => {
+  fetchXml(Person).apply(f => ({
+    totalAge: sum(f.age),
+  })).join("inner", Address, "id", "pk", (sub) => {
+    const afterApply = sub.apply(f => ({ street: groupby(f.street) }))
+    // afterApply.apply is never (disappeared)
+    expectTypeOf(afterApply.apply).toBeNever()
+    // but filter still works
+    expectTypeOf(afterApply.filter).toBeFunction()
+    return afterApply
+  })
+})
+
+// --- Overlap detection tests ---
+
+test("join with non-overlapping keys merges correctly", () => {
+  const q = fetchXml(Person)
+    .select(f => ({ personName: f.name }))
+    .join("inner", Address, "id", "pk", sub =>
+      sub.select(f => ({ addrStreet: f.street }))
+    )
+  type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
+  expectTypeOf<R["personName"]>().toBeString()
+  expectTypeOf<R["addrStreet"]>().toBeString()
+})
+
+test("join with overlapping keys produces never (type error)", () => {
+  const q = fetchXml(Person)
+    .select(f => ({ name: f.name }))
+    .join("inner", Address, "id", "pk", sub =>
+      sub.select(f => ({ name: f.street }))
+    )
+  // When keys overlap, NoOverlap returns never, so the join result is never
+  // This means q.execute returns Promise<never[]>
+  expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<never[]>()
 })

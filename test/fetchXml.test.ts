@@ -443,6 +443,52 @@ test("through narrows result type to selected fields", () => {
   expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ name: string; accountName: string }[]>()
 })
 
+test("through subquery gets SubJoinBuilder with select", () => {
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
+  const q = fetchXml(Person)
+    .select(f => ({ name: f.name }))
+    .through(PersonAccount, sub =>
+      sub.select(f => ({ accountName: f.name }))
+        .filter(f => eq(f.name, "test"))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`intersect="true"`)
+  expect(xml).toContain(`<attribute name="name" alias="accountName" />`)
+})
+
+test("aggregate join subquery gets apply-capable builder", () => {
+  const q = fetchXml(Account)
+    .apply(v => ({
+      city: groupby(v.city),
+      Total: sum(v.revenue),
+    }))
+    .join("inner", Account, "id", "id", sub =>
+      sub.apply(v => ({
+        avgRevenue: average(v.revenue),
+      }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`aggregate="true"`)
+  expect(xml).toContain(`<attribute name="revenue" alias="Total" aggregate='sum' />`)
+  expect(xml).toContain(`<attribute name="address1_city" alias="city" groupby='true' />`)
+})
+
+test("aggregate through subquery gets apply-capable builder", () => {
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
+  const q = fetchXml(Person)
+    .apply(v => ({
+      totalAge: sum(v.age),
+    }))
+    .through(PersonAccount, sub =>
+      sub.apply(v => ({
+        accountCount: count(v.name),
+      }))
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`aggregate="true"`)
+  expect(xml).toContain(`intersect="true"`)
+})
+
 // --- FetchXML serialization of CRM functions ---
 
 test("CRM function Today produces correct FetchXML", () => {
