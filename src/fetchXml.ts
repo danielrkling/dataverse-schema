@@ -738,6 +738,8 @@ export class EntityQueryBuilder<
             }
         }
 
+        this._attributes = initialAttributes;
+
         const aggregateQuery = new FetchXmlAggregateQuery<TProps, ApplyResultType<R>>(
             this._table,
             initialAttributes,

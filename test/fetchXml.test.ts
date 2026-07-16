@@ -471,6 +471,7 @@ test("aggregate join subquery gets apply-capable builder", () => {
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`<attribute name="revenue" alias="Total" aggregate='sum' />`)
   expect(xml).toContain(`<attribute name="address1_city" alias="city" groupby='true' />`)
+  expect(xml).toContain(`<attribute name="revenue" alias="avgRevenue" aggregate='average' />`)
 })
 
 test("aggregate through subquery gets apply-capable builder", () => {
@@ -487,6 +488,7 @@ test("aggregate through subquery gets apply-capable builder", () => {
   const xml = q.toXml()
   expect(xml).toContain(`aggregate="true"`)
   expect(xml).toContain(`intersect="true"`)
+  expect(xml).toContain(`<attribute name="name" alias="accountCount" aggregate='count' />`)
 })
 
 // --- FetchXML serialization of CRM functions ---
