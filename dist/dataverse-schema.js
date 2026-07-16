@@ -3166,6 +3166,7 @@ class EntityQueryBuilder {
         initialAttributes.push({ name: fieldName, alias, aggregate: value.operation });
       }
     }
+    this._attributes = initialAttributes;
     const aggregateQuery = new FetchXmlAggregateQuery(
       this._table,
       initialAttributes,
