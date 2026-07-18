@@ -740,17 +740,19 @@ export class EntityQueryBuilder<
 
         this._attributes = initialAttributes;
 
-        const aggregateQuery = new FetchXmlAggregateQuery<TProps, ApplyResultType<R>>(
+        return this as any;
+    }
+
+    _toAggregateQuery(): FetchXmlAggregateQuery<TProps, any> {
+        const q = new FetchXmlAggregateQuery<TProps, any>(
             this._table,
-            initialAttributes,
+            this._attributes,
             this._linkAlias,
-            this._filters,
+            [...this._filters],
         );
-
-        if (this._datasource) aggregateQuery["_datasource"] = this._datasource;
-        if (this._options) aggregateQuery["_options"] = this._options;
-
-        return aggregateQuery;
+        if (this._datasource) q["_datasource"] = this._datasource;
+        if (this._options) q["_options"] = this._options;
+        return q;
     }
 
     public filter(
@@ -1135,7 +1137,8 @@ class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlI
     apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
         expr: (f: FieldProxy<TProps>) => R,
     ): FetchXmlAggregateQuery<TProps, ApplyResultType<R>> {
-        return this.#builder.apply(expr)
+        this.#builder.apply(expr)
+        return this.#builder._toAggregateQuery()
     }
 
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps> {

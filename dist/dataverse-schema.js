@@ -3167,15 +3167,18 @@ class EntityQueryBuilder {
       }
     }
     this._attributes = initialAttributes;
-    const aggregateQuery = new FetchXmlAggregateQuery(
+    return this;
+  }
+  _toAggregateQuery() {
+    const q = new FetchXmlAggregateQuery(
       this._table,
-      initialAttributes,
+      this._attributes,
       this._linkAlias,
-      this._filters
+      [...this._filters]
     );
-    if (this._datasource) aggregateQuery["_datasource"] = this._datasource;
-    if (this._options) aggregateQuery["_options"] = this._options;
-    return aggregateQuery;
+    if (this._datasource) q["_datasource"] = this._datasource;
+    if (this._options) q["_options"] = this._options;
+    return q;
   }
   filter(filter) {
     let str;
@@ -3461,7 +3464,8 @@ class FetchXmlInitialImpl {
     });
   }
   apply(expr) {
-    return this.#builder.apply(expr);
+    this.#builder.apply(expr);
+    return this.#builder._toAggregateQuery();
   }
   filter(filter) {
     this.#builder.filter(filter);

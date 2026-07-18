@@ -491,6 +491,67 @@ test("aggregate through subquery gets apply-capable builder", () => {
   expect(xml).toContain(`<attribute name="name" alias="accountCount" aggregate='count' />`)
 })
 
+// --- Double intersect (nested intersects) ---
+
+test("nested intersects include all link entities in XML", () => {
+  const Team = new DataverseTable({
+    client, entitySetName: "teams", logicalName: "team",
+    fields: {
+      id: primaryKey("teamid"),
+      name: string("name"),
+    },
+  })
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
+  const AccountTeam = new DataverseIntersectTable("accountteam", Account, Team)
+
+  const q = fetchXml(Person)
+    .apply(v => ({ totalAge: sum(v.age) }))
+    .intersect(PersonAccount, sub =>
+      sub.intersect(AccountTeam, sub2 =>
+        sub2.apply(v => ({ teamCount: count(v.name) }))
+      )
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`<entity name="person">`)
+  expect(xml).toContain(`<link-entity name="personaccount"`)
+  expect(xml).toContain(`intersect="true"`)
+  expect(xml).toContain(`<link-entity name="account"`)
+  expect(xml).toContain(`<link-entity name="accountteam"`)
+  expect(xml).toContain(`<link-entity name="team"`)
+  expect(xml).toContain(`<attribute name="name" alias="teamCount" aggregate='count' />`)
+})
+
+test("nested intersect with apply at both middle and deep levels", () => {
+  const Team = new DataverseTable({
+    client, entitySetName: "teams", logicalName: "team",
+    fields: {
+      id: primaryKey("teamid"),
+      name: string("name"),
+    },
+  })
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
+  const AccountTeam = new DataverseIntersectTable("accountteam", Account, Team)
+
+  const q = fetchXml(Person)
+    .apply(v => ({ totalAge: sum(v.age) }))
+    .intersect(PersonAccount, sub =>
+      sub
+        .apply(v => ({ accountRevenue: sum(v.revenue) }))
+        .intersect(AccountTeam, sub2 =>
+          sub2.apply(v => ({ teamCount: count(v.name) }))
+        )
+    )
+  const xml = q.toXml()
+  expect(xml).toContain(`<link-entity name="personaccount"`)
+  expect(xml).toContain(`<link-entity name="account"`)
+  expect(xml).toContain(`alias="accountRevenue"`)
+  expect(xml).toContain(`aggregate='sum'`)
+  expect(xml).toContain(`<link-entity name="accountteam"`)
+  expect(xml).toContain(`<link-entity name="team"`)
+  expect(xml).toContain(`alias="teamCount"`)
+  expect(xml).toContain(`aggregate='count'`)
+})
+
 // --- FetchXML serialization of CRM functions ---
 
 test("CRM function Today produces correct FetchXML", () => {
