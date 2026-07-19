@@ -6,13 +6,15 @@ import path from "path";
 export default defineConfig({
   build: {
     lib: {
-      entry: path.resolve(__dirname, "src/index.ts"), 
-      name: "dataverse-schema", 
-      formats: ["es"], 
-      fileName: "dataverse-schema", 
+      entry: {
+        "dataverse-schema": path.resolve(__dirname, "src/index.ts"),
+        tanstack: path.resolve(__dirname, "src/tanstack/index.ts"),
+      },
+      formats: ["es"],
+      fileName: (format, entryName) => `${entryName}.js`,
     },
     rollupOptions: {
-      external: [], // Add external dependencies if needed
+      external: ["@tanstack/db"],
     },
     minify: false,
     target: "esnext",
@@ -31,8 +33,8 @@ export default defineConfig({
       compilerOptions: {
         target: "esnext",
       },
-      outDir: "dist", // Ensure d.ts files are emitted to 'dist'
-      entryRoot: "src", //Ensure d.ts files are emitted from src.
+      outDir: "dist",
+      entryRoot: "src",
     }),
   ],
 });
