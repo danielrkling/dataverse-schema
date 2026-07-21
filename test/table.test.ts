@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 import * as v from "valibot"
 import { DataverseClient } from "../src/client"
-import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
+import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, file, Infer, GUID } from "../src"
 import { BASE_URL } from "./mocks/handlers"
 import { http, HttpResponse } from "msw"
 import { server } from "./mocks/server"
@@ -783,4 +783,98 @@ test("table.transformValueFromDataverse preserves etag", () => {
   })
   const { Etag, getEtag } = require("../src/util")
   expect(getEtag(result)).toBe('"W/\\"12345\\""')
+})
+
+//
+// --- FILE OPERATIONS ---
+//
+
+const DOC_ID = "11111111-1111-1111-1111-111111111111"
+
+const Document = new DataverseTable({
+  client, entitySetName: "documents", logicalName: "documents",
+  fields: {
+    id: primaryKey("documentid"),
+    title: string("title"),
+    attachment: file("attachment"),
+  },
+})
+
+test("table.uploadFile sends PATCH with binary body", async () => {
+  let capturedUrl = ""
+  let capturedBody: any = null
+  let capturedHeaders: any = {}
+  server.use(
+    http.patch(`${API}/documents(${DOC_ID})/attachment`, async ({ request }) => {
+      capturedUrl = request.url
+      capturedBody = await request.blob()
+      capturedHeaders = Object.fromEntries(request.headers.entries())
+      return new HttpResponse(null, { status: 200 })
+    }),
+  )
+  const blob = new Blob(["hello world"], { type: "text/plain" })
+  await Document.uploadFile(DOC_ID, "attachment", blob, "hello.txt", "text/plain")
+  expect(capturedUrl).toContain("/attachment")
+  expect(capturedHeaders["x-ms-file-name"]).toBe("hello.txt")
+  expect(capturedHeaders["content-type"]).toBe("application/octet-stream")
+  expect(capturedBody.size).toBe(11)
+})
+
+test("table.deleteFile sends DELETE to property", async () => {
+  let capturedUrl = ""
+  server.use(
+    http.delete(`${API}/documents(${DOC_ID})/attachment`, ({ request }) => {
+      capturedUrl = request.url
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  await Document.deleteFile(DOC_ID, "attachment")
+  expect(capturedUrl).toContain("/attachment")
+})
+
+test("table.insertRecord auto-uploads pending file data", async () => {
+  let fileUploaded = false
+  let capturedFileName = ""
+  let capturedMethod = ""
+  let capturedPath = ""
+  server.use(
+    http.post(`${API}/documents`, async ({ request }) => {
+      const body = await request.json() as any
+      return HttpResponse.json({ documentid: DOC_ID, ...body })
+    }),
+    http.all(`${API}/documents(${DOC_ID})/attachment`, async ({ request }) => {
+      capturedMethod = request.method
+      capturedPath = new URL(request.url).pathname
+      if (request.method === "PATCH") {
+        fileUploaded = true
+        capturedFileName = request.headers.get("x-ms-file-name") || ""
+        return new HttpResponse(null, { status: 200 })
+      }
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+  const blob = new Blob(["file content"], { type: "application/pdf" })
+  const id = await Document.insertRecord({
+    title: "Test",
+    attachment: { name: "report.pdf", data: blob, mimeType: "application/pdf" },
+  })
+  expect(id).toBe(DOC_ID)
+  expect(fileUploaded).toBe(true)
+  expect(capturedFileName).toBe("report.pdf")
+})
+
+test("table.insertRecord skips file upload when no data", async () => {
+  let fileEndpointHit = false
+  server.use(
+    http.post(`${API}/documents`, async ({ request }) => {
+      const body = await request.json() as any
+      return HttpResponse.json({ documentid: DOC_ID, ...body })
+    }),
+    http.patch(`${API}/documents(${DOC_ID})/attachment`, () => {
+      fileEndpointHit = true
+      return new HttpResponse(null, { status: 200 })
+    }),
+  )
+  await Document.insertRecord({ title: "Test" })
+  expect(fileEndpointHit).toBe(false)
 })

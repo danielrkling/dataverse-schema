@@ -1,6 +1,6 @@
 import * as v from "valibot"
 import { DataverseClient } from "./client";
-import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField } from "./fields";
+import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField } from "./fields";
 import { FieldBase, ValidationSchema } from "./fieldBase";
 function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
   const params = new URLSearchParams()
@@ -342,7 +342,9 @@ export class DataverseTable<TProperties extends GenericProperties> {
       this.transformValueToDataverse(value),
       queryString({ select: pkName }),
     );
-    return record?.[pkName] as GUID;
+    const guid = record?.[pkName] as GUID;
+    await this._uploadPendingFiles(guid, value);
+    return guid;
   }
 
   /**
@@ -366,6 +368,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       "",
       etag,
     );
+    await this._uploadPendingFiles(id as GUID, value);
     return id as GUID;
   }
 
@@ -674,6 +677,39 @@ export class DataverseTable<TProperties extends GenericProperties> {
       ...this.fields,
       ...properties,
     } as any});
+  }
+
+  async uploadFile(id: GUID, fieldName: string, data: Blob, fileName?: string, mimeType?: string): Promise<void> {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
+    const fileName_ = fileName ?? (field as FileField).getDefault()?.name;
+    if (!fileName_) throw new Error("No file name provided");
+    const mimeType_ = mimeType ?? data.type ?? "application/octet-stream";
+    await this.client.updateFileProperty(this.entitySetName, id, (field as FileField).name, fileName_, data);
+  }
+
+  async downloadFile(id: GUID, fieldName: string): Promise<Blob> {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
+    const response = await this.client.fetch(`${this.entitySetName}(${id})/${(field as FileField).name}/$value`, { raw: true });
+    if (!response.ok) throw new Error(response.status + "-" + response.statusText);
+    return response.blob();
+  }
+
+  async deleteFile(id: GUID, fieldName: string): Promise<void> {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
+    await this.client.deletePropertyValue(this.entitySetName, id, (field as FileField).name);
+  }
+
+  private async _uploadPendingFiles(id: GUID, value: Partial<Infer<TProperties>>): Promise<void> {
+    for (const [key, field] of Object.entries(this.fields)) {
+      if (field.type !== "file") continue;
+      const fileRef = (value as any)[key];
+      if (fileRef?.data) {
+        await this.uploadFile(id, key, fileRef.data, fileRef.name, fileRef.mimeType);
+      }
+    }
   }
 
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */

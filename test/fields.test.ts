@@ -195,11 +195,14 @@ test("image field type", () => {
   expect(f.getDefault()).toBeNull()
 })
 
-test("file field uses _name suffix", () => {
+test("file field uses _name suffix and returns FileRef", () => {
   const f = file("document")
   expect(f.type).toBe("file")
   expect(f.fromDataverseName).toBe("document_name")
   expect(f.getReadOnly()).toBe(true)
+  expect(f.getDefault()).toBeNull()
+  expect(f.transformValueFromDataverse("report.pdf")).toEqual({ name: "report.pdf" })
+  expect(f.transformValueFromDataverse(null)).toBeNull()
 })
 
 test("formatted field uses Display.V1.FormattedValue suffix", () => {

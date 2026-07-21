@@ -230,16 +230,27 @@ export class ImageField extends FieldBase<string | null> {
   }
 }
 
-export class FileField extends FieldBase<string> {
+export type FileRef = {
+  name: string;
+  data?: Blob;
+  mimeType?: string;
+}
+
+export class FileField extends FieldBase<FileRef | null> {
   type = "file" as const;
   kind = "file" as const;
 
-  constructor(name: string, options?: FieldOptions<string>) {
+  constructor(name: string) {
     super(name, {
-      defaultValue: "",
-      schema: v.string() as ValidationSchema<string>,
-    }, { readonly: true, ...options });
+      defaultValue: null,
+      schema: v.nullable(v.object({ name: v.string() })) as ValidationSchema<FileRef | null>,
+    }, { readonly: true });
     this.fromDataverseName = `${name}_name`;
+  }
+
+  transformValueFromDataverse(value: any): FileRef | null {
+    if (value == null) return null;
+    return { name: value };
   }
 }
 
@@ -479,8 +490,8 @@ export function image(name: string, options?: FieldOptions<string | null>) {
  *
  * @param name The Dataverse logical name of the file column.
  */
-export function file(name: string, options?: FieldOptions<string>){
-  return new FileField(name, options)
+export function file(name: string){
+  return new FileField(name)
 }
 
 /**

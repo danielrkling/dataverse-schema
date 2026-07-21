@@ -100,9 +100,10 @@ export class DataverseClient {
      *   body: JSON.stringify({ name: "New Account" }),
      * })
      */
-    async fetch(resource: string, options: RequestInit = {}): Promise<any> {
+    async fetch(resource: string, options: RequestInit & { raw?: boolean } = {}): Promise<any> {
         if (this._processChangeset(resource, options)) return;
         if (this._processBatch(resource, options)) return;
+        const { raw, ...fetchOptions } = options;
         // Handle full URLs from @odata.nextLink
         const url = resource.startsWith("http") ? resource : `${this.options.url}/api/data/v9.2/${resource}`;
 
@@ -113,7 +114,7 @@ export class DataverseClient {
         } = this.options;
 
         const response = await fetch(url, {
-            ...options,
+            ...fetchOptions,
             headers: {
                 "OData-MaxVersion": "4.0",
                 "OData-Version": "4.0",
@@ -129,9 +130,11 @@ export class DataverseClient {
                 ...(suppressDuplicateDetection !== undefined ? { "MSCRM.SuppressDuplicateDetection": String(suppressDuplicateDetection) } : {}),
                 ...(bypassCustomPluginExecution !== undefined ? { "MSCRM.BypassCustomPluginExecution": String(bypassCustomPluginExecution) } : {}),
                 ...headers,
-                ...options.headers,
+                ...fetchOptions.headers,
             },
         });
+
+        if (raw) return response;
 
         if (response.status === 204) {
             // No Content
@@ -385,6 +388,8 @@ export class DataverseClient {
             body,
         });
     }
+
+    // fetchBlob removed — use fetch(resource, { raw: true }).then(r => r.blob())
 
     /**
      * Activates a record (sets statecode to 0).
