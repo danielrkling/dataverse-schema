@@ -1,6 +1,6 @@
 import * as v from "valibot"
 import { DataverseClient } from "./client";
-import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField } from "./fields";
+import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField, ImageField } from "./fields";
 import { FieldBase, ValidationSchema } from "./fieldBase";
 function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
   const params = new URLSearchParams()
@@ -217,12 +217,12 @@ export class DataverseTable<TProperties extends GenericProperties> {
     if (prop.kind === "navigation") {
       await this.updateNavigationProperty(prop, id, value);
     } else {
-      await this.client.updatePropertyValue(
-        this.entitySetName,
-        id,
-        this.fields[key].name,
-        prop.transformValueToDataverse(value),
-      );
+        await this.client.updatePropertyValue(
+          this.entitySetName,
+          id,
+          this.fields[key].name,
+          prop.transformValueToDataverse(value as any),
+        );
     }
     return id as GUID;
   }
@@ -339,7 +339,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const pkName = this.getPrimaryKey().property.name;
     const record = await this.client.postRecord(
       this.entitySetName,
-      this.transformValueToDataverse(value),
+      await this.transformValueToDataverse(value),
       queryString({ select: pkName }),
     );
     const guid = record?.[pkName] as GUID;
@@ -364,7 +364,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     await this.client.patchRecord(
       this.entitySetName,
       id,
-      this.transformValueToDataverse(value),
+      await this.transformValueToDataverse(value),
       "",
       etag,
     );
@@ -390,13 +390,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     const promises: Promise<any>[] = [];
     const pkName = this.getPrimaryKey().property.name;
+    const transformed = await this.transformValueToDataverse(value);
 
     if (id) {
       promises.push(
         this.client.patchRecord(
           this.entitySetName,
           id,
-          this.transformValueToDataverse(value),
+          transformed,
           queryString({ select: pkName }),
           etag,
         ),
@@ -404,7 +405,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
-        this.transformValueToDataverse(value),
+        transformed,
         queryString({ select: pkName }),
       );
       id = record[pkName] as GUID;
@@ -537,7 +538,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async createMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
     return this.client.createMultiple(
       this.entitySetName,
-      records.map((r) => this.transformValueToDataverse(r)),
+      await Promise.all(records.map((r) => this.transformValueToDataverse(r))),
     );
   }
 
@@ -555,7 +556,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async updateMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
     return this.client.updateMultiple(
       this.entitySetName,
-      records.map((r) => this.transformValueToDataverse(r)),
+      await Promise.all(records.map((r) => this.transformValueToDataverse(r))),
     );
   }
 
@@ -605,24 +606,42 @@ export class DataverseTable<TProperties extends GenericProperties> {
   transformValueFromDataverse(value: any): Infer<TProperties> {
     if (value === null) return null as unknown as Infer<TProperties>;
     const result = {} as Record<PropertyKey, any>;
+    const pk = this.getPrimaryKey();
+    const recordId = value[pk.property.fromDataverseName] as GUID | undefined;
     for (const [key, property] of Object.entries(this.fields)) {
-      result[key] = property.transformValueFromDataverse(value[property.fromDataverseName]);
+      const raw = value[property.fromDataverseName];
+      if (property.type === "file" && recordId) {
+        const fileName = property.transformValueFromDataverse(raw);
+        if (fileName) {
+          const table = this;
+          result[key] = Object.defineProperty(
+            { name: (fileName as any).name ?? fileName },
+            "data",
+            { get() { return table.downloadFile(recordId, key); }, configurable: true },
+          );
+        } else {
+          result[key] = null;
+        }
+      } else {
+        result[key] = property.transformValueFromDataverse(raw);
+      }
     }
     result[Etag] = value["@odata.etag"];
     return result as Infer<TProperties>;
   }
 
-  transformValueToDataverse(
+  async transformValueToDataverse(
     value: Partial<Infer<TProperties>>,
-  ): DataverseRecord {
+  ): Promise<DataverseRecord> {
     if (value === null) return null as unknown as DataverseRecord;
     const result = {} as Record<string, any>;
     for (const [key, property] of Object.entries(this.fields)) {
       if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "value" || property.type === "lookupId") {
-        const v = property.transformValueToDataverse(
-          value[key as keyof typeof value],
+      if (property.kind === "value" || property.type === "lookupId" || property.type === "image") {
+        let v = property.transformValueToDataverse(
+          value[key as keyof typeof value] as any,
         );
+        if (v instanceof Promise) v = await v;
         result[property.toDataverseName] = v;
       }
     }
@@ -702,12 +721,27 @@ export class DataverseTable<TProperties extends GenericProperties> {
     await this.client.deletePropertyValue(this.entitySetName, id, (field as FileField).name);
   }
 
+  async downloadImage(id: GUID, fieldName: string): Promise<Blob> {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
+    const response = await this.client.fetch(`${this.entitySetName}(${id})/${field.name}/$value`, { raw: true });
+    if (!response.ok) throw new Error(response.status + "-" + response.statusText);
+    return response.blob();
+  }
+
+  async deleteImage(id: GUID, fieldName: string): Promise<void> {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
+    await this.client.deletePropertyValue(this.entitySetName, id, field.name);
+  }
+
   private async _uploadPendingFiles(id: GUID, value: Partial<Infer<TProperties>>): Promise<void> {
     for (const [key, field] of Object.entries(this.fields)) {
-      if (field.type !== "file") continue;
-      const fileRef = (value as any)[key];
-      if (fileRef?.data) {
-        await this.uploadFile(id, key, fileRef.data, fileRef.name, fileRef.mimeType);
+      if (field.type === "file") {
+        const fileRef = (value as any)[key];
+        if (fileRef?.data instanceof Blob) {
+          await this.uploadFile(id, key, fileRef.data, fileRef.name, fileRef.mimeType);
+        }
       }
     }
   }
@@ -737,7 +771,7 @@ function buildQuery(
 
 function buildSelect(table: DataverseTable<GenericProperties>): string {
   return Object.values(table.fields)
-    .filter((v: any) => v.kind === "value" || v.type === "lookupId" || v.type==="file")
+    .filter((v: any) => v.kind === "value" || v.type === "lookupId" || v.type==="file" || v.type==="image")
     .map((v: any) =>v.fromDataverseName)
     .join(",");
 }

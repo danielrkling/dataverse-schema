@@ -272,15 +272,15 @@ test("table.transformValueFromDataverse handles null", () => {
   expect(result).toBeNull()
 })
 
-test("table.transformValueToDataverse maps field names", () => {
-  const result = Person.transformValueToDataverse({ name: "Bob", age: 35 })
+test("table.transformValueToDataverse maps field names", async () => {
+  const result = await Person.transformValueToDataverse({ name: "Bob", age: 35 })
   expect(result.fullname).toBe("Bob")
   expect(result.person_age).toBe(35)
   expect(result.personid).toBeUndefined()
 })
 
-test.skip("table.transformValueToDataverse skips read-only fields", () => {
-  const result = Person.transformValueToDataverse({ pk: "some-id" as unknown as GUID, name: "Charlie", age: 40 })
+test.skip("table.transformValueToDataverse skips read-only fields", async () => {
+  const result = await Person.transformValueToDataverse({ pk: "some-id" as unknown as GUID, name: "Charlie", age: 40 })
   expect(result.personid).toBeUndefined()
 })
 
@@ -708,8 +708,8 @@ test("table.updateMultiple transforms and bulk-updates records", async () => {
 // --- TRANSFORM VALUE TO DATAVERSE with lookupId ---
 //
 
-test("table.transformValueToDataverse includes lookupId with odata.bind", () => {
-  const result = Person.transformValueToDataverse({ primaryAddressId: "addr-id" as any })
+test("table.transformValueToDataverse includes lookupId with odata.bind", async () => {
+  const result = await Person.transformValueToDataverse({ primaryAddressId: "addr-id" as any })
   expect(result["person_Address@odata.bind"]).toBe("addresses(addr-id)")
 })
 

@@ -7,7 +7,7 @@ const DEFAULT_POLL_INTERVAL = 30000;
 
 function buildSelect(table: DataverseTable<GenericProperties>): string {
   return Object.values(table.fields)
-    .filter((v: any) => v.kind === "value" || v.type === "lookupId" || v.type === "file")
+    .filter((v: any) => v.kind === "value" || v.type === "lookupId" || v.type === "file" || v.type === "image")
     .map((v: any) => v.fromDataverseName)
     .join(",");
 }

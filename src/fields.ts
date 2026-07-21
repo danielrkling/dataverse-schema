@@ -219,21 +219,55 @@ export class FormattedField extends FieldBase<string | null> {
   }
 }
 
-export class ImageField extends FieldBase<string | null> {
-  kind = "value" as const;
+export class ImageField extends FieldBase<ImageRef | null> {
+  kind = "image" as const;
   type = "image" as const;
-  constructor(name: string, options?: FieldOptions<string | null>) {
+  constructor(name: string, options?: FieldOptions<ImageRef | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.string()) as ValidationSchema<string | null>,
+      schema: v.nullable(v.object({ url: v.string() })) as ValidationSchema<ImageRef | null>,
     }, options);
   }
+
+  transformValueFromDataverse(value: any): ImageRef | null {
+    if (value == null) return null;
+    const b64 = String(value);
+    const mimeType = b64.startsWith("/9j/") ? "image/jpeg"
+      : b64.startsWith("iVB") ? "image/png"
+      : b64.startsWith("R0lG") ? "image/gif"
+      : "application/octet-stream";
+    return { url: `data:${mimeType};base64,${b64}` };
+  }
+
+  async transformValueToDataverse(value: ImageRef | null): Promise<string | null> {
+    if (value == null) return null;
+    if (value.data == null) return null;
+    if (value.data instanceof Blob) {
+      return blobToBase64(value.data);
+    }
+    return null;
+  }
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 export type FileRef = {
   name: string;
-  data?: Blob;
+  data?: Blob | Promise<Blob>;
   mimeType?: string;
+}
+
+export type ImageRef = {
+  readonly url: string;
+  data?: Blob | null;
 }
 
 export class FileField extends FieldBase<FileRef | null> {
@@ -481,7 +515,7 @@ export function formatted(name: string, options?: FieldOptions<string | null>) {
  *
  * @param name The Dataverse logical name of the image column.
  */
-export function image(name: string, options?: FieldOptions<string | null>) {
+export function image(name: string, options?: FieldOptions<ImageRef | null>) {
   return new ImageField(name, options);
 }
 
