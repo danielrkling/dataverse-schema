@@ -1,5 +1,5 @@
 import * as v from "valibot"
-import { FieldBase, ValidationSchema } from "./fieldBase";
+import { FieldBase, FieldOptions, ValidationSchema } from "./fieldBase";
 import { DataverseTable } from "./table";
 import { GenericProperties, GetTable, GUID, Infer } from "./types";
 import { parseDateOnly, toDateOnly } from "./util";
@@ -15,16 +15,16 @@ function buildObjectSchema(fields: Record<string, FieldBase<any>>): v.BaseSchema
 export class BooleanField extends FieldBase<boolean> {
   kind = "value" as const;
   type = "boolean" as const;
-  constructor(name: string) {
-    super({ name, defaultValue: false, kind: "value", type: "boolean", schema: v.boolean() as ValidationSchema<boolean> });
+  constructor(name: string, options?: FieldOptions<boolean>) {
+    super(name, { defaultValue: false, schema: v.boolean() as ValidationSchema<boolean> }, options);
   }
 }
 
 export class NumberField extends FieldBase<number> {
   kind = "value" as const;
   type = "number" as const;
-  constructor(name: string) {
-    super({ name, defaultValue: 0, kind: "value", type: "number", schema: v.number() as ValidationSchema<number> });
+  constructor(name: string, options?: FieldOptions<number>) {
+    super(name, { defaultValue: 0, schema: v.number() as ValidationSchema<number> }, options);
   }
 
   transformValueFromDataverse(value: any): number {
@@ -35,16 +35,16 @@ export class NumberField extends FieldBase<number> {
 export class NullableNumberField extends FieldBase<number | null> {
   kind = "value" as const;
   type = "number" as const;
-  constructor(name: string) {
-    super({ name, defaultValue: null, kind: "value", type: "number", schema: v.nullable(v.number()) as ValidationSchema<number | null> });
+  constructor(name: string, options?: FieldOptions<number | null>) {
+    super(name, { defaultValue: null, schema: v.nullable(v.number()) as ValidationSchema<number | null> }, options);
   }
 }
 
 export class StringField extends FieldBase<string> {
   kind = "value" as const;
   type = "string" as const;
-  constructor(name: string) {
-    super({ name, defaultValue: "", kind: "value", type: "string", schema: v.string() as ValidationSchema<string> });
+  constructor(name: string, options?: FieldOptions<string>) {
+    super(name, { defaultValue: "", schema: v.string() as ValidationSchema<string> }, options);
   }
 
   transformValueFromDataverse(value: any): string {
@@ -55,16 +55,16 @@ export class StringField extends FieldBase<string> {
 export class NullableStringField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "string" as const;
-  constructor(name: string) {
-    super({ name, defaultValue: null, kind: "value", type: "string", schema: v.nullable(v.string()) as ValidationSchema<string | null> });
+  constructor(name: string, options?: FieldOptions<string | null>) {
+    super(name, { defaultValue: null, schema: v.nullable(v.string()) as ValidationSchema<string | null> }, options);
   }
 }
 
 export class PrimaryKeyField extends FieldBase<GUID> {
   kind = "value" as const;
   type = "primaryKey" as const;
-  constructor(name: string) {
-    super({ name, defaultValue: "" as GUID, kind: "value", type: "primaryKey", schema: v.string() as ValidationSchema<GUID> });
+  constructor(name: string, options?: FieldOptions<GUID>) {
+    super(name, { defaultValue: "" as GUID, schema: v.string() as ValidationSchema<GUID> }, options);
   }
 
   getDefault(): GUID {
@@ -76,14 +76,11 @@ export class ListField<T extends string | number> extends FieldBase<T | null> {
   kind = "value" as const;
   type = "list" as const;
   list: Array<T>;
-  constructor(name: string, list: Array<T>) {
-    super({
-      name,
+  constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "value",
-      type: "list",
       schema: v.nullable(v.custom<T>((v) => list.includes(v as T), `Value not in [${list}]`)) as ValidationSchema<T | null>,
-    });
+    }, options);
     this.list = list;
   }
 }
@@ -92,16 +89,13 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
   kind = "value" as const;
   type = "choice" as const;
   #options: T;
-  constructor(name: string, options: T) {
+  constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>) {
     const firstKey = Object.keys(options)[0];
     const values = Object.values(options) as [string, ...string[]];
-    super({
-      name,
+    super(name, {
       defaultValue: options[Number(firstKey) as keyof T],
-      kind: "value",
-      type: "choice",
       schema: v.picklist(values) as unknown as ValidationSchema<T[keyof T]>,
-    });
+    }, fieldOptions);
     this.#options = options;
   }
 
@@ -121,15 +115,12 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
   kind = "value" as const;
   type = "choice" as const;
   #options: T;
-  constructor(name: string, options: T) {
+  constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>) {
     const values = Object.values(options) as [string, ...string[]];
-    super({
-      name,
+    super(name, {
       defaultValue: null,
-      kind: "value",
-      type: "choice",
       schema: v.nullable(v.picklist(values)) as unknown as ValidationSchema<T[keyof T] | null>,
-    });
+    }, fieldOptions);
     this.#options = options;
   }
 
@@ -150,14 +141,11 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
 export class DateTimeField extends FieldBase<Date> {
   kind = "value" as const;
   type = "date" as const;
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<Date>) {
+    super(name, {
       defaultValue: new Date(),
-      kind: "value",
-      type: "date",
       schema: v.instance(Date) as ValidationSchema<Date>,
-    });
+    }, options);
   }
   getDefault(): Date {
     return new Date();
@@ -171,14 +159,11 @@ export class DateTimeField extends FieldBase<Date> {
 export class NullableDateTimeField extends FieldBase<Date | null> {
   kind = "value" as const;
   type = "date" as const;
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<Date | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "value",
-      type: "date",
       schema: v.nullable(v.instance(Date)) as ValidationSchema<Date | null>,
-    });
+    }, options);
   }
   transformValueFromDataverse(value: any): Date | null {
     if (value === null) return null;
@@ -189,14 +174,11 @@ export class NullableDateTimeField extends FieldBase<Date | null> {
 export class DateField extends FieldBase<Date> {
   kind = "value" as const;
   type = "dateOnly" as const;
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<Date>) {
+    super(name, {
       defaultValue: parseDateOnly(new Date().toISOString()),
-      kind: "value",
-      type: "dateOnly",
       schema: v.instance(Date) as ValidationSchema<Date>,
-    });
+    }, options);
   }
   transformValueFromDataverse(value: any): Date {
     if (value === null) return parseDateOnly(new Date().toISOString());
@@ -210,14 +192,11 @@ export class DateField extends FieldBase<Date> {
 export class NullableDateField extends FieldBase<Date | null> {
   kind = "value" as const;
   type = "dateOnly" as const;
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<Date | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "value",
-      type: "dateOnly",
       schema: v.nullable(v.instance(Date)) as ValidationSchema<Date | null>,
-    });
+    }, options);
   }
   transformValueFromDataverse(value: any): Date | null {
     if (value === null) return null;
@@ -231,30 +210,23 @@ export class NullableDateField extends FieldBase<Date | null> {
 export class FormattedField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "formatted" as const;
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<string | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "value",
-      type: "formatted",
       schema: v.nullable(v.string()) as ValidationSchema<string | null>,
-    });
+    }, { readonly: true, ...options });
     this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
-    this.setReadOnly(true);
   }
 }
 
 export class ImageField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "image" as const;
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<string | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "value",
-      type: "image",
       schema: v.nullable(v.string()) as ValidationSchema<string | null>,
-    });
+    }, options);
   }
 }
 
@@ -262,16 +234,32 @@ export class FileField extends FieldBase<string> {
   type = "file" as const;
   kind = "file" as const;
 
-  constructor(name: string) {
-    super({
-      name,
+  constructor(name: string, options?: FieldOptions<string>) {
+    super(name, {
       defaultValue: "",
-      kind: "file",
-      type: "file",
       schema: v.string() as ValidationSchema<string>,
-    });
+    }, { readonly: true, ...options });
     this.fromDataverseName = `${name}_name`;
-    this.setReadOnly(true);
+  }
+}
+
+export class JsonField<T> extends FieldBase<T> {
+  kind = "value" as const;
+  type = "json" as const;
+
+  constructor(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>) {
+    super(name, { defaultValue: undefined as T, schema }, options);
+  }
+
+  transformValueFromDataverse(value: any): T {
+    if (value == null) return this.getDefault();
+    const raw = typeof value === "string" ? JSON.parse(value) : value;
+    return v.parse(this.schema, raw);
+  }
+
+  transformValueToDataverse(value: any): string | null {
+    if (value == null) return null;
+    return JSON.stringify(value);
   }
 }
 
@@ -286,8 +274,8 @@ export class FileField extends FieldBase<string> {
  * });
  * // Infer<typeof table>["isActive"] → boolean
  */
-export function boolean(name: string) {
-  return new BooleanField(name);
+export function boolean(name: string, options?: FieldOptions<boolean>) {
+  return new BooleanField(name, options);
 }
 
 /**
@@ -301,8 +289,8 @@ export function boolean(name: string) {
  * });
  * // Infer<typeof table>["age"] → number
  */
-export function number(name: string) {
-  return new NumberField(name);
+export function number(name: string, options?: FieldOptions<number>) {
+  return new NumberField(name, options);
 }
 
 /**
@@ -316,8 +304,8 @@ export function number(name: string) {
  * });
  * // Infer<typeof table>["age"] → number | null
  */
-export function nullableNumber(name: string) {
-  return new NullableNumberField(name);
+export function nullableNumber(name: string, options?: FieldOptions<number | null>) {
+  return new NullableNumberField(name, options);
 }
 
 /**
@@ -331,8 +319,8 @@ export function nullableNumber(name: string) {
  * });
  * // Infer<typeof table>["name"] → string
  */
-export function string(name: string) {
-  return new StringField(name);
+export function string(name: string, options?: FieldOptions<string>) {
+  return new StringField(name, options);
 }
 
 /**
@@ -346,8 +334,8 @@ export function string(name: string) {
  * });
  * // Infer<typeof table>["middleName"] → string | null
  */
-export function nullableString(name: string) {
-  return new NullableStringField(name);
+export function nullableString(name: string, options?: FieldOptions<string | null>) {
+  return new NullableStringField(name, options);
 }
 
 /**
@@ -361,8 +349,8 @@ export function nullableString(name: string) {
  * });
  * // Infer<typeof table>["id"] → `${string}-${string}-${string}-${string}-${string}`
  */
-export function primaryKey(name: string) {
-  return new PrimaryKeyField(name);
+export function primaryKey(name: string, options?: FieldOptions<GUID>) {
+  return new PrimaryKeyField(name, options);
 }
 
 /**
@@ -377,8 +365,8 @@ export function primaryKey(name: string) {
  * });
  * // Infer<typeof table>["gender"] → 1 | 2 | null
  */
-export function list<T extends string | number>(name: string, list: Array<T>) {
-  return new ListField<T>(name, list);
+export function list<T extends string | number>(name: string, list: Array<T>, options?: FieldOptions<T | null>) {
+  return new ListField<T>(name, list, options);
 }
 
 /**
@@ -394,8 +382,8 @@ export function list<T extends string | number>(name: string, list: Array<T>) {
  * });
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
  */
-export function choice<T extends Record<number, string>>(name: string, options: T) {
-  return new ChoiceField<T>(name, options);
+export function choice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>) {
+  return new ChoiceField<T>(name, options, fieldOptions);
 }
 
 /**
@@ -410,8 +398,8 @@ export function choice<T extends Record<number, string>>(name: string, options: 
  * });
  * // Infer<typeof table>["priority"] → "Low" | "High" | null
  */
-export function nullableChoice<T extends Record<number, string>>(name: string, options: T) {
-  return new NullableChoiceField<T>(name, options);
+export function nullableChoice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>) {
+  return new NullableChoiceField<T>(name, options, fieldOptions);
 }
 
 /**
@@ -425,8 +413,8 @@ export function nullableChoice<T extends Record<number, string>>(name: string, o
  * });
  * // Infer<typeof table>["createdAt"] → Date
  */
-export function datetime(name: string) {
-  return new DateTimeField(name);
+export function datetime(name: string, options?: FieldOptions<Date>) {
+  return new DateTimeField(name, options);
 }
 
 /**
@@ -440,8 +428,8 @@ export function datetime(name: string) {
  * });
  * // Infer<typeof table>["birthDate"] → Date
  */
-export function date(name: string) {
-  return new DateField(name);
+export function date(name: string, options?: FieldOptions<Date>) {
+  return new DateField(name, options);
 }
 
 /**
@@ -449,8 +437,8 @@ export function date(name: string) {
  *
  * @param name The Dataverse logical name of the column.
  */
-export function nullableDate(name: string){
-  return new NullableDateField(name)
+export function nullableDate(name: string, options?: FieldOptions<Date | null>){
+  return new NullableDateField(name, options)
 }
 
 /**
@@ -458,8 +446,8 @@ export function nullableDate(name: string){
  *
  * @param name The Dataverse logical name of the column.
  */
-export function nullableDateTime(name: string){
-  return new NullableDateTimeField(name)
+export function nullableDateTime(name: string, options?: FieldOptions<Date | null>){
+  return new NullableDateTimeField(name, options)
 }
 
 /**
@@ -473,8 +461,8 @@ export function nullableDateTime(name: string){
  *   statusLabel: formatted("statuscode"),
  * });
  */
-export function formatted(name: string) {
-  return new FormattedField(name);
+export function formatted(name: string, options?: FieldOptions<string | null>) {
+  return new FormattedField(name, options);
 }
 
 /**
@@ -482,8 +470,8 @@ export function formatted(name: string) {
  *
  * @param name The Dataverse logical name of the image column.
  */
-export function image(name: string) {
-  return new ImageField(name);
+export function image(name: string, options?: FieldOptions<string | null>) {
+  return new ImageField(name, options);
 }
 
 /**
@@ -491,8 +479,27 @@ export function image(name: string) {
  *
  * @param name The Dataverse logical name of the file column.
  */
-export function file(name: string){
-  return new FileField(name)
+export function file(name: string, options?: FieldOptions<string>){
+  return new FileField(name, options)
+}
+
+/**
+ * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
+ * in Dataverse and parses/validates it using the provided valibot schema.
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param schema A valibot schema that validates the parsed JSON structure.
+ * @param options Optional field options (default, readonly).
+ *
+ * @example
+ * const Address = v.object({ street: v.string(), city: v.string() });
+ * const table = new DataverseTable({
+ *   address: json("address_data", Address),
+ * });
+ * // Infer<typeof table>["address"] → { street: string; city: string }
+ */
+export function json<T>(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>) {
+  return new JsonField<T>(name, schema, options);
 }
 
 export class LookupIdProperty extends FieldBase<GUID | null> {
@@ -501,14 +508,11 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
   navigationName: string;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable) {
-    super({
-      name,
+  constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "navigation",
-      type: "lookupId",
       schema: v.nullable(v.string()) as ValidationSchema<GUID | null>,
-    });
+    }, options);
     this.navigationName = name;
     this.#getTable = getTable;
     this.fromDataverseName = `_${name.toLowerCase()}_value`
@@ -542,14 +546,11 @@ export class CollectionProperty<
   type = "collection" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>) {
-    super({
-      name,
+  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>) {
+    super(name, {
       defaultValue: [],
-      kind: "navigation",
-      type: "collection",
       schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
-    });
+    }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
   }
 
@@ -592,14 +593,11 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
   type = "collectionIds" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable) {
-    super({
-      name,
+  constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>) {
+    super(name, {
       defaultValue: [],
-      kind: "navigation",
-      type: "collectionIds",
       schema: v.array(v.string()) as ValidationSchema<GUID[]>,
-    });
+    }, options);
     this.#getTable = getTable;
   }
 
@@ -663,14 +661,11 @@ export class LookupProperty<
   type = "lookup" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>) {
-    super({
-      name,
+  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>) {
+    super(name, {
       defaultValue: null,
-      kind: "navigation",
-      type: "lookup",
       schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
-    });
+    }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
   }
 

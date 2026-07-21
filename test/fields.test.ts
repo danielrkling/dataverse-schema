@@ -227,15 +227,18 @@ test("boolean transformValueFromDataverse passes through", () => {
   expect(f.transformValueFromDataverse(false)).toBe(false)
 })
 
-test("setDefault changes default value", () => {
-  const f = string("name").setDefault("Default Name")
+test("default option sets default value", () => {
+  const f = string("name", { default: "Default Name" })
   expect(f.getDefault()).toBe("Default Name")
 })
 
-test("setReadOnly marks field as read-only", () => {
-  const f = string("name").setReadOnly(true)
+test("readonly option marks field as read-only", () => {
+  const f = string("name", { readonly: true })
   expect(f.getReadOnly()).toBe(true)
-  f.setReadOnly(false)
+})
+
+test("field without readonly option is not read-only", () => {
+  const f = string("name")
   expect(f.getReadOnly()).toBe(false)
 })
 
