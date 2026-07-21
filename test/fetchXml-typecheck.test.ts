@@ -2,7 +2,7 @@ import { expectTypeOf, test } from "vitest"
 import { fetchXml, Infer, FieldRef, eq, FetchXmlInitial, FetchXmlSelectQuery } from "../src"
 import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection } from "../src"
 import { DataverseClient } from "../src/client"
-import { sum, count, groupby } from "../src"
+import { sum, count, groupby, average } from "../src"
 
 const client = new DataverseClient({ url: "http://localhost" })
 
@@ -323,7 +323,7 @@ test("filter-only join: no fields in result (TResult={})", () => {
 
 test("through subquery has select and filter — not apply", () => {
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Address)
-  fetchXml(Person).select().intersect(PersonAccount, (sub) => {
+  fetchXml(Person).select().join("inner", PersonAccount, (sub) => {
     expectTypeOf(sub.select).toBeFunction()
     expectTypeOf(sub.filter).toBeFunction()
     expectTypeOf(sub).not.toHaveProperty("apply")
@@ -342,10 +342,10 @@ test("aggregate join subquery has apply — not select", () => {
 })
 
 test("aggregate through subquery has apply — not select", () => {
-  const PersonAccount = { name: "personaccount", table1: Person, table2: Address, intersect: true } as any
+  const PersonAccount = new DataverseIntersectTable("personaccount", Person, Address)
   fetchXml(Person).apply(f => ({
     totalAge: sum(f.age),
-  })).intersect(PersonAccount, (sub) => {
+  })).join("inner", PersonAccount, (sub) => {
     expectTypeOf(sub.apply).toBeFunction()
     return sub.apply(f => ({ street: groupby(f.street) }))
   })
@@ -386,4 +386,33 @@ test("join with overlapping keys produces never (type error)", () => {
   // When keys overlap, NoOverlap returns never, so the join result is never
   // This means q.execute returns Promise<never[]>
   expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<never[]>()
+})
+
+// --- Aggregate join result merging ---
+
+test("aggregate join merges result types", () => {
+  const q = fetchXml(Person)
+    .apply(f => ({
+      totalAge: sum(f.age),
+    }))
+    .join("inner", Address, "id", "pk", sub =>
+      sub.apply(f => ({
+        avgZip: average(f.zip),
+      }))
+    )
+  expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ totalAge: number; avgZip: number }[]>()
+})
+
+test("aggregate intersect join merges result types", () => {
+  const PersonLocation = new DataverseIntersectTable("personlocation", Person, Location)
+  const q = fetchXml(Person)
+    .apply(f => ({
+      totalAge: sum(f.age),
+    }))
+    .join("inner", PersonLocation, sub =>
+      sub.apply(f => ({
+        locationCount: count(f.name),
+      }))
+    )
+  expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ totalAge: number; locationCount: number }[]>()
 })

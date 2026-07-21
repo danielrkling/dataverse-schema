@@ -396,7 +396,7 @@ test("through auto-joins intersect table with nested join", () => {
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Person)
     .select(f => ({ name: f.name }))
-    .intersect(PersonAccount, sub =>
+    .join("inner", PersonAccount, sub =>
       sub.select(f => ({ accountName: f.name }))
     )
   const xml = q.toXml()
@@ -412,7 +412,7 @@ test("through works when source table is table2 of intersect", () => {
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Account)
     .select(f => ({ name: f.name }))
-    .intersect(PersonAccount, sub =>
+    .join("inner", PersonAccount, sub =>
       sub.select(f => ({ personName: f.name }))
     )
   const xml = q.toXml()
@@ -429,7 +429,7 @@ test("through throws if table is not related to intersect", () => {
   })
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   expect(() =>
-    fetchXml(unrelatedTable).intersect(PersonAccount, sub => sub)
+    fetchXml(unrelatedTable).join("inner", PersonAccount, sub => sub)
   ).toThrow("not related")
 })
 
@@ -437,7 +437,7 @@ test("through narrows result type to selected fields", () => {
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Person)
     .select(f => ({ name: f.name }))
-    .intersect(PersonAccount, sub =>
+    .join("inner", PersonAccount, sub =>
       sub.select(f => ({ accountName: f.name }))
     )
   expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ name: string; accountName: string }[]>()
@@ -447,7 +447,7 @@ test("through subquery gets SubJoinBuilder with select", () => {
   const PersonAccount = new DataverseIntersectTable("personaccount", Person, Account)
   const q = fetchXml(Person)
     .select(f => ({ name: f.name }))
-    .intersect(PersonAccount, sub =>
+    .join("inner", PersonAccount, sub =>
       sub.select(f => ({ accountName: f.name }))
         .filter(f => eq(f.name, "test"))
     )
@@ -480,7 +480,7 @@ test("aggregate through subquery gets apply-capable builder", () => {
     .apply(v => ({
       totalAge: sum(v.age),
     }))
-    .intersect(PersonAccount, sub =>
+    .join("inner", PersonAccount, sub =>
       sub.apply(v => ({
         accountCount: count(v.name),
       }))
@@ -506,8 +506,8 @@ test("nested intersects include all link entities in XML", () => {
 
   const q = fetchXml(Person)
     .apply(v => ({ totalAge: sum(v.age) }))
-    .intersect(PersonAccount, sub =>
-      sub.intersect(AccountTeam, sub2 =>
+    .join("inner", PersonAccount, sub =>
+      sub.join("inner", AccountTeam, sub2 =>
         sub2.apply(v => ({ teamCount: count(v.name) }))
       )
     )
@@ -534,10 +534,10 @@ test("nested intersect with apply at both middle and deep levels", () => {
 
   const q = fetchXml(Person)
     .apply(v => ({ totalAge: sum(v.age) }))
-    .intersect(PersonAccount, sub =>
+    .join("inner", PersonAccount, sub =>
       sub
         .apply(v => ({ accountRevenue: sum(v.revenue) }))
-        .intersect(AccountTeam, sub2 =>
+        .join("inner", AccountTeam, sub2 =>
           sub2.apply(v => ({ teamCount: count(v.name) }))
         )
     )
@@ -812,7 +812,7 @@ test("[docs] join: many-to-many via intersect", () => {
   })
   const TeamMembership = new DataverseIntersectTable("teammembership", SystemUser, Team)
   const q = fetchXml(SystemUser).top(2).select(f => ({ fullname: f.fullname }))
-    .intersect(TeamMembership, sub =>
+    .join("inner", TeamMembership, sub =>
       sub.select(f => ({ team_name: f.name }))
     )
   const xml = q.toXml()
