@@ -19,7 +19,7 @@ import {
   NullableChoiceField,
 } from "./fields";
 import { DateField } from "./fields";
-import { Schema } from "./schema";
+import { FieldBase } from "./fieldBase";
 import { DataverseTable } from "./table";
 import { Etag } from "./util";
 
@@ -89,7 +89,7 @@ export type Infer<T> = T extends null | undefined
   ? Infer<U>[]
   : T extends LookupProperty<infer U>
   ? Infer<U> | null
-  : T extends Schema<infer U>
+  : T extends FieldBase<infer U>
   ? U
   : { [K in keyof T]: Infer<T[K]> }
 
@@ -138,4 +138,3 @@ export type GenericValueProperty =
 export type GenericProperty = GenericNavigationProperty | GenericValueProperty;
 
 export type GetTable<T = any> = () => T;
-export type Validator<T> = (value: T) => void | undefined | string;

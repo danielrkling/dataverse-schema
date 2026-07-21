@@ -2,10 +2,9 @@ export * from "./client";
 export * from './functions';
 export * from './fields';
 export * from './filter';
-export * from './schema'
+export * from './fieldBase';
 export * from './table';
 export * from './types';
 export * from './util';
-export * from './validators';
 export * from './odata';
 export * from './fetchXml';

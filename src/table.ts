@@ -1,6 +1,7 @@
-import { StandardSchemaV1 } from "@standard-schema/spec";
-import { DataverseClient } from "./client"; // Assuming this is the path to your client
+import * as v from "valibot"
+import { DataverseClient } from "./client";
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField } from "./fields";
+import { FieldBase, ValidationSchema } from "./fieldBase";
 function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
   const params = new URLSearchParams()
   if (opts.select) params.set("$select", opts.select)
@@ -10,7 +11,6 @@ function queryString(opts: { select?: string; top?: number; filter?: string; ord
   if (opts.expand) params.set("$expand", opts.expand)
   return params.toString()
 }
-import { Schema } from "./schema";
 import {
   AlternateKey,
   DataverseKey,
@@ -35,6 +35,7 @@ export type DataverseTableOptions<TProperties extends GenericProperties> = {
   entitySetName: string;
   logicalName: string;
   fields: TProperties;
+  schema?: ValidationSchema<Infer<TProperties>>;
 };
 
 /**
@@ -65,35 +66,35 @@ export type DataverseTableOptions<TProperties extends GenericProperties> = {
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-export class DataverseTable<TProperties extends GenericProperties> extends Schema<
-  Infer<TProperties>
-> {
+export class DataverseTable<TProperties extends GenericProperties> {
   client: DataverseClient;
   fields: TProperties;
   logicalName: string;
   entitySetName: string;
+  name: string;
   kind = "table" as const;
   type = "table" as const;
+  schema?: ValidationSchema<Infer<TProperties>>;
 
   /**
    * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
    */
-  constructor(options: DataverseTableOptions<TProperties>) {
-    super(options.entitySetName, null as Infer<TProperties>);
+  constructor(options: DataverseTableOptions<TProperties> & { schema?: ValidationSchema<Infer<TProperties>> }) {
     this.client = options.client;
     this.entitySetName = options.entitySetName;
     this.logicalName = options.logicalName;
+    this.name = options.entitySetName;
     this.fields = options.fields;
+    this.schema = options.schema;
   }
 
-  getIssues(value: any, path: PropertyKey[] = []): StandardSchemaV1.Issue[] {
-    const issues = super.getIssues(value, path);
-    if (typeof value !== "object" || value === null) value = {};
-    for (const [key, property] of Object.entries(this.fields)) {
-      if (!property.getReadOnly())
-        issues.push(...property.getIssues(value[key], [...path, key]));
+  getSchema(): v.BaseSchema<unknown, Infer<TProperties>, v.BaseIssue<unknown>> {
+    if (this.schema) return this.schema
+    const shape: Record<string, v.BaseSchema<any, any, any>> = {}
+    for (const [key, field] of Object.entries(this.fields)) {
+      shape[key] = (field as FieldBase<any>).schema
     }
-    return issues;
+    return v.object(shape) as any
   }
 
   getDefault(value?: Partial<Infer<TProperties>>): Infer<TProperties> {

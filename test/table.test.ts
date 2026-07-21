@@ -1,4 +1,5 @@
 import { expect, test } from "vitest"
+import * as v from "valibot"
 import { DataverseClient } from "../src/client"
 import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection, collectionIds, date, list, Infer, GUID } from "../src"
 import { BASE_URL } from "./mocks/handlers"
@@ -312,8 +313,8 @@ test("table.appendProperties adds new fields", () => {
 })
 
 test("table.validate returns issues for invalid data", () => {
-  const validation = Person.validate({ name: 123 } as any)
-  expect(validation.issues).toBeDefined()
+  const validation = v.safeParse(Person.getSchema(), { name: 123 } as any)
+  expect(validation.success).toBe(false)
 })
 
 //
@@ -676,14 +677,14 @@ test("table.getDefault returns defaults merged with provided values", () => {
 // --- GET ISSUES ---
 //
 
-test("table.getIssues collects validation issues from fields", () => {
-  const issues = Person.getIssues({ name: 123, age: "not-a-number" })
-  expect(issues.length).toBeGreaterThan(0)
+test("table.getSchema validates and collects issues from fields", () => {
+  const result = v.safeParse(Person.getSchema(), { name: 123, age: "not-a-number" } as any)
+  expect(result.success).toBe(false)
 })
 
-test("table.getIssues handles null/undefined input gracefully", () => {
-  const issues = Person.getIssues(null)
-  expect(Array.isArray(issues)).toBe(true)
+test("table.getSchema handles null/undefined input gracefully", () => {
+  const result = v.safeParse(Person.getSchema(), null)
+  expect(result.success).toBe(false)
 })
 
 //

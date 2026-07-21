@@ -1,11 +1,11 @@
 import { expect, test } from "vitest"
+import * as v from "valibot"
 import {
   string, nullableString, number, nullableNumber, boolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted,
   collection, collectionIds, lookupId, lookup, DataverseTable,
   choice, nullableChoice,
 } from "../src"
-import { required } from "../src/validators"
 import { DataverseClient } from "../src/client"
 
 const testClient = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -115,16 +115,15 @@ test("list field validates against choices", () => {
   const f = list("gender", ["M", "F"] as const)
   expect(f.type).toBe("list")
   expect(f.getDefault()).toBeNull()
-  expect(f.parse("M")).toBe("M")
-  expect(f.parse("F")).toBe("F")
-  expect(() => f.parse("X")).toThrow()
+  expect(v.parse(f.schema, "M")).toBe("M")
+  expect(v.parse(f.schema, "F")).toBe("F")
+  expect(() => v.parse(f.schema, "X")).toThrow()
 })
 
 test("list field issues for invalid value", () => {
   const f = list("gender", ["M", "F"])
-  const issues = f.getIssues("X")
-  expect(issues).toHaveLength(1)
-  expect(issues[0].message).toContain("not in")
+  const result = v.safeParse(f.schema, "X")
+  expect(result.success).toBe(false)
 })
 
 test("choice field type and defaults", () => {
@@ -151,16 +150,15 @@ test("choice transformValueToDataverse maps string to number", () => {
 
 test("choice validates against option values", () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
-  expect(f.parse("Active")).toBe("Active")
-  expect(f.parse("Inactive")).toBe("Inactive")
-  expect(() => f.parse("Unknown" as any)).toThrow()
+  expect(v.parse(f.schema, "Active")).toBe("Active")
+  expect(v.parse(f.schema, "Inactive")).toBe("Inactive")
+  expect(() => v.parse(f.schema, "Unknown" as any)).toThrow()
 })
 
 test("choice issues for invalid value", () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
-  const issues = f.getIssues("Bogus")
-  expect(issues).toHaveLength(1)
-  expect(issues[0].message).toContain("not in")
+  const result = v.safeParse(f.schema, "Bogus")
+  expect(result.success).toBe(false)
 })
 
 test("nullableChoice field defaults to null", () => {
@@ -241,50 +239,55 @@ test("setReadOnly marks field as read-only", () => {
   expect(f.getReadOnly()).toBe(false)
 })
 
-test("required validator returns message for null", () => {
-  const f = nullableString("name").check(required())
-  const issues = f.getIssues(null)
-  expect(issues).toHaveLength(1)
-  expect(issues[0].message).toBe("Required")
-  // empty string should pass required (it's a valid non-null value)
-  const issues2 = f.getIssues("")
-  expect(issues2).toHaveLength(0)
+test("required validator via valibot schema", () => {
+  const f = nullableString("name")
+  f.schema = v.pipe(v.nullable(v.string()), v.check(v => v != null, "Required"))
+  const result = v.safeParse(f.schema, null)
+  expect(result.success).toBe(false)
+  if (!result.success) {
+    expect(result.issues[0].message).toBe("Required")
+  }
+  const result2 = v.safeParse(f.schema, "")
+  expect(result2.success).toBe(true)
 })
 
 test("required validator passes for non-empty", () => {
-  const f = string("name").check(required())
-  const issues = f.getIssues("John")
-  expect(issues).toHaveLength(0)
-})
-
-test("validate returns success for valid values", () => {
   const f = string("name")
-  const result = f.validate("hello")
-  expect("value" in result ? result.value : undefined).toBe("hello")
-  expect(result.issues).toBeUndefined()
+  f.schema = v.pipe(v.string(), v.check(v => v.length > 0, "Required"))
+  const result = v.safeParse(f.schema, "John")
+  expect(result.success).toBe(true)
 })
 
-test("validate returns issues for invalid values", () => {
+test("validate returns success for valid values via valibot", () => {
+  const f = string("name")
+  const result = v.safeParse(f.schema, "hello")
+  expect(result.success).toBe(true)
+  if (result.success) {
+    expect(result.output).toBe("hello")
+  }
+})
+
+test("validate returns issues for invalid values via valibot", () => {
   const f = number("age")
-  const result = f.validate("not-a-number" as any)
-  expect(result.issues).toBeDefined()
+  const result = v.safeParse(f.schema, "not-a-number")
+  expect(result.success).toBe(false)
 })
 
-test("parse returns value for valid", () => {
+test("parse returns value for valid via valibot", () => {
   const f = string("name")
-  expect(f.parse("hello")).toBe("hello")
+  expect(v.parse(f.schema, "hello")).toBe("hello")
 })
 
-test("parse throws for invalid", () => {
+test("parse throws for invalid via valibot", () => {
   const f = number("age")
-  expect(() => f.parse("bad" as any)).toThrow()
+  expect(() => v.parse(f.schema, "bad" as any)).toThrow()
 })
 
-test("StandardSchemaV1 ~standard props", async () => {
+test("StandardSchemaV1 ~standard props via field schema", async () => {
   const f = string("name")
-  const standard = f["~standard"]
+  const standard = f.schema["~standard"]
   expect(standard.version).toBe(1)
-  expect(standard.vendor).toBe("dataverse-schema")
+  expect(standard.vendor).toBe("valibot")
   const result = await standard.validate("test")
   expect("issues" in result ? result.issues : []).toHaveLength(0)
 })
@@ -340,16 +343,21 @@ test("collection has type collection", () => {
   expect(f.kind).toBe("navigation")
 })
 
-test("validation works with multiple validators", () => {
+test("validation works with valibot pipe", () => {
   const f = nullableString("name")
-    .check(required())
-    .check((v) => v && v.length < 2 ? "Too short" : undefined)
-  const issues = f.getIssues(null)
-  expect(issues).toHaveLength(1)
-  expect(issues[0].message).toBe("Required")
-  const issues2 = f.getIssues("A")
-  expect(issues2).toHaveLength(1)
-  expect(issues2[0].message).toBe("Too short")
-  const issues3 = f.getIssues("Alice")
-  expect(issues3).toHaveLength(0)
+  f.schema = v.pipe(
+    v.nullable(v.string()),
+    v.check(v => v != null, "Required"),
+    v.check(v => v == null || v.length >= 2, "Too short"),
+  )
+  const result1 = v.safeParse(f.schema, null)
+  expect(result1.success).toBe(false)
+  if (!result1.success) expect(result1.issues[0].message).toBe("Required")
+
+  const result2 = v.safeParse(f.schema, "A")
+  expect(result2.success).toBe(false)
+  if (!result2.success) expect(result2.issues[0].message).toBe("Too short")
+
+  const result3 = v.safeParse(f.schema, "Alice")
+  expect(result3.success).toBe(true)
 })

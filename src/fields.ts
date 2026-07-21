@@ -1,26 +1,30 @@
-import { Schema } from "./schema";
+import * as v from "valibot"
+import { FieldBase, ValidationSchema } from "./fieldBase";
 import { DataverseTable } from "./table";
 import { GenericProperties, GetTable, GUID, Infer } from "./types";
 import { parseDateOnly, toDateOnly } from "./util";
-import { isType } from "./validators";
-import { isTypeOrNull } from "./validators";
-import { StandardSchemaV1 } from "@standard-schema/spec";
 
-export class BooleanField extends Schema<boolean> {
+function buildObjectSchema(fields: Record<string, FieldBase<any>>): v.BaseSchema<any, any, any> {
+  const shape: Record<string, v.BaseSchema<any, any, any>> = {}
+  for (const [key, field] of Object.entries(fields)) {
+    shape[key] = field.schema
+  }
+  return v.object(shape)
+}
+
+export class BooleanField extends FieldBase<boolean> {
   kind = "value" as const;
   type = "boolean" as const;
   constructor(name: string) {
-    super(name, false);
-    this.check(isType("boolean"));
+    super({ name, defaultValue: false, kind: "value", type: "boolean", schema: v.boolean() as ValidationSchema<boolean> });
   }
 }
 
-export class NumberField extends Schema<number> {
+export class NumberField extends FieldBase<number> {
   kind = "value" as const;
   type = "number" as const;
   constructor(name: string) {
-    super(name, 0);
-    this.check(isType("number"));
+    super({ name, defaultValue: 0, kind: "value", type: "number", schema: v.number() as ValidationSchema<number> });
   }
 
   transformValueFromDataverse(value: any): number {
@@ -28,21 +32,19 @@ export class NumberField extends Schema<number> {
   }
 }
 
-export class NullableNumberField extends Schema<number | null> {
+export class NullableNumberField extends FieldBase<number | null> {
   kind = "value" as const;
   type = "number" as const;
   constructor(name: string) {
-    super(name, null);
-    this.check(isTypeOrNull("number"));
+    super({ name, defaultValue: null, kind: "value", type: "number", schema: v.nullable(v.number()) as ValidationSchema<number | null> });
   }
 }
 
-export class StringField extends Schema<string> {
+export class StringField extends FieldBase<string> {
   kind = "value" as const;
   type = "string" as const;
   constructor(name: string) {
-    super(name, "");
-    this.check(isType("string"));
+    super({ name, defaultValue: "", kind: "value", type: "string", schema: v.string() as ValidationSchema<string> });
   }
 
   transformValueFromDataverse(value: any): string {
@@ -50,22 +52,19 @@ export class StringField extends Schema<string> {
   }
 }
 
-export class NullableStringField extends Schema<string | null> {
+export class NullableStringField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "string" as const;
   constructor(name: string) {
-    super(name, null);
-    this.check(isTypeOrNull("string"));
+    super({ name, defaultValue: null, kind: "value", type: "string", schema: v.nullable(v.string()) as ValidationSchema<string | null> });
   }
 }
 
-export class PrimaryKeyField extends Schema<GUID> {
+export class PrimaryKeyField extends FieldBase<GUID> {
   kind = "value" as const;
   type = "primaryKey" as const;
   constructor(name: string) {
-    super(name, "" as GUID);
-    // this.setReadOnly();
-    this.check(isType("string"));
+    super({ name, defaultValue: "" as GUID, kind: "value", type: "primaryKey", schema: v.string() as ValidationSchema<GUID> });
   }
 
   getDefault(): GUID {
@@ -73,34 +72,37 @@ export class PrimaryKeyField extends Schema<GUID> {
   }
 }
 
-export class ListField<T extends string | number> extends Schema<T | null> {
+export class ListField<T extends string | number> extends FieldBase<T | null> {
   kind = "value" as const;
   type = "list" as const;
   list: Array<T>;
   constructor(name: string, list: Array<T>) {
-    super(name, null);
-    this.list = list;
-    this.check((v) => {
-      if (v !== null && !list.includes(v)) {
-        return `${v} not in [${list}]`;
-      }
+    super({
+      name,
+      defaultValue: null,
+      kind: "value",
+      type: "list",
+      schema: v.nullable(v.custom<T>((v) => list.includes(v as T), `Value not in [${list}]`)) as ValidationSchema<T | null>,
     });
+    this.list = list;
   }
 }
 
-export class ChoiceField<T extends Record<number, string>> extends Schema<T[keyof T]> {
+export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
   kind = "value" as const;
   type = "choice" as const;
   #options: T;
   constructor(name: string, options: T) {
     const firstKey = Object.keys(options)[0];
-    super(name, options[Number(firstKey) as keyof T]);
-    this.#options = options;
-    this.check((v) => {
-      if (v !== null && !Object.values(options).includes(v as string)) {
-        return `${v} not in [${Object.values(options)}]`;
-      }
+    const values = Object.values(options) as [string, ...string[]];
+    super({
+      name,
+      defaultValue: options[Number(firstKey) as keyof T],
+      kind: "value",
+      type: "choice",
+      schema: v.picklist(values) as unknown as ValidationSchema<T[keyof T]>,
     });
+    this.#options = options;
   }
 
   transformValueFromDataverse(value: any): T[keyof T] {
@@ -115,18 +117,20 @@ export class ChoiceField<T extends Record<number, string>> extends Schema<T[keyo
   }
 }
 
-export class NullableChoiceField<T extends Record<number, string>> extends Schema<T[keyof T] | null> {
+export class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
   kind = "value" as const;
   type = "choice" as const;
   #options: T;
   constructor(name: string, options: T) {
-    super(name, null);
-    this.#options = options;
-    this.check((v) => {
-      if (v !== null && !Object.values(options).includes(v as string)) {
-        return `${v} not in [${Object.values(options)}]`;
-      }
+    const values = Object.values(options) as [string, ...string[]];
+    super({
+      name,
+      defaultValue: null,
+      kind: "value",
+      type: "choice",
+      schema: v.nullable(v.picklist(values)) as unknown as ValidationSchema<T[keyof T] | null>,
     });
+    this.#options = options;
   }
 
   transformValueFromDataverse(value: any): T[keyof T] | null {
@@ -143,12 +147,17 @@ export class NullableChoiceField<T extends Record<number, string>> extends Schem
   }
 }
 
-export class DateTimeField extends Schema<Date> {
+export class DateTimeField extends FieldBase<Date> {
   kind = "value" as const;
   type = "date" as const;
   constructor(name: string) {
-    super(name, new Date());
-    this.check((v) => (v instanceof Date ? undefined : "value is not Date"));
+    super({
+      name,
+      defaultValue: new Date(),
+      kind: "value",
+      type: "date",
+      schema: v.instance(Date) as ValidationSchema<Date>,
+    });
   }
   getDefault(): Date {
     return new Date();
@@ -159,14 +168,17 @@ export class DateTimeField extends Schema<Date> {
   }
 }
 
-export class NullableDateTimeField extends Schema<Date | null> {
+export class NullableDateTimeField extends FieldBase<Date | null> {
   kind = "value" as const;
   type = "date" as const;
   constructor(name: string) {
-    super(name, null);
-    this.check((v) =>
-      v === null || v instanceof Date ? undefined : "value is not Date or null",
-    );
+    super({
+      name,
+      defaultValue: null,
+      kind: "value",
+      type: "date",
+      schema: v.nullable(v.instance(Date)) as ValidationSchema<Date | null>,
+    });
   }
   transformValueFromDataverse(value: any): Date | null {
     if (value === null) return null;
@@ -174,14 +186,17 @@ export class NullableDateTimeField extends Schema<Date | null> {
   }
 }
 
-export class DateField extends Schema<Date> {
+export class DateField extends FieldBase<Date> {
   kind = "value" as const;
   type = "dateOnly" as const;
   constructor(name: string) {
-    super(name, parseDateOnly(new Date().toISOString()));
-    this.check((v) =>
-      v instanceof Date ? undefined : "value is not Date",
-    );
+    super({
+      name,
+      defaultValue: parseDateOnly(new Date().toISOString()),
+      kind: "value",
+      type: "dateOnly",
+      schema: v.instance(Date) as ValidationSchema<Date>,
+    });
   }
   transformValueFromDataverse(value: any): Date {
     if (value === null) return parseDateOnly(new Date().toISOString());
@@ -192,14 +207,17 @@ export class DateField extends Schema<Date> {
   }
 }
 
-export class NullableDateField extends Schema<Date | null> {
+export class NullableDateField extends FieldBase<Date | null> {
   kind = "value" as const;
   type = "dateOnly" as const;
   constructor(name: string) {
-    super(name, null);
-    this.check((v) =>
-      v === null || v instanceof Date ? undefined : "value is not Date or null",
-    );
+    super({
+      name,
+      defaultValue: null,
+      kind: "value",
+      type: "dateOnly",
+      schema: v.nullable(v.instance(Date)) as ValidationSchema<Date | null>,
+    });
   }
   transformValueFromDataverse(value: any): Date | null {
     if (value === null) return null;
@@ -210,31 +228,48 @@ export class NullableDateField extends Schema<Date | null> {
   }
 }
 
-export class FormattedField extends Schema<string | null> {
+export class FormattedField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "formatted" as const;
   constructor(name: string) {
-    super(name, null);
+    super({
+      name,
+      defaultValue: null,
+      kind: "value",
+      type: "formatted",
+      schema: v.nullable(v.string()) as ValidationSchema<string | null>,
+    });
     this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
     this.setReadOnly(true);
   }
 }
 
-export class ImageField extends Schema<string | null> {
+export class ImageField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "image" as const;
   constructor(name: string) {
-    super(name, null);
-    this.check(isTypeOrNull("string"));
+    super({
+      name,
+      defaultValue: null,
+      kind: "value",
+      type: "image",
+      schema: v.nullable(v.string()) as ValidationSchema<string | null>,
+    });
   }
 }
 
-export class FileField extends Schema<string> {
+export class FileField extends FieldBase<string> {
   type = "file" as const;
   kind = "file" as const;
 
   constructor(name: string) {
-    super(name, "");
+    super({
+      name,
+      defaultValue: "",
+      kind: "file",
+      type: "file",
+      schema: v.string() as ValidationSchema<string>,
+    });
     this.fromDataverseName = `${name}_name`;
     this.setReadOnly(true);
   }
@@ -460,14 +495,20 @@ export function file(name: string){
   return new FileField(name)
 }
 
-export class LookupIdProperty extends Schema<GUID | null> {
+export class LookupIdProperty extends FieldBase<GUID | null> {
   kind = "navigation" as const;
   type = "lookupId" as const;
   navigationName: string;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable) {
-    super(name, null);
+    super({
+      name,
+      defaultValue: null,
+      kind: "navigation",
+      type: "lookupId",
+      schema: v.nullable(v.string()) as ValidationSchema<GUID | null>,
+    });
     this.navigationName = name;
     this.#getTable = getTable;
     this.fromDataverseName = `_${name.toLowerCase()}_value`
@@ -496,17 +537,20 @@ export class LookupIdProperty extends Schema<GUID | null> {
 
 export class CollectionProperty<
   TProperties extends GenericProperties,
-> extends Schema<Infer<TProperties>[]> {
+> extends FieldBase<Infer<TProperties>[]> {
   kind = "navigation" as const;
   type = "collection" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>) {
-    super(name, []);
+    super({
+      name,
+      defaultValue: [],
+      kind: "navigation",
+      type: "collection",
+      schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
+    });
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
-    this.check((v) =>
-      !Array.isArray(v) ? "value is not an array" : undefined,
-    );
   }
 
   #table: DataverseTable<GenericProperties> | undefined;
@@ -518,18 +562,6 @@ export class CollectionProperty<
     return Array.from(value ?? []).map((v: any) =>
       this.table.transformValueFromDataverse(v),
     );
-  }
-
-  getIssues(value: any, path: PropertyKey[] = []): StandardSchemaV1.Issue[] {
-    const issues = super.getIssues(value, path);
-    if (Array.isArray(value)) {
-      issues.push(
-        ...value
-          .map((v: any, i: number) => this.table.getIssues(v, [...path, i]))
-          .flat(1),
-      );
-    }
-    return issues;
   }
 }
 
@@ -555,17 +587,20 @@ export function collection<TProperties extends GenericProperties>(
   return new CollectionProperty(name, getTable);
 }
 
-export class CollectionIdsProperty extends Schema<GUID[]> {
+export class CollectionIdsProperty extends FieldBase<GUID[]> {
   kind = "navigation" as const;
   type = "collectionIds" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable) {
-    super(name, []);
+    super({
+      name,
+      defaultValue: [],
+      kind: "navigation",
+      type: "collectionIds",
+      schema: v.array(v.string()) as ValidationSchema<GUID[]>,
+    });
     this.#getTable = getTable;
-    this.check((v) =>
-      !Array.isArray(v) ? "value is not an array" : undefined,
-    );
   }
 
   #table: DataverseTable<{ id: PrimaryKeyField }> | undefined;
@@ -580,18 +615,6 @@ export class CollectionIdsProperty extends Schema<GUID[]> {
 
   transformValueFromDataverse(value: any): GUID[] {
     return Array.from(value ?? []).map((v: any) => v[this.table.fields.id.name]);
-  }
-
-  getIssues(value: any, path: PropertyKey[] = []): StandardSchemaV1.Issue[] {
-    const issues = super.getIssues(value, path);
-    if (Array.isArray(value)) {
-      issues.push(
-        ...value
-          .map((v: any, i: number) => this.table.fields.id.getIssues(v,[...path,i]))
-          .flat(1),
-      );
-    }
-    return issues;
   }
 }
 
@@ -635,13 +658,19 @@ export function lookupId(name: string, getTable: GetTable) {
 
 export class LookupProperty<
   TProperties extends GenericProperties,
-> extends Schema<Infer<TProperties> | null> {
+> extends FieldBase<Infer<TProperties> | null> {
   kind = "navigation" as const;
   type = "lookup" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>) {
-    super(name, null);
+    super({
+      name,
+      defaultValue: null,
+      kind: "navigation",
+      type: "lookup",
+      schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
+    });
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
   }
 
@@ -652,14 +681,6 @@ export class LookupProperty<
 
   transformValueFromDataverse(value: any): Infer<TProperties> | null {
     return value == null ? null : this.table.transformValueFromDataverse(value);
-  }
-
-  getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[] {
-    const issues = super.getIssues(value, path);
-    if (value !== null) {
-      issues.push(...this.table.getIssues(value, path));
-    }
-    return issues;
   }
 }
 
