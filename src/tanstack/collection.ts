@@ -37,7 +37,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
   config: DataverseCollectionConfig<T>,
 ): CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils> & { utils: DataverseCollectionUtils } {
   const { table, query, id, ...rest } = config;
-  const pk = table.getPrimaryKey();
+  const pk = table.primaryKey;
   const getKey = config.getKey ?? ((item: Infer<T>) => (item as any)[pk.key]);
   const collectionId = id ?? table.entitySetName;
 

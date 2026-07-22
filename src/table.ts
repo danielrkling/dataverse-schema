@@ -259,7 +259,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
           id,
           property.name,
           property.table.entitySetName,
-          property.table.getPrimaryKey().property.name,
+          property.table.primaryKey.property.name,
           ids,
         );
       }
@@ -591,25 +591,6 @@ export class DataverseTable<TProperties extends GenericProperties> {
   }
 
   /**
-   * Returns the primary key field definition for this table.
-   *
-   * @example
-   * const pk = Account.getPrimaryKey();
-   * console.log(pk.key);      // "id"
-   * console.log(pk.property.name); // "accountid"
-   */
-  getPrimaryKey() {
-    const result = Object.entries(this.fields).find(
-      (f) => f[1].type === "primaryKey",
-    );
-    if (!result) throw new Error("No Primary Key found in schema");
-    return {
-      key: result[0],
-      property: result[1] as PrimaryKeyField,
-    };
-  }
-
-  /**
    * Extracts the primary key GUID from a record object, or `undefined` if not present.
    *
    * @example
@@ -617,8 +598,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * const pk = Account.getPrimaryId(account); // GUID | undefined
    */
   getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined {
-    const { key } = this.primaryKey;
-    return value[key as keyof typeof value] as GUID | undefined;
+    return value[this.primaryKey.key as keyof typeof value] as GUID | undefined;
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties> {
@@ -701,23 +681,6 @@ export class DataverseTable<TProperties extends GenericProperties> {
       ...this.fields,
       ...properties,
     } as any});
-  }
-
-  async uploadFile(id: GUID, fieldName: string, data: Blob, fileName?: string, mimeType?: string): Promise<void> {
-    const field = this.fields[fieldName];
-    if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
-    const fileName_ = fileName ?? (field as FileField).getDefault()?.name;
-    if (!fileName_) throw new Error("No file name provided");
-    const mimeType_ = mimeType ?? data.type ?? "application/octet-stream";
-    await this.client.updateFileProperty(this.entitySetName, id, (field as FileField).name, fileName_, data);
-  }
-
-  async downloadFile(id: GUID, fieldName: string): Promise<Blob> {
-    const field = this.fields[fieldName];
-    if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
-    const response = await this.client.fetch(`${this.entitySetName}(${id})/${(field as FileField).name}/$value`, { raw: true });
-    if (!response.ok) throw new Error(response.status + "-" + response.statusText);
-    return response.blob();
   }
 
   async deleteFile(id: GUID, fieldName: string): Promise<void> {

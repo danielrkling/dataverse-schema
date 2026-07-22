@@ -181,7 +181,7 @@ export class DateField extends FieldBase<Date> {
     }, options);
   }
   transformValueFromDataverse(value: any): Date {
-    if (value === null) return parseDateOnly(new Date().toISOString());
+    if (value == null) return parseDateOnly(new Date().toISOString());
     return parseDateOnly(value);
   }
   transformValueToDataverse(value: any) {
@@ -199,7 +199,7 @@ export class NullableDateField extends FieldBase<Date | null> {
     }, options);
   }
   transformValueFromDataverse(value: any): Date | null {
-    if (value === null) return null;
+    if (value == null) return null;
     return parseDateOnly(value);
   }
   transformValueToDataverse(value: any) {
@@ -594,7 +594,7 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
   get table(): DataverseTable<{ id: PrimaryKeyField }> {
     if (!this.#table) {
       const table = this.#getTable();
-      const { property } = table.getPrimaryKey();
+      const { property } = table.primaryKey;
       this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
@@ -680,7 +680,7 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
   get table(): DataverseTable<{ id: PrimaryKeyField }> {
     if (!this.#table) {
       const table = this.#getTable();
-      const { property } = table.getPrimaryKey();
+      const { property } = table.primaryKey;
       this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;

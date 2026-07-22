@@ -409,8 +409,8 @@ export class FetchXmlAggregateQuery<
             const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
             subqueryFn(targetBuilder as unknown as SubAggregateJoinBuilder<any>);
 
-            const pkName = this._table.getPrimaryKey().property.name;
-            const targetPkName = targetTable.getPrimaryKey().property.name;
+            const pkName = this._table.primaryKey.property.name;
+            const targetPkName = targetTable.primaryKey.property.name;
 
             const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
             const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
@@ -791,7 +791,7 @@ export class EntityQueryBuilder<
             if (value instanceof GroupByExpr) {
                 initialAttributes.push({ name: value.field, alias, groupby: true });
             } else if (value instanceof Aggregation) {
-                const fieldName = value.field ? value.field.toString() : this._table.getPrimaryKey().property.name;
+                const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.name;
                 initialAttributes.push({ name: fieldName, alias, aggregate: value.operation });
             }
         }
@@ -891,8 +891,8 @@ export class EntityQueryBuilder<
             const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
             subqueryFn(targetBuilder as unknown as SubJoinBuilder<any, {}>);
 
-            const pkName = this._table.getPrimaryKey().property.name;
-            const targetPkName = targetTable.getPrimaryKey().property.name;
+            const pkName = this._table.primaryKey.property.name;
+            const targetPkName = targetTable.primaryKey.property.name;
 
             const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
             const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);

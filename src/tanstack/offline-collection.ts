@@ -49,7 +49,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
   config: DataverseOfflineCollectionConfig<T>,
 ): CollectionConfig<Infer<T>, string | number, never, DataverseOfflineCollectionUtils> & { utils: DataverseOfflineCollectionUtils } {
   const { table, query, id, dbName = "dataverse-schema", storeName, syncInterval = DEFAULT_POLL_INTERVAL, queueStoreName = DEFAULT_QUEUE_STORE, ...rest } = config;
-  const pk = table.getPrimaryKey();
+  const pk = table.primaryKey;
   const getKey = config.getKey ?? ((item: Infer<T>) => (item as any)[pk.key]);
   const collectionId = id ?? table.entitySetName;
   const dataStore = storeName ?? table.entitySetName;
