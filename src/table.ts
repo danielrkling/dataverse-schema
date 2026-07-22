@@ -384,6 +384,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       "",
       etag,
     );
+    await this._afterSave(ctx, value);
     return id as GUID;
   }
 

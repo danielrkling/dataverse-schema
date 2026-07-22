@@ -229,14 +229,15 @@ export class ImageField extends FieldBase<ImageRef | null> {
     }, options);
   }
 
-  transformValueFromDataverse(value: any): ImageRef | null {
+  transformValueFromDataverse(value: any, ctx: TransformContext): ImageRef | null {
     if (value == null) return null;
     const b64 = String(value);
     const mimeType = b64.startsWith("/9j/") ? "image/jpeg"
       : b64.startsWith("iVB") ? "image/png"
-      : b64.startsWith("R0lG") ? "image/gif"
-      : "application/octet-stream";
-    return { url: `data:${mimeType};base64,${b64}` };
+        : b64.startsWith("R0lG") ? "image/gif"
+          : "application/octet-stream";
+          const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName,ctx.recordId,this.name)
+    return { url: `data:${mimeType};base64,${b64}`, fullSizeUrl };
   }
 
   async transformValueToDataverse(value: ImageRef | null): Promise<string | null> {
@@ -261,12 +262,13 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 export type FileRef = {
   name: string;
-  data?: Blob | Promise<Blob>;
-  mimeType?: string;
+  url?: string;
+  data?: Blob | null;
 }
 
 export type ImageRef = {
   readonly url: string;
+  readonly fullSizeUrl: string
   data?: Blob | null;
 }
 
@@ -285,31 +287,25 @@ export class FileField extends FieldBase<FileRef | null> {
   transformValueFromDataverse(value: any, ctx?: TransformContext): FileRef | null {
     if (value == null) return null;
     if (!ctx) return { name: value };
-    const url = `${ctx.table.entitySetName}(${ctx.recordId})/${this.name}/$value`;
-    const client = ctx.client;
-    return Object.defineProperty(
-      { name: value },
-      "data",
-      {
-        get() {
-          return client.fetch(url, { raw: true })
-            .then((r: any) => { if (!r.ok) throw new Error(r.status + "-" + r.statusText); return r.blob(); });
-        },
-        configurable: true,
-      },
-    );
+
+    return {
+      name: value,
+      url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.name),
+    }
   }
 
   transformValueToDataverse(): typeof SKIP {
     return SKIP;
   }
 
-  async afterSave(ctx: TransformContext, value: any): Promise<void> {
+  async afterSave(ctx: TransformContext, value: FileRef): Promise<void> {
     if (value?.data instanceof Blob) {
       const fileName = value.name ?? this.getDefault()?.name;
       if (fileName) {
         await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, fileName, value.data);
       }
+    } else if (value?.data === null){
+      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name)
     }
   }
 }
@@ -508,7 +504,7 @@ export function date(name: string, options?: FieldOptions<Date>) {
  *
  * @param name The Dataverse logical name of the column.
  */
-export function nullableDate(name: string, options?: FieldOptions<Date | null>){
+export function nullableDate(name: string, options?: FieldOptions<Date | null>) {
   return new NullableDateField(name, options)
 }
 
@@ -517,7 +513,7 @@ export function nullableDate(name: string, options?: FieldOptions<Date | null>){
  *
  * @param name The Dataverse logical name of the column.
  */
-export function nullableDateTime(name: string, options?: FieldOptions<Date | null>){
+export function nullableDateTime(name: string, options?: FieldOptions<Date | null>) {
   return new NullableDateTimeField(name, options)
 }
 
@@ -550,7 +546,7 @@ export function image(name: string, options?: FieldOptions<ImageRef | null>) {
  *
  * @param name The Dataverse logical name of the file column.
  */
-export function file(name: string){
+export function file(name: string) {
   return new FileField(name)
 }
 

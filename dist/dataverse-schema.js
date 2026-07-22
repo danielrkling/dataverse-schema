@@ -1590,6 +1590,7 @@ class DataverseTable {
       "",
       etag
     );
+    await this._afterSave(ctx, value);
     return id;
   }
   /**
@@ -2135,11 +2136,12 @@ class ImageField extends FieldBase {
       schema: nullable(object({ url: string$1() }))
     }, options);
   }
-  transformValueFromDataverse(value) {
+  transformValueFromDataverse(value, ctx) {
     if (value == null) return null;
     const b64 = String(value);
     const mimeType = b64.startsWith("/9j/") ? "image/jpeg" : b64.startsWith("iVB") ? "image/png" : b64.startsWith("R0lG") ? "image/gif" : "application/octet-stream";
-    return { url: `data:${mimeType};base64,${b64}` };
+    const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.name);
+    return { url: `data:${mimeType};base64,${b64}`, fullSizeUrl };
   }
   async transformValueToDataverse(value) {
     if (value == null) return null;
@@ -2172,21 +2174,10 @@ class FileField extends FieldBase {
   transformValueFromDataverse(value, ctx) {
     if (value == null) return null;
     if (!ctx) return { name: value };
-    const url = `${ctx.table.entitySetName}(${ctx.recordId})/${this.name}/$value`;
-    const client = ctx.client;
-    return Object.defineProperty(
-      { name: value },
-      "data",
-      {
-        get() {
-          return client.fetch(url, { raw: true }).then((r) => {
-            if (!r.ok) throw new Error(r.status + "-" + r.statusText);
-            return r.blob();
-          });
-        },
-        configurable: true
-      }
-    );
+    return {
+      name: value,
+      url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.name)
+    };
   }
   transformValueToDataverse() {
     return SKIP;
@@ -2197,6 +2188,8 @@ class FileField extends FieldBase {
       if (fileName) {
         await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, fileName, value.data);
       }
+    } else if (value?.data === null) {
+      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name);
     }
   }
 }

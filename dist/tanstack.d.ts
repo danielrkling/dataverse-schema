@@ -805,13 +805,13 @@ declare class FileField extends FieldBase<FileRef | null> {
     constructor(name: string);
     transformValueFromDataverse(value: any, ctx?: TransformContext): FileRef | null;
     transformValueToDataverse(): typeof SKIP;
-    afterSave(ctx: TransformContext, value: any): Promise<void>;
+    afterSave(ctx: TransformContext, value: FileRef): Promise<void>;
 }
 
 declare type FileRef = {
     name: string;
-    data?: Blob | Promise<Blob>;
-    mimeType?: string;
+    url?: string;
+    data?: Blob | null;
 };
 
 /**
@@ -852,12 +852,13 @@ declare class ImageField extends FieldBase<ImageRef | null> {
     kind: "image";
     type: "image";
     constructor(name: string, options?: FieldOptions<ImageRef | null>);
-    transformValueFromDataverse(value: any): ImageRef | null;
+    transformValueFromDataverse(value: any, ctx: TransformContext): ImageRef | null;
     transformValueToDataverse(value: ImageRef | null): Promise<string | null>;
 }
 
 declare type ImageRef = {
     readonly url: string;
+    readonly fullSizeUrl: string;
     data?: Blob | null;
 };
 
