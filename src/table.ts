@@ -1,7 +1,7 @@
 import * as v from "valibot"
 import { DataverseClient } from "./client";
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField, ImageField } from "./fields";
-import { FieldBase, ValidationSchema } from "./fieldBase";
+import { FieldBase, SKIP, TransformContext, ValidationSchema } from "./fieldBase";
 function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
   const params = new URLSearchParams()
   if (opts.select) params.set("$select", opts.select)
@@ -36,6 +36,7 @@ export type DataverseTableOptions<TProperties extends GenericProperties> = {
   logicalName: string;
   fields: TProperties;
   schema?: ValidationSchema<Infer<TProperties>>;
+  primaryKey?: { key: string; property: PrimaryKeyField };
 };
 
 /**
@@ -75,6 +76,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   kind = "table" as const;
   type = "table" as const;
   schema?: ValidationSchema<Infer<TProperties>>;
+  primaryKey: { key: string; property: PrimaryKeyField };
 
   /**
    * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
@@ -86,6 +88,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
     this.name = options.entitySetName;
     this.fields = options.fields;
     this.schema = options.schema;
+    if (options.primaryKey) {
+      this.primaryKey = options.primaryKey;
+    } else {
+      const pk = Object.entries(this.fields).find((f) => f[1].type === "primaryKey");
+      if (!pk) throw new Error("No Primary Key found in schema");
+      this.primaryKey = { key: pk[0], property: pk[1] as PrimaryKeyField };
+    }
   }
 
   getSchema(): v.BaseSchema<unknown, Infer<TProperties>, v.BaseIssue<unknown>> {
@@ -217,12 +226,17 @@ export class DataverseTable<TProperties extends GenericProperties> {
     if (prop.kind === "navigation") {
       await this.updateNavigationProperty(prop, id, value);
     } else {
-        await this.client.updatePropertyValue(
-          this.entitySetName,
-          id,
-          this.fields[key].name,
-          prop.transformValueToDataverse(value as any),
-        );
+        const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
+        let v = (prop as FieldBase<any>).transformValueToDataverse(value as any, ctx);
+        if (v instanceof Promise) v = await v;
+        if (v !== SKIP) {
+          await this.client.updatePropertyValue(
+            this.entitySetName,
+            id,
+            this.fields[key].name,
+            v,
+          );
+        }
     }
     return id as GUID;
   }
@@ -336,14 +350,15 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * const newId = await Person.insertRecord({ name: "John", age: 30 });
    */
   async insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
-    const pkName = this.getPrimaryKey().property.name;
+    const pkName = this.primaryKey.property.name;
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
       queryString({ select: pkName }),
     );
     const guid = record?.[pkName] as GUID;
-    await this._uploadPendingFiles(guid, value);
+    const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
+    await this._afterSave(ctx, value);
     return guid;
   }
 
@@ -361,14 +376,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
    */
   async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     if (!id) throw new Error("No ID provided")
+    const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
     await this.client.patchRecord(
       this.entitySetName,
       id,
-      await this.transformValueToDataverse(value),
+      await this.transformValueToDataverse(value, ctx),
       "",
       etag,
     );
-    await this._uploadPendingFiles(id as GUID, value);
     return id as GUID;
   }
 
@@ -389,10 +404,11 @@ export class DataverseTable<TProperties extends GenericProperties> {
    */
   async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
     const promises: Promise<any>[] = [];
-    const pkName = this.getPrimaryKey().property.name;
-    const transformed = await this.transformValueToDataverse(value);
+    const pkName = this.primaryKey.property.name;
 
     if (id) {
+      const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
+      const transformed = await this.transformValueToDataverse(value, ctx);
       promises.push(
         this.client.patchRecord(
           this.entitySetName,
@@ -405,10 +421,12 @@ export class DataverseTable<TProperties extends GenericProperties> {
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
-        transformed,
+        await this.transformValueToDataverse(value),
         queryString({ select: pkName }),
       );
       id = record[pkName] as GUID;
+      const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
+      await this._afterSave(ctx, value);
     }
 
     for (const [key, property] of Object.entries(this.fields)) {
@@ -599,32 +617,19 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * const pk = Account.getPrimaryId(account); // GUID | undefined
    */
   getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined {
-    const { key } = this.getPrimaryKey();
+    const { key } = this.primaryKey;
     return value[key as keyof typeof value] as GUID | undefined;
   }
 
   transformValueFromDataverse(value: any): Infer<TProperties> {
     if (value === null) return null as unknown as Infer<TProperties>;
     const result = {} as Record<PropertyKey, any>;
-    const pk = this.getPrimaryKey();
+    const pk = this.primaryKey;
     const recordId = value[pk.property.fromDataverseName] as GUID | undefined;
+    const ctx: TransformContext | undefined = recordId ? { table: this as any, client: this.client, recordId } : undefined;
     for (const [key, property] of Object.entries(this.fields)) {
       const raw = value[property.fromDataverseName];
-      if (property.type === "file" && recordId) {
-        const fileName = property.transformValueFromDataverse(raw);
-        if (fileName) {
-          const table = this;
-          result[key] = Object.defineProperty(
-            { name: (fileName as any).name ?? fileName },
-            "data",
-            { get() { return table.downloadFile(recordId, key); }, configurable: true },
-          );
-        } else {
-          result[key] = null;
-        }
-      } else {
-        result[key] = property.transformValueFromDataverse(raw);
-      }
+      result[key] = property.transformValueFromDataverse(raw, ctx);
     }
     result[Etag] = value["@odata.etag"];
     return result as Infer<TProperties>;
@@ -632,18 +637,18 @@ export class DataverseTable<TProperties extends GenericProperties> {
 
   async transformValueToDataverse(
     value: Partial<Infer<TProperties>>,
+    ctx?: TransformContext,
   ): Promise<DataverseRecord> {
     if (value === null) return null as unknown as DataverseRecord;
     const result = {} as Record<string, any>;
     for (const [key, property] of Object.entries(this.fields)) {
       if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "value" || property.type === "lookupId" || property.type === "image") {
-        let v = property.transformValueToDataverse(
-          value[key as keyof typeof value] as any,
-        );
-        if (v instanceof Promise) v = await v;
-        result[property.toDataverseName] = v;
-      }
+      let v = (property as FieldBase<any>).transformValueToDataverse(
+        value[key as keyof typeof value] as any,
+        ctx,
+      );
+      if (v instanceof Promise) v = await v;
+      if (v !== SKIP) result[property.toDataverseName] = v;
     }
     return result;
   }
@@ -662,7 +667,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => keys.includes(v[0] as any)),
     ) as Pick<TProperties, TKeys>;
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
   }
 
   /**
@@ -677,7 +682,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const properties = Object.fromEntries(
       Object.entries(this.fields).filter((v) => !keys.includes(v[0] as any)),
     ) as Omit<TProperties, TKeys>;
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
   }
 
   /**
@@ -692,7 +697,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   appendProperties<TAppendedProperties extends GenericProperties>(
     properties: TAppendedProperties,
   ): DataverseTable<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: {
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, primaryKey: this.primaryKey, fields: {
       ...this.fields,
       ...properties,
     } as any});
@@ -735,13 +740,10 @@ export class DataverseTable<TProperties extends GenericProperties> {
     await this.client.deletePropertyValue(this.entitySetName, id, field.name);
   }
 
-  private async _uploadPendingFiles(id: GUID, value: Partial<Infer<TProperties>>): Promise<void> {
-    for (const [key, field] of Object.entries(this.fields)) {
-      if (field.type === "file") {
-        const fileRef = (value as any)[key];
-        if (fileRef?.data instanceof Blob) {
-          await this.uploadFile(id, key, fileRef.data, fileRef.name, fileRef.mimeType);
-        }
+  private async _afterSave(ctx: TransformContext, value: Partial<Infer<TProperties>>): Promise<void> {
+    for (const [key, property] of Object.entries(this.fields)) {
+      if (property.afterSave) {
+        await property.afterSave(ctx, (value as any)[key]);
       }
     }
   }

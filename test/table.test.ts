@@ -655,11 +655,10 @@ test("table.getAlternateKeys builds key string", () => {
 //
 
 test("table.getPrimaryKey throws when no primary key defined", () => {
-  const NoPKTable = new DataverseTable({
+  expect(() => new DataverseTable({
     client, entitySetName: "nopes", logicalName: "nopes",
     fields: { name: string("name") },
-  })
-  expect(() => NoPKTable.getPrimaryKey()).toThrow("No Primary Key found in schema")
+  })).toThrow("No Primary Key found in schema")
 })
 
 //

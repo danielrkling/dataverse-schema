@@ -1,5 +1,5 @@
 import * as v from "valibot"
-import { FieldBase, FieldOptions, ValidationSchema } from "./fieldBase";
+import { FieldBase, FieldOptions, SKIP, TransformContext, ValidationSchema } from "./fieldBase";
 import { DataverseTable } from "./table";
 import { GenericProperties, GetTable, GUID, Infer } from "./types";
 import { parseDateOnly, toDateOnly } from "./util";
@@ -282,9 +282,35 @@ export class FileField extends FieldBase<FileRef | null> {
     this.fromDataverseName = `${name}_name`;
   }
 
-  transformValueFromDataverse(value: any): FileRef | null {
+  transformValueFromDataverse(value: any, ctx?: TransformContext): FileRef | null {
     if (value == null) return null;
-    return { name: value };
+    if (!ctx) return { name: value };
+    const url = `${ctx.table.entitySetName}(${ctx.recordId})/${this.name}/$value`;
+    const client = ctx.client;
+    return Object.defineProperty(
+      { name: value },
+      "data",
+      {
+        get() {
+          return client.fetch(url, { raw: true })
+            .then((r: any) => { if (!r.ok) throw new Error(r.status + "-" + r.statusText); return r.blob(); });
+        },
+        configurable: true,
+      },
+    );
+  }
+
+  transformValueToDataverse(): typeof SKIP {
+    return SKIP;
+  }
+
+  async afterSave(ctx: TransformContext, value: any): Promise<void> {
+    if (value?.data instanceof Blob) {
+      const fileName = value.name ?? this.getDefault()?.name;
+      if (fileName) {
+        await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, fileName, value.data);
+      }
+    }
   }
 }
 
@@ -609,6 +635,10 @@ export class CollectionProperty<
       this.table.transformValueFromDataverse(v),
     );
   }
+
+  transformValueToDataverse(): typeof SKIP {
+    return SKIP;
+  }
 }
 
 /**
@@ -658,6 +688,10 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
 
   transformValueFromDataverse(value: any): GUID[] {
     return Array.from(value ?? []).map((v: any) => v[this.table.fields.id.name]);
+  }
+
+  transformValueToDataverse(): typeof SKIP {
+    return SKIP;
   }
 }
 
@@ -721,6 +755,10 @@ export class LookupProperty<
 
   transformValueFromDataverse(value: any): Infer<TProperties> | null {
     return value == null ? null : this.table.transformValueFromDataverse(value);
+  }
+
+  transformValueToDataverse(): typeof SKIP {
+    return SKIP;
   }
 }
 

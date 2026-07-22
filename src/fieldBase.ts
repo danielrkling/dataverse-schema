@@ -1,4 +1,6 @@
 import * as v from "valibot"
+import type { DataverseClient } from "./client"
+import type { DataverseTable } from "./table"
 
 export type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>
 
@@ -6,6 +8,14 @@ export type FieldOptions<T> = {
   default?: T
   readonly?: boolean
   schema?: ValidationSchema<T>
+}
+
+export const SKIP = Symbol("skip")
+
+export type TransformContext = {
+  table: DataverseTable<any>
+  client: DataverseClient
+  recordId: string
 }
 
 export abstract class FieldBase<T> {
@@ -36,11 +46,13 @@ export abstract class FieldBase<T> {
     return this.#readOnly
   }
 
-  transformValueFromDataverse(value: any): T {
+  transformValueFromDataverse(value: any, ctx?: TransformContext): T {
     return value
   }
 
-  transformValueToDataverse(value: any): any {
+  transformValueToDataverse(value: any, ctx?: TransformContext): any {
     return value
   }
+
+  afterSave?(ctx: TransformContext, value: any): Promise<void>
 }
