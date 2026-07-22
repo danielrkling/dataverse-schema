@@ -1,7 +1,7 @@
 const MAX_DEFAULT_ROWS$1 = 5e3;
 const DEFAULT_POLL_INTERVAL$1 = 3e4;
 function buildSelect$1(table) {
-  return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file").map((v) => v.fromDataverseName).join(",");
+  return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file" || v.type === "image").map((v) => v.fromDataverseName).join(",");
 }
 function buildQueryForTable$1(table, query) {
   const params = new URLSearchParams();
@@ -18,7 +18,7 @@ function buildQueryForTable$1(table, query) {
 }
 function dataverseCollectionOptions(config) {
   const { table, query, id, ...rest } = config;
-  const pk = table.getPrimaryKey();
+  const pk = table.primaryKey;
   const getKey = config.getKey ?? ((item) => item[pk.key]);
   const collectionId = id ?? table.entitySetName;
   let pollTimer = null;
@@ -238,7 +238,7 @@ function compactMutations(mutations) {
 const MAX_DEFAULT_ROWS = 5e3;
 const DEFAULT_POLL_INTERVAL = 3e4;
 function buildSelect(table) {
-  return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file").map((v) => v.fromDataverseName).join(",");
+  return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file" || v.type === "image").map((v) => v.fromDataverseName).join(",");
 }
 function buildQueryForTable(table, query) {
   const params = new URLSearchParams();
@@ -255,7 +255,7 @@ function buildQueryForTable(table, query) {
 }
 function dataverseOfflineCollectionOptions(config) {
   const { table, query, id, dbName = "dataverse-schema", storeName, syncInterval = DEFAULT_POLL_INTERVAL, queueStoreName = DEFAULT_QUEUE_STORE, ...rest } = config;
-  const pk = table.getPrimaryKey();
+  const pk = table.primaryKey;
   const getKey = config.getKey ?? ((item) => item[pk.key]);
   const collectionId = id ?? table.entitySetName;
   const dataStore = storeName ?? table.entitySetName;

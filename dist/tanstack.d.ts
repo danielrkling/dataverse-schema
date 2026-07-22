@@ -1,9 +1,9 @@
 import { CollectionConfig } from '@tanstack/db';
 import { DeleteMutationFn } from '@tanstack/db';
 import { InsertMutationFn } from '@tanstack/db';
-import { StandardSchemaV1 } from '@standard-schema/spec';
 import { UpdateMutationFn } from '@tanstack/db';
 import { UtilsRecord } from '@tanstack/db';
+import * as v from 'valibot';
 
 /**
  * Represents an alternate key for a Dataverse entity.  An alternate key is used
@@ -12,41 +12,41 @@ import { UtilsRecord } from '@tanstack/db';
  */
 declare type AlternateKey = `${string}=${string}` | `${string}=${string},${string}=${string}`;
 
-declare class BooleanField extends Schema<boolean> {
+declare class BooleanField extends FieldBase<boolean> {
     kind: "value";
     type: "boolean";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<boolean>);
 }
 
-declare class ChoiceField<T extends Record<number, string>> extends Schema<T[keyof T]> {
+declare class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
     #private;
     kind: "value";
     type: "choice";
-    constructor(name: string, options: T);
+    constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>);
     transformValueFromDataverse(value: any): T[keyof T];
     transformValueToDataverse(value: any): number;
 }
 
-declare class CollectionIdsProperty extends Schema<GUID[]> {
+declare class CollectionIdsProperty extends FieldBase<GUID[]> {
     #private;
     kind: "navigation";
     type: "collectionIds";
-    constructor(name: string, getTable: GetTable);
+    constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>);
     get table(): DataverseTable<{
         id: PrimaryKeyField;
     }>;
     transformValueFromDataverse(value: any): GUID[];
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    transformValueToDataverse(): typeof SKIP;
 }
 
-declare class CollectionProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties>[]> {
+declare class CollectionProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties>[]> {
     #private;
     kind: "navigation";
     type: "collection";
-    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>);
+    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>);
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties>[];
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    transformValueToDataverse(): typeof SKIP;
 }
 
 /**
@@ -84,7 +84,9 @@ declare class DataverseClient {
      *   body: JSON.stringify({ name: "New Account" }),
      * })
      */
-    fetch(resource: string, options?: RequestInit): Promise<any>;
+    fetch(resource: string, options?: RequestInit & {
+        raw?: boolean;
+    }): Promise<any>;
     private _resolvePrefer;
     private _getNextLink;
     /**
@@ -484,18 +486,26 @@ declare type DataverseRecord = Record<string, Primitive>;
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-declare class DataverseTable<TProperties extends GenericProperties> extends Schema<Infer<TProperties>> {
+declare class DataverseTable<TProperties extends GenericProperties> {
     client: DataverseClient;
     fields: TProperties;
     logicalName: string;
     entitySetName: string;
+    name: string;
     kind: "table";
     type: "table";
+    schema?: ValidationSchema<Infer<TProperties>>;
+    primaryKey: {
+        key: string;
+        property: PrimaryKeyField;
+    };
     /**
      * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
      */
-    constructor(options: DataverseTableOptions<TProperties>);
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    constructor(options: DataverseTableOptions<TProperties> & {
+        schema?: ValidationSchema<Infer<TProperties>>;
+    });
+    getSchema(): v.BaseSchema<unknown, Infer<TProperties>, v.BaseIssue<unknown>>;
     getDefault(value?: Partial<Infer<TProperties>>): Infer<TProperties>;
     /**
      * Retrieves a single record by its primary key (GUID) or alternate key.
@@ -693,18 +703,6 @@ declare class DataverseTable<TProperties extends GenericProperties> extends Sche
      */
     deleteMultiple(ids: string[]): Promise<any>;
     /**
-     * Returns the primary key field definition for this table.
-     *
-     * @example
-     * const pk = Account.getPrimaryKey();
-     * console.log(pk.key);      // "id"
-     * console.log(pk.property.name); // "accountid"
-     */
-    getPrimaryKey(): {
-        key: string;
-        property: PrimaryKeyField;
-    };
-    /**
      * Extracts the primary key GUID from a record object, or `undefined` if not present.
      *
      * @example
@@ -713,7 +711,7 @@ declare class DataverseTable<TProperties extends GenericProperties> extends Sche
      */
     getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined;
     transformValueFromDataverse(value: any): Infer<TProperties>;
-    transformValueToDataverse(value: Partial<Infer<TProperties>>): DataverseRecord;
+    transformValueToDataverse(value: Partial<Infer<TProperties>>, ctx?: TransformContext): Promise<DataverseRecord>;
     /**
      * Creates a new `Table` with only the specified properties. Useful for
      * narrowing the type when querying a subset of columns.
@@ -740,6 +738,10 @@ declare class DataverseTable<TProperties extends GenericProperties> extends Sche
      * // Extended has all original fields plus `customField`
      */
     appendProperties<TAppendedProperties extends GenericProperties>(properties: TAppendedProperties): DataverseTable<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties>;
+    deleteFile(id: GUID, fieldName: string): Promise<void>;
+    downloadImage(id: GUID, fieldName: string): Promise<Blob>;
+    deleteImage(id: GUID, fieldName: string): Promise<void>;
+    private _afterSave;
     /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
     T: Infer<TProperties>;
 }
@@ -749,29 +751,68 @@ declare type DataverseTableOptions<TProperties extends GenericProperties> = {
     entitySetName: string;
     logicalName: string;
     fields: TProperties;
+    schema?: ValidationSchema<Infer<TProperties>>;
+    primaryKey?: {
+        key: string;
+        property: PrimaryKeyField;
+    };
 };
 
-declare class DateField extends Schema<Date> {
+declare class DateField extends FieldBase<Date> {
     kind: "value";
     type: "dateOnly";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date>);
     transformValueFromDataverse(value: any): Date;
     transformValueToDataverse(value: any): string | null;
 }
 
-declare class DateTimeField extends Schema<Date> {
+declare class DateTimeField extends FieldBase<Date> {
     kind: "value";
     type: "date";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date>);
     getDefault(): Date;
     transformValueFromDataverse(value: any): Date;
 }
 
-declare class FileField extends Schema<string> {
+declare abstract class FieldBase<T> {
+    #private;
+    name: string;
+    fromDataverseName: string;
+    toDataverseName: string;
+    kind: string;
+    type: string;
+    schema: ValidationSchema<T>;
+    constructor(name: string, defaults: {
+        defaultValue: T;
+        schema: ValidationSchema<T>;
+    }, options?: FieldOptions<T>);
+    getDefault(): T;
+    getReadOnly(): boolean;
+    transformValueFromDataverse(value: any, ctx?: TransformContext): T;
+    transformValueToDataverse(value: any, ctx?: TransformContext): any;
+    afterSave?(ctx: TransformContext, value: any): Promise<void>;
+}
+
+declare type FieldOptions<T> = {
+    default?: T;
+    readonly?: boolean;
+    schema?: ValidationSchema<T>;
+};
+
+declare class FileField extends FieldBase<FileRef | null> {
     type: "file";
     kind: "file";
     constructor(name: string);
+    transformValueFromDataverse(value: any, ctx?: TransformContext): FileRef | null;
+    transformValueToDataverse(): typeof SKIP;
+    afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
+
+declare type FileRef = {
+    name: string;
+    data?: Blob | Promise<Blob>;
+    mimeType?: string;
+};
 
 /**
  * Represents a generic navigation property in a Dataverse entity.  Navigation
@@ -807,11 +848,18 @@ declare type GetTable<T = any> = () => T;
  */
 declare type GUID = `${string}-${string}-${string}-${string}-${string}`;
 
-declare class ImageField extends Schema<string | null> {
-    kind: "value";
+declare class ImageField extends FieldBase<ImageRef | null> {
+    kind: "image";
     type: "image";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<ImageRef | null>);
+    transformValueFromDataverse(value: any): ImageRef | null;
+    transformValueToDataverse(value: ImageRef | null): Promise<string | null>;
 }
+
+declare type ImageRef = {
+    readonly url: string;
+    data?: Blob | null;
+};
 
 /**
  * Infers the TypeScript type from a Dataverse schema definition.  This is a recursive
@@ -820,37 +868,37 @@ declare class ImageField extends Schema<string | null> {
  *
  * @template T The Dataverse schema definition.
  */
-declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends Schema<infer U> ? U : {
+declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends FieldBase<infer U> ? U : {
     [K in keyof T]: Infer<T[K]>;
 };
 
-declare class ListField<T extends string | number> extends Schema<T | null> {
+declare class ListField<T extends string | number> extends FieldBase<T | null> {
     kind: "value";
     type: "list";
     list: Array<T>;
-    constructor(name: string, list: Array<T>);
+    constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>);
 }
 
-declare class LookupIdProperty extends Schema<GUID | null> {
+declare class LookupIdProperty extends FieldBase<GUID | null> {
     #private;
     kind: "navigation";
     type: "lookupId";
     navigationName: string;
-    constructor(name: string, getTable: GetTable);
+    constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>);
     get table(): DataverseTable<{
         id: PrimaryKeyField;
     }>;
     transformValueToDataverse(value: any): string | null;
 }
 
-declare class LookupProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties> | null> {
+declare class LookupProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties> | null> {
     #private;
     kind: "navigation";
     type: "lookup";
-    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>);
+    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>);
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties> | null;
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    transformValueToDataverse(): typeof SKIP;
 }
 
 /** A field name can be a string or an object with a name or toString method. */
@@ -883,46 +931,46 @@ declare type NarrowKeysByValue<T extends object, V> = {
 
 declare type NestedStringArray = Array<string | NestedStringArray>;
 
-declare class NullableChoiceField<T extends Record<number, string>> extends Schema<T[keyof T] | null> {
+declare class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
     #private;
     kind: "value";
     type: "choice";
-    constructor(name: string, options: T);
+    constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>);
     transformValueFromDataverse(value: any): T[keyof T] | null;
     transformValueToDataverse(value: any): number | null;
 }
 
-declare class NullableDateField extends Schema<Date | null> {
+declare class NullableDateField extends FieldBase<Date | null> {
     kind: "value";
     type: "dateOnly";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date | null>);
     transformValueFromDataverse(value: any): Date | null;
     transformValueToDataverse(value: any): string | null;
 }
 
-declare class NullableDateTimeField extends Schema<Date | null> {
+declare class NullableDateTimeField extends FieldBase<Date | null> {
     kind: "value";
     type: "date";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date | null>);
     transformValueFromDataverse(value: any): Date | null;
 }
 
-declare class NullableNumberField extends Schema<number | null> {
+declare class NullableNumberField extends FieldBase<number | null> {
     kind: "value";
     type: "number";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<number | null>);
 }
 
-declare class NullableStringField extends Schema<string | null> {
+declare class NullableStringField extends FieldBase<string | null> {
     kind: "value";
     type: "string";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<string | null>);
 }
 
-declare class NumberField extends Schema<number> {
+declare class NumberField extends FieldBase<number> {
     kind: "value";
     type: "number";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<number>);
     transformValueFromDataverse(value: any): number;
 }
 
@@ -948,10 +996,10 @@ declare type PreferOption = "return=representation" | "respond-async" | "odata.t
     maxPageSize: number;
 };
 
-declare class PrimaryKeyField extends Schema<GUID> {
+declare class PrimaryKeyField extends FieldBase<GUID> {
     kind: "value";
     type: "primaryKey";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<GUID>);
     getDefault(): GUID;
 }
 
@@ -987,154 +1035,21 @@ export declare type ReplayResult = {
     remaining: number;
 };
 
-/**
- * Base class for all Dataverse schema properties. Implements the StandardSchemaV1 interface
- * for validation and transformation.
- *
- * @template T The TypeScript type of the property's value (e.g. `string`, `number`, `Date`).
- *
- * @example
- * // Custom string property with a regex validator
- * class SSNField extends Schema<string> {
- *   constructor(name: string) {
- *     super(name, "");
- *     this.check((v) => /^\d{3}-\d{2}-\d{4}$/.test(v) ? undefined : "Invalid SSN");
- *   }
- * }
- */
-declare class Schema<T> implements StandardSchemaV1<T> {
-    #private;
-    name: string;
-    toDataverseName: string;
-    fromDataverseName: string;
-    kind: string;
-    type: string;
-    /**
-     * @param name The Dataverse logical name of the column/attribute.
-     * @param defaultValue The default value used when no value is provided.
-     */
-    constructor(name: string, defaultValue: T);
-    /**
-     * Overrides the default value for this property.
-     *
-     * @example
-     * const field = new StringField("firstname").setDefault("John");
-     * field.getDefault(); // "John"
-     */
-    setDefault(value: T): this;
-    /**
-     * Returns the default value for this property.
-     */
-    getDefault(): T;
-    /**
-     * Marks this property as read-only. Read-only properties are excluded
-     * when transforming data for Dataverse (e.g. they won't be sent in create/update).
-     *
-     * @param value Whether the property should be read-only. Defaults to `true`.
-     *
-     * @example
-     * const field = new StringField("createdby").setReadOnly(true);
-     * field.getReadOnly(); // true
-     */
-    setReadOnly(value?: boolean): this;
-    /**
-     * Returns whether this property is read-only.
-     */
-    getReadOnly(): boolean;
-    /**
-     * Adds a validation function to this property. Validators run during
-     * {@link validate} and {@link parse}. A validator returns `undefined` if valid,
-     * or an error message string if invalid.
-     *
-     * @example
-     * const field = new StringField("zip").check((v) =>
-     *   /^\d{5}(-\d{4})?$/.test(v) ? undefined : "Invalid ZIP code"
-     * );
-     * field.parse("12345"); // ok
-     * field.parse("abc");   // throws
-     */
-    check(v: Validator<T>): this;
-    /**
-     * Adds a "required" validator that rejects `null` or `undefined` values.
-     *
-     * @example
-     * const field = new StringField("email").required();
-     * field.validate(null);  // { issues: [{ message: "Required" }] }
-     * field.validate("a@b"); // { value: "a@b" }
-     */
-    required(): this;
-    /**
-     * Transforms a raw value from Dataverse into the property's TypeScript type.
-     * Override this in subclasses for custom deserialization (e.g. string → Date).
-     *
-     * @param value The raw value from the Dataverse API.
-     * @returns The typed value.
-     *
-     * @example
-     * // A custom date-only field
-     * class DateOnlyField extends Schema<Date> {
-     *   transformValueFromDataverse(value: any): Date {
-     *     return new Date(value + "T00:00:00Z");
-     *   }
-     * }
-     */
-    transformValueFromDataverse(value: any): T;
-    /**
-     * Transforms the property's value into a format suitable for Dataverse.
-     * Override this in subclasses for custom serialization (e.g. Date → string).
-     *
-     * @param value The property value to send to Dataverse.
-     * @returns The serialized value.
-     *
-     * @example
-     * class DateOnlyField extends Schema<Date> {
-     *   transformValueToDataverse(value: Date): string {
-     *     return value.toISOString().slice(0, 10);
-     *   }
-     * }
-     */
-    transformValueToDataverse(value: any): any;
-    getIssues(value: unknown, path?: PropertyKey[]): StandardSchemaV1.Issue[];
-    /**
-     * Validates a value against this property's validators. Returns either
-     * `{ value }` on success or `{ issues }` on failure.
-     *
-     * @example
-     * const field = new StringField("email").required();
-     * field.validate("test@example.com"); // { value: "test@example.com" }
-     * field.validate(null);               // { issues: [{ message: "Required", path: [] }] }
-     */
-    validate(value: unknown, path?: PropertyKey[]): StandardSchemaV1.Result<T>;
-    /**
-     * Validates a value and returns it if valid, or throws if invalid.
-     * This is a convenience wrapper around {@link validate}.
-     *
-     * @throws {Error} If validation fails, the error message contains the JSON-serialized issues.
-     *
-     * @example
-     * const field = new StringField("age").check((v) =>
-     *   Number(v) >= 0 ? undefined : "Must be non-negative"
-     * );
-     * field.parse("25");  // "25"
-     * field.parse("-1");  // throws Error("[{\"message\":\"Must be non-negative\",\"path\":[]}]")
-     */
-    parse(value: unknown): T;
-    /**
-     * Provides access to the standard schema properties for this property.
-     * This is a computed property.
-     *
-     * @returns An object containing the standard schema properties, including version, vendor, and a validation function.
-     */
-    get ["~standard"](): StandardSchemaV1.Props<T>;
-}
+declare const SKIP: unique symbol;
 
-declare class StringField extends Schema<string> {
+declare class StringField extends FieldBase<string> {
     kind: "value";
     type: "string";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<string>);
     transformValueFromDataverse(value: any): string;
 }
 
-declare type Validator<T> = (value: T) => void | undefined | string;
+declare type TransformContext = {
+    table: DataverseTable<any>;
+    client: DataverseClient;
+    recordId: string;
+};
+
+declare type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>;
 
 export { }

@@ -146,6 +146,7 @@ class DataverseClient {
   async fetch(resource, options = {}) {
     if (this._processChangeset(resource, options)) return;
     if (this._processBatch(resource, options)) return;
+    const { raw, ...fetchOptions } = options;
     const url = resource.startsWith("http") ? resource : `${this.options.url}/api/data/v9.2/${resource}`;
     const {
       headers,
@@ -159,7 +160,7 @@ class DataverseClient {
       bypassCustomPluginExecution
     } = this.options;
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       headers: {
         "OData-MaxVersion": "4.0",
         "OData-Version": "4.0",
@@ -175,9 +176,10 @@ class DataverseClient {
         ...suppressDuplicateDetection !== void 0 ? { "MSCRM.SuppressDuplicateDetection": String(suppressDuplicateDetection) } : {},
         ...bypassCustomPluginExecution !== void 0 ? { "MSCRM.BypassCustomPluginExecution": String(bypassCustomPluginExecution) } : {},
         ...headers,
-        ...options.headers
+        ...fetchOptions.headers
       }
     });
+    if (raw) return response;
     if (response.status === 204) {
       const entityId = response.headers.get("OData-EntityId");
       if (entityId) return parenthesesRegEx.exec(entityId)?.[1];
@@ -403,6 +405,7 @@ class DataverseClient {
       body
     });
   }
+  // fetchBlob removed — use fetch(resource, { raw: true }).then(r => r.blob())
   /**
    * Activates a record (sets statecode to 0).
    *
@@ -759,272 +762,580 @@ function mapChoices(data) {
   }));
 }
 
-function required() {
-  return (v) => {
-    if (v === null || v === void 0) return "Required";
-  };
-}
-function pattern(regex, message) {
-  return (v) => {
-    if (v && !regex.test(v)) {
-      return message || "Invalid format";
-    }
-  };
-}
-function numeric() {
-  return (v) => {
-    if (v !== void 0 && v !== null) {
-      const num = Number(v);
-      if (isNaN(num)) {
-        return "Must be a number";
-      }
-    }
-  };
-}
-function minValue(min) {
-  return (v) => {
-    if (typeof v === "number" && v < min) {
-      return `Must be at least ${min}`;
-    }
-  };
-}
-function minLength(min) {
-  return (v) => {
-    if (v.length < min) return `Length less than ${min}`;
-  };
-}
-function maxValue(max) {
-  return (v) => {
-    if (typeof v === "number" && v > max) {
-      return `Must be no more than ${max}`;
-    }
-  };
-}
-function maxLength(max) {
-  return (v) => {
-    if (v.length > max) return `Length more than ${max}`;
-  };
-}
-function isTypeOrNull(type) {
-  return (v) => {
-    if (v === null) return;
-    if (typeof v !== type) {
-      return "Not of type " + type;
-    }
-  };
-}
-function isType(type) {
-  return (v) => {
-    if (typeof v !== type) {
-      return "Not of type " + type;
-    }
-  };
-}
-function integer() {
-  return (v) => {
-    if (v !== void 0 && v !== null) {
-      const num = Number(v);
-      if (isNaN(num) || !Number.isInteger(num)) {
-        return "Must be an integer";
-      }
-    }
-  };
-}
-function email() {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return (v) => {
-    if (v && !emailRegex.test(v)) {
-      return "Invalid email format";
-    }
-  };
+//#region src/storages/globalConfig/globalConfig.ts
+const DEFAULT_CONFIG = {
+	lang: void 0,
+	message: void 0,
+	abortEarly: void 0,
+	abortPipeEarly: void 0
+};
+/**
+* Returns the global configuration.
+*
+* @param config The config to merge.
+*
+* @returns The configuration.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function getGlobalConfig(config$1) {
+	return DEFAULT_CONFIG;
 }
 
-class Schema {
+//#endregion
+//#region src/storages/globalMessage/globalMessage.ts
+let store$3;
+/**
+* Returns a global error message.
+*
+* @param lang The language of the message.
+*
+* @returns The error message.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function getGlobalMessage(lang) {
+	return store$3?.get(lang);
+}
+
+//#endregion
+//#region src/storages/schemaMessage/schemaMessage.ts
+let store$2;
+/**
+* Returns a schema error message.
+*
+* @param lang The language of the message.
+*
+* @returns The error message.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function getSchemaMessage(lang) {
+	return store$2?.get(lang);
+}
+
+//#endregion
+//#region src/storages/specificMessage/specificMessage.ts
+let store$1;
+/**
+* Returns a specific error message.
+*
+* @param reference The identifier reference.
+* @param lang The language of the message.
+*
+* @returns The error message.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function getSpecificMessage(reference, lang) {
+	return store$1?.get(reference)?.get(lang);
+}
+
+//#endregion
+//#region src/utils/_stringify/_stringify.ts
+/**
+* Stringifies an unknown input to a literal or type string.
+*
+* @param input The unknown input.
+*
+* @returns A literal or type string.
+*
+* @internal
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function _stringify(input) {
+	const type = typeof input;
+	if (type === "string") return `"${input}"`;
+	if (type === "number" || type === "bigint" || type === "boolean") return `${input}`;
+	if (type === "object" || type === "function") return (input && Object.getPrototypeOf(input)?.constructor?.name) ?? "null";
+	return type;
+}
+
+//#endregion
+//#region src/utils/_addIssue/_addIssue.ts
+/**
+* Adds an issue to the dataset.
+*
+* @param context The issue context.
+* @param label The issue label.
+* @param dataset The input dataset.
+* @param config The configuration.
+* @param other The optional props.
+*
+* @internal
+*/
+function _addIssue(context, label, dataset, config$1, other) {
+	const input = other && "input" in other ? other.input : dataset.value;
+	const expected = other?.expected ?? context.expects ?? null;
+	const received = other?.received ?? /* @__PURE__ */ _stringify(input);
+	const issue = {
+		kind: context.kind,
+		type: context.type,
+		input,
+		expected,
+		received,
+		message: `Invalid ${label}: ${expected ? `Expected ${expected} but r` : "R"}eceived ${received}`,
+		requirement: context.requirement,
+		path: other?.path,
+		issues: other?.issues,
+		lang: config$1.lang,
+		abortEarly: config$1.abortEarly,
+		abortPipeEarly: config$1.abortPipeEarly
+	};
+	const isSchema = context.kind === "schema";
+	const message$1 = other?.message ?? context.message ?? /* @__PURE__ */ getSpecificMessage(context.reference, issue.lang) ?? (isSchema ? /* @__PURE__ */ getSchemaMessage(issue.lang) : null) ?? config$1.message ?? /* @__PURE__ */ getGlobalMessage(issue.lang);
+	if (message$1 !== void 0) issue.message = typeof message$1 === "function" ? message$1(issue) : message$1;
+	if (isSchema) dataset.typed = false;
+	if (dataset.issues) dataset.issues.push(issue);
+	else dataset.issues = [issue];
+}
+
+//#endregion
+//#region src/utils/_getStandardProps/_getStandardProps.ts
+const _standardCache = /* @__PURE__ */ new WeakMap();
+/**
+* Returns the Standard Schema properties.
+*
+* @param context The schema context.
+*
+* @returns The Standard Schema properties.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function _getStandardProps(context) {
+	let cached = _standardCache.get(context);
+	if (!cached) {
+		cached = {
+			version: 1,
+			vendor: "valibot",
+			validate(value$1) {
+				return context["~run"]({ value: value$1 }, /* @__PURE__ */ getGlobalConfig());
+			}
+		};
+		_standardCache.set(context, cached);
+	}
+	return cached;
+}
+
+//#endregion
+//#region src/utils/_joinExpects/_joinExpects.ts
+/**
+* Joins multiple `expects` values with the given separator.
+*
+* @param values The `expects` values.
+* @param separator The separator.
+*
+* @returns The joined `expects` property.
+*
+* @internal
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function _joinExpects(values$1, separator) {
+	const list = [...new Set(values$1)];
+	if (list.length > 1) return `(${list.join(` ${separator} `)})`;
+	return list[0] ?? "never";
+}
+
+//#endregion
+//#region src/utils/ValiError/ValiError.ts
+/**
+* A Valibot error with useful information.
+*/
+var ValiError = class extends Error {
+	/**
+	* Creates a Valibot error with useful information.
+	*
+	* @param issues The error issues.
+	*/
+	constructor(issues) {
+		super(issues[0].message);
+		this.name = "ValiError";
+		this.issues = issues;
+	}
+};
+
+//#endregion
+//#region src/methods/getFallback/getFallback.ts
+/**
+* Returns the fallback value of the schema.
+*
+* @param schema The schema to get it from.
+* @param dataset The output dataset if available.
+* @param config The config if available.
+*
+* @returns The fallback value.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function getFallback(schema, dataset, config$1) {
+	return typeof schema.fallback === "function" ? schema.fallback(dataset, config$1) : schema.fallback;
+}
+
+//#endregion
+//#region src/methods/getDefault/getDefault.ts
+/**
+* Returns the default value of the schema.
+*
+* @param schema The schema to get it from.
+* @param dataset The input dataset if available.
+* @param config The config if available.
+*
+* @returns The default value.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function getDefault(schema, dataset, config$1) {
+	return typeof schema.default === "function" ? schema.default(dataset, config$1) : schema.default;
+}
+
+//#endregion
+//#region src/schemas/array/array.ts
+/* @__NO_SIDE_EFFECTS__ */
+function array(item, message$1) {
+	return {
+		kind: "schema",
+		type: "array",
+		reference: array,
+		expects: "Array",
+		async: false,
+		item,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			const input = dataset.value;
+			if (Array.isArray(input)) {
+				dataset.typed = true;
+				dataset.value = [];
+				for (let key = 0; key < input.length; key++) {
+					const value$1 = input[key];
+					const itemDataset = this.item["~run"]({ value: value$1 }, config$1);
+					if (itemDataset.issues) {
+						const pathItem = {
+							type: "array",
+							origin: "value",
+							input,
+							key,
+							value: value$1
+						};
+						for (const issue of itemDataset.issues) {
+							if (issue.path) issue.path.unshift(pathItem);
+							else issue.path = [pathItem];
+							dataset.issues?.push(issue);
+						}
+						if (!dataset.issues) dataset.issues = itemDataset.issues;
+						if (config$1.abortEarly) {
+							dataset.typed = false;
+							break;
+						}
+					}
+					if (!itemDataset.typed) dataset.typed = false;
+					dataset.value.push(itemDataset.value);
+				}
+			} else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/boolean/boolean.ts
+/* @__NO_SIDE_EFFECTS__ */
+function boolean$1(message$1) {
+	return {
+		kind: "schema",
+		type: "boolean",
+		reference: boolean$1,
+		expects: "boolean",
+		async: false,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (typeof dataset.value === "boolean") dataset.typed = true;
+			else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/custom/custom.ts
+/* @__NO_SIDE_EFFECTS__ */
+function custom(check$1, message$1) {
+	return {
+		kind: "schema",
+		type: "custom",
+		reference: custom,
+		expects: "unknown",
+		async: false,
+		check: check$1,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (this.check(dataset.value)) dataset.typed = true;
+			else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/instance/instance.ts
+/* @__NO_SIDE_EFFECTS__ */
+function instance(class_, message$1) {
+	return {
+		kind: "schema",
+		type: "instance",
+		reference: instance,
+		expects: class_.name,
+		async: false,
+		class: class_,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (dataset.value instanceof this.class) dataset.typed = true;
+			else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/lazy/lazy.ts
+/**
+* Creates a lazy schema.
+*
+* @param getter The schema getter.
+*
+* @returns A lazy schema.
+*/
+/* @__NO_SIDE_EFFECTS__ */
+function lazy(getter) {
+	return {
+		kind: "schema",
+		type: "lazy",
+		reference: lazy,
+		expects: "unknown",
+		async: false,
+		getter,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			return this.getter(dataset.value)["~run"](dataset, config$1);
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/nullable/nullable.ts
+/* @__NO_SIDE_EFFECTS__ */
+function nullable(wrapped, default_) {
+	return {
+		kind: "schema",
+		type: "nullable",
+		reference: nullable,
+		expects: `(${wrapped.expects} | null)`,
+		async: false,
+		wrapped,
+		default: default_,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (dataset.value === null) {
+				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
+				if (dataset.value === null) {
+					dataset.typed = true;
+					return dataset;
+				}
+			}
+			return this.wrapped["~run"](dataset, config$1);
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/number/number.ts
+/* @__NO_SIDE_EFFECTS__ */
+function number$1(message$1) {
+	return {
+		kind: "schema",
+		type: "number",
+		reference: number$1,
+		expects: "number",
+		async: false,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (typeof dataset.value === "number" && !isNaN(dataset.value)) dataset.typed = true;
+			else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/object/object.ts
+/* @__NO_SIDE_EFFECTS__ */
+function object(entries$1, message$1) {
+	return {
+		kind: "schema",
+		type: "object",
+		reference: object,
+		expects: "Object",
+		async: false,
+		entries: entries$1,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			const input = dataset.value;
+			if (input && typeof input === "object") {
+				dataset.typed = true;
+				dataset.value = {};
+				for (const key in this.entries) {
+					const valueSchema = this.entries[key];
+					if (key in input || (valueSchema.type === "exact_optional" || valueSchema.type === "optional" || valueSchema.type === "nullish") && valueSchema.default !== void 0) {
+						const value$1 = key in input ? input[key] : /* @__PURE__ */ getDefault(valueSchema);
+						const valueDataset = valueSchema["~run"]({ value: value$1 }, config$1);
+						if (valueDataset.issues) {
+							const pathItem = {
+								type: "object",
+								origin: "value",
+								input,
+								key,
+								value: value$1
+							};
+							for (const issue of valueDataset.issues) {
+								if (issue.path) issue.path.unshift(pathItem);
+								else issue.path = [pathItem];
+								dataset.issues?.push(issue);
+							}
+							if (!dataset.issues) dataset.issues = valueDataset.issues;
+							if (config$1.abortEarly) {
+								dataset.typed = false;
+								break;
+							}
+						}
+						if (!valueDataset.typed) dataset.typed = false;
+						dataset.value[key] = valueDataset.value;
+					} else if (valueSchema.fallback !== void 0) dataset.value[key] = /* @__PURE__ */ getFallback(valueSchema);
+					else if (valueSchema.type !== "exact_optional" && valueSchema.type !== "optional" && valueSchema.type !== "nullish") {
+						_addIssue(this, "key", dataset, config$1, {
+							input: void 0,
+							expected: `"${key}"`,
+							path: [{
+								type: "object",
+								origin: "key",
+								input,
+								key,
+								value: input[key]
+							}]
+						});
+						if (config$1.abortEarly) break;
+					}
+				}
+			} else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/picklist/picklist.ts
+/* @__NO_SIDE_EFFECTS__ */
+function picklist(options, message$1) {
+	return {
+		kind: "schema",
+		type: "picklist",
+		reference: picklist,
+		expects: /* @__PURE__ */ _joinExpects(options.map(_stringify), "|"),
+		async: false,
+		options,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (this.options.includes(dataset.value)) dataset.typed = true;
+			else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/schemas/string/string.ts
+/* @__NO_SIDE_EFFECTS__ */
+function string$1(message$1) {
+	return {
+		kind: "schema",
+		type: "string",
+		reference: string$1,
+		expects: "string",
+		async: false,
+		message: message$1,
+		get "~standard"() {
+			return /* @__PURE__ */ _getStandardProps(this);
+		},
+		"~run"(dataset, config$1) {
+			if (typeof dataset.value === "string") dataset.typed = true;
+			else _addIssue(this, "type", dataset, config$1);
+			return dataset;
+		}
+	};
+}
+
+//#endregion
+//#region src/methods/parse/parse.ts
+/**
+* Parses an unknown input based on a schema.
+*
+* @param schema The schema to be used.
+* @param input The input to be parsed.
+* @param config The parse configuration.
+*
+* @returns The parsed input.
+*/
+function parse(schema, input, config$1) {
+	const dataset = schema["~run"]({ value: input }, /* @__PURE__ */ getGlobalConfig());
+	if (dataset.issues) throw new ValiError(dataset.issues);
+	return dataset.value;
+}
+
+const SKIP = Symbol("skip");
+class FieldBase {
   name;
-  toDataverseName;
   fromDataverseName;
-  kind = "schema";
-  type = "schema";
+  toDataverseName;
+  kind;
+  type;
+  schema;
   #default;
-  /**
-   * @param name The Dataverse logical name of the column/attribute.
-   * @param defaultValue The default value used when no value is provided.
-   */
-  constructor(name, defaultValue) {
+  #readOnly;
+  constructor(name, defaults, options) {
     this.name = name;
     this.fromDataverseName = name;
     this.toDataverseName = name;
-    this.#default = defaultValue;
+    this.#default = options?.default ?? defaults.defaultValue;
+    this.#readOnly = options?.readonly ?? false;
+    this.schema = options?.schema ?? defaults.schema;
   }
-  /**
-   * Overrides the default value for this property.
-   *
-   * @example
-   * const field = new StringField("firstname").setDefault("John");
-   * field.getDefault(); // "John"
-   */
-  setDefault(value) {
-    this.#default = value;
-    return this;
-  }
-  /**
-   * Returns the default value for this property.
-   */
   getDefault() {
     return this.#default;
   }
-  #readOnly = false;
-  /**
-   * Marks this property as read-only. Read-only properties are excluded
-   * when transforming data for Dataverse (e.g. they won't be sent in create/update).
-   *
-   * @param value Whether the property should be read-only. Defaults to `true`.
-   *
-   * @example
-   * const field = new StringField("createdby").setReadOnly(true);
-   * field.getReadOnly(); // true
-   */
-  setReadOnly(value = true) {
-    this.#readOnly = value;
-    return this;
-  }
-  /**
-   * Returns whether this property is read-only.
-   */
   getReadOnly() {
     return this.#readOnly;
   }
-  #validators = [];
-  /**
-   * Adds a validation function to this property. Validators run during
-   * {@link validate} and {@link parse}. A validator returns `undefined` if valid,
-   * or an error message string if invalid.
-   *
-   * @example
-   * const field = new StringField("zip").check((v) =>
-   *   /^\d{5}(-\d{4})?$/.test(v) ? undefined : "Invalid ZIP code"
-   * );
-   * field.parse("12345"); // ok
-   * field.parse("abc");   // throws
-   */
-  check(v) {
-    this.#validators.push(v);
-    return this;
-  }
-  /**
-   * Adds a "required" validator that rejects `null` or `undefined` values.
-   *
-   * @example
-   * const field = new StringField("email").required();
-   * field.validate(null);  // { issues: [{ message: "Required" }] }
-   * field.validate("a@b"); // { value: "a@b" }
-   */
-  required() {
-    return this.check(required());
-  }
-  /**
-   * Transforms a raw value from Dataverse into the property's TypeScript type.
-   * Override this in subclasses for custom deserialization (e.g. string → Date).
-   *
-   * @param value The raw value from the Dataverse API.
-   * @returns The typed value.
-   *
-   * @example
-   * // A custom date-only field
-   * class DateOnlyField extends Schema<Date> {
-   *   transformValueFromDataverse(value: any): Date {
-   *     return new Date(value + "T00:00:00Z");
-   *   }
-   * }
-   */
-  transformValueFromDataverse(value) {
+  transformValueFromDataverse(value, ctx) {
     return value;
   }
-  /**
-   * Transforms the property's value into a format suitable for Dataverse.
-   * Override this in subclasses for custom serialization (e.g. Date → string).
-   *
-   * @param value The property value to send to Dataverse.
-   * @returns The serialized value.
-   *
-   * @example
-   * class DateOnlyField extends Schema<Date> {
-   *   transformValueToDataverse(value: Date): string {
-   *     return value.toISOString().slice(0, 10);
-   *   }
-   * }
-   */
-  transformValueToDataverse(value) {
+  transformValueToDataverse(value, ctx) {
     return value;
-  }
-  getIssues(value, path = []) {
-    const issues = [];
-    this.#validators.forEach((fn) => {
-      try {
-        let message = fn(value);
-        if (message) {
-          issues.push({
-            message,
-            path
-          });
-        }
-      } catch (e) {
-        issues.push({
-          message: e?.message ?? String(e),
-          path
-        });
-      }
-    });
-    return issues;
-  }
-  /**
-   * Validates a value against this property's validators. Returns either
-   * `{ value }` on success or `{ issues }` on failure.
-   *
-   * @example
-   * const field = new StringField("email").required();
-   * field.validate("test@example.com"); // { value: "test@example.com" }
-   * field.validate(null);               // { issues: [{ message: "Required", path: [] }] }
-   */
-  validate(value, path = []) {
-    const issues = this.getIssues(value, path);
-    return issues.length > 0 ? { issues } : {
-      value
-    };
-  }
-  /**
-   * Validates a value and returns it if valid, or throws if invalid.
-   * This is a convenience wrapper around {@link validate}.
-   *
-   * @throws {Error} If validation fails, the error message contains the JSON-serialized issues.
-   *
-   * @example
-   * const field = new StringField("age").check((v) =>
-   *   Number(v) >= 0 ? undefined : "Must be non-negative"
-   * );
-   * field.parse("25");  // "25"
-   * field.parse("-1");  // throws Error("[{\"message\":\"Must be non-negative\",\"path\":[]}]")
-   */
-  parse(value) {
-    const result = this.validate(value);
-    if (result.issues) {
-      throw new Error(JSON.stringify(result.issues), {});
-    } else {
-      return result.value;
-    }
-  }
-  /**
-   * Provides access to the standard schema properties for this property.
-   * This is a computed property.
-   *
-   * @returns An object containing the standard schema properties, including version, vendor, and a validation function.
-   */
-  get ["~standard"]() {
-    return {
-      version: 1,
-      vendor: "dataverse-schema",
-      validate: (v) => this.validate(v)
-    };
   }
 }
 
@@ -1037,31 +1348,41 @@ function queryString(opts) {
   if (opts.expand) params.set("$expand", opts.expand);
   return params.toString();
 }
-class DataverseTable extends Schema {
+class DataverseTable {
   client;
   fields;
   logicalName;
   entitySetName;
+  name;
   kind = "table";
   type = "table";
+  schema;
+  primaryKey;
   /**
    * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
    */
   constructor(options) {
-    super(options.entitySetName, null);
     this.client = options.client;
     this.entitySetName = options.entitySetName;
     this.logicalName = options.logicalName;
+    this.name = options.entitySetName;
     this.fields = options.fields;
-  }
-  getIssues(value, path = []) {
-    const issues = super.getIssues(value, path);
-    if (typeof value !== "object" || value === null) value = {};
-    for (const [key, property] of Object.entries(this.fields)) {
-      if (!property.getReadOnly())
-        issues.push(...property.getIssues(value[key], [...path, key]));
+    this.schema = options.schema;
+    if (options.primaryKey) {
+      this.primaryKey = options.primaryKey;
+    } else {
+      const pk = Object.entries(this.fields).find((f) => f[1].type === "primaryKey");
+      if (!pk) throw new Error("No Primary Key found in schema");
+      this.primaryKey = { key: pk[0], property: pk[1] };
     }
-    return issues;
+  }
+  getSchema() {
+    if (this.schema) return this.schema;
+    const shape = {};
+    for (const [key, field] of Object.entries(this.fields)) {
+      shape[key] = field.schema;
+    }
+    return object(shape);
   }
   getDefault(value) {
     const result = {};
@@ -1085,7 +1406,7 @@ class DataverseTable extends Schema {
    * if (account) console.log(account.name);
    */
   async getRecord(id) {
-    return this.client.getRecord(this.entitySetName, id, buildQuery(this)).then((v) => this.transformValueFromDataverse(v));
+    return this.client.getRecord(this.entitySetName, id, buildQuery(this)).then((v2) => this.transformValueFromDataverse(v2));
   }
   getAlternateKeys(value) {
     return Object.entries(value).map((kv) => `${this.fields[kv[0]].name}=${kv[1]}`).join(",");
@@ -1103,7 +1424,7 @@ class DataverseTable extends Schema {
    * });
    */
   async getRecords(queryOptions) {
-    return this.client.getRecords(this.entitySetName, buildQuery(this, queryOptions)).then((values) => values.map((v) => this.transformValueFromDataverse(v)));
+    return this.client.getRecords(this.entitySetName, buildQuery(this, queryOptions)).then((values) => values.map((v2) => this.transformValueFromDataverse(v2)));
   }
   /**
    * Retrieves the value of a single property for a record by ID.
@@ -1116,7 +1437,7 @@ class DataverseTable extends Schema {
   async getPropertyValue(key, id, queryOptions) {
     const prop = this.fields[key];
     if (prop.kind === "value" || prop.type === "lookupId") {
-      return this.client.getPropertyValue(this.entitySetName, id, prop.name).then((v) => prop.transformValueFromDataverse(v));
+      return this.client.getPropertyValue(this.entitySetName, id, prop.name).then((v2) => prop.transformValueFromDataverse(v2));
     }
     if (prop.type === "collection" || prop.type === "collectionIds") {
       return this.client.getAssociatedRecords(
@@ -1126,7 +1447,7 @@ class DataverseTable extends Schema {
         buildQuery(prop.table, queryOptions)
         // Note: buildQuery needs to handle related table schema
       ).then(
-        (v) => prop.transformValueFromDataverse(v)
+        (v2) => prop.transformValueFromDataverse(v2)
       );
     }
     if (prop.type === "lookup") {
@@ -1136,7 +1457,7 @@ class DataverseTable extends Schema {
         prop.name,
         buildQuery(prop.table, queryOptions)
       ).then(
-        (v) => prop.transformValueFromDataverse(v)
+        (v2) => prop.transformValueFromDataverse(v2)
       );
     }
     throw new Error("Invalid Property kind for getPropertyValue");
@@ -1153,12 +1474,17 @@ class DataverseTable extends Schema {
     if (prop.kind === "navigation") {
       await this.updateNavigationProperty(prop, id, value);
     } else {
-      await this.client.updatePropertyValue(
-        this.entitySetName,
-        id,
-        this.fields[key].name,
-        prop.transformValueToDataverse(value)
-      );
+      const ctx = { table: this, client: this.client, recordId: id };
+      let v2 = prop.transformValueToDataverse(value, ctx);
+      if (v2 instanceof Promise) v2 = await v2;
+      if (v2 !== SKIP) {
+        await this.client.updatePropertyValue(
+          this.entitySetName,
+          id,
+          this.fields[key].name,
+          v2
+        );
+      }
     }
     return id;
   }
@@ -1166,14 +1492,14 @@ class DataverseTable extends Schema {
     if (property.type === "collection" || property.type === "collectionIds") {
       if (Array.isArray(value)) {
         const ids = property.type === "collection" ? await Promise.all(
-          value.map((v) => property.table.upsertRecord(void 0, v))
+          value.map((v2) => property.table.upsertRecord(void 0, v2))
         ) : value;
         return this.client.associateRecordToList(
           this.entitySetName,
           id,
           property.name,
           property.table.entitySetName,
-          property.table.getPrimaryKey().property.name,
+          property.table.primaryKey.property.name,
           ids
         );
       }
@@ -1231,13 +1557,16 @@ class DataverseTable extends Schema {
    * const newId = await Person.insertRecord({ name: "John", age: 30 });
    */
   async insertRecord(value) {
-    const pkName = this.getPrimaryKey().property.name;
+    const pkName = this.primaryKey.property.name;
     const record = await this.client.postRecord(
       this.entitySetName,
-      this.transformValueToDataverse(value),
+      await this.transformValueToDataverse(value),
       queryString({ select: pkName })
     );
-    return record?.[pkName];
+    const guid = record?.[pkName];
+    const ctx = { table: this, client: this.client, recordId: guid };
+    await this._afterSave(ctx, value);
+    return guid;
   }
   /**
    * Updates an existing record by ID. Supports optimistic concurrency via etag.
@@ -1253,10 +1582,11 @@ class DataverseTable extends Schema {
    */
   async updateRecord(id, value, etag) {
     if (!id) throw new Error("No ID provided");
+    const ctx = { table: this, client: this.client, recordId: id };
     await this.client.patchRecord(
       this.entitySetName,
       id,
-      this.transformValueToDataverse(value),
+      await this.transformValueToDataverse(value, ctx),
       "",
       etag
     );
@@ -1279,13 +1609,15 @@ class DataverseTable extends Schema {
    */
   async upsertRecord(id, value, etag) {
     const promises = [];
-    const pkName = this.getPrimaryKey().property.name;
+    const pkName = this.primaryKey.property.name;
     if (id) {
+      const ctx = { table: this, client: this.client, recordId: id };
+      const transformed = await this.transformValueToDataverse(value, ctx);
       promises.push(
         this.client.patchRecord(
           this.entitySetName,
           id,
-          this.transformValueToDataverse(value),
+          transformed,
           queryString({ select: pkName }),
           etag
         )
@@ -1293,10 +1625,12 @@ class DataverseTable extends Schema {
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
-        this.transformValueToDataverse(value),
+        await this.transformValueToDataverse(value),
         queryString({ select: pkName })
       );
       id = record[pkName];
+      const ctx = { table: this, client: this.client, recordId: id };
+      await this._afterSave(ctx, value);
     }
     for (const [key, property] of Object.entries(this.fields)) {
       if (property.getReadOnly() || !(key in value)) continue;
@@ -1414,7 +1748,7 @@ class DataverseTable extends Schema {
   async createMultiple(records) {
     return this.client.createMultiple(
       this.entitySetName,
-      records.map((r) => this.transformValueToDataverse(r))
+      await Promise.all(records.map((r) => this.transformValueToDataverse(r)))
     );
   }
   /**
@@ -1431,7 +1765,7 @@ class DataverseTable extends Schema {
   async updateMultiple(records) {
     return this.client.updateMultiple(
       this.entitySetName,
-      records.map((r) => this.transformValueToDataverse(r))
+      await Promise.all(records.map((r) => this.transformValueToDataverse(r)))
     );
   }
   /**
@@ -1446,24 +1780,6 @@ class DataverseTable extends Schema {
     return this.client.deleteMultiple(this.entitySetName, ids);
   }
   /**
-   * Returns the primary key field definition for this table.
-   *
-   * @example
-   * const pk = Account.getPrimaryKey();
-   * console.log(pk.key);      // "id"
-   * console.log(pk.property.name); // "accountid"
-   */
-  getPrimaryKey() {
-    const result = Object.entries(this.fields).find(
-      (f) => f[1].type === "primaryKey"
-    );
-    if (!result) throw new Error("No Primary Key found in schema");
-    return {
-      key: result[0],
-      property: result[1]
-    };
-  }
-  /**
    * Extracts the primary key GUID from a record object, or `undefined` if not present.
    *
    * @example
@@ -1471,29 +1787,32 @@ class DataverseTable extends Schema {
    * const pk = Account.getPrimaryId(account); // GUID | undefined
    */
   getPrimaryId(value) {
-    const { key } = this.getPrimaryKey();
-    return value[key];
+    return value[this.primaryKey.key];
   }
   transformValueFromDataverse(value) {
     if (value === null) return null;
     const result = {};
+    const pk = this.primaryKey;
+    const recordId = value[pk.property.fromDataverseName];
+    const ctx = recordId ? { table: this, client: this.client, recordId } : void 0;
     for (const [key, property] of Object.entries(this.fields)) {
-      result[key] = property.transformValueFromDataverse(value[property.fromDataverseName]);
+      const raw = value[property.fromDataverseName];
+      result[key] = property.transformValueFromDataverse(raw, ctx);
     }
     result[Etag] = value["@odata.etag"];
     return result;
   }
-  transformValueToDataverse(value) {
+  async transformValueToDataverse(value, ctx) {
     if (value === null) return null;
     const result = {};
     for (const [key, property] of Object.entries(this.fields)) {
       if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "value" || property.type === "lookupId") {
-        const v = property.transformValueToDataverse(
-          value[key]
-        );
-        result[property.toDataverseName] = v;
-      }
+      let v2 = property.transformValueToDataverse(
+        value[key],
+        ctx
+      );
+      if (v2 instanceof Promise) v2 = await v2;
+      if (v2 !== SKIP) result[property.toDataverseName] = v2;
     }
     return result;
   }
@@ -1507,9 +1826,9 @@ class DataverseTable extends Schema {
    */
   pickProperties(...keys) {
     const properties = Object.fromEntries(
-      Object.entries(this.fields).filter((v) => keys.includes(v[0]))
+      Object.entries(this.fields).filter((v2) => keys.includes(v2[0]))
     );
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
   }
   /**
    * Creates a new `DataverseTable` with the specified properties excluded.
@@ -1519,9 +1838,9 @@ class DataverseTable extends Schema {
    */
   omitProperties(...keys) {
     const properties = Object.fromEntries(
-      Object.entries(this.fields).filter((v) => !keys.includes(v[0]))
+      Object.entries(this.fields).filter((v2) => !keys.includes(v2[0]))
     );
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties });
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
   }
   /**
    * Creates a new `DataverseTable` with additional properties appended.
@@ -1533,10 +1852,34 @@ class DataverseTable extends Schema {
    * // Extended has all original fields plus `customField`
    */
   appendProperties(properties) {
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: {
+    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, primaryKey: this.primaryKey, fields: {
       ...this.fields,
       ...properties
     } });
+  }
+  async deleteFile(id, fieldName) {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
+    await this.client.deletePropertyValue(this.entitySetName, id, field.name);
+  }
+  async downloadImage(id, fieldName) {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
+    const response = await this.client.fetch(`${this.entitySetName}(${id})/${field.name}/$value`, { raw: true });
+    if (!response.ok) throw new Error(response.status + "-" + response.statusText);
+    return response.blob();
+  }
+  async deleteImage(id, fieldName) {
+    const field = this.fields[fieldName];
+    if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
+    await this.client.deletePropertyValue(this.entitySetName, id, field.name);
+  }
+  async _afterSave(ctx, value) {
+    for (const [key, property] of Object.entries(this.fields)) {
+      if (property.afterSave) {
+        await property.afterSave(ctx, value[key]);
+      }
+    }
   }
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
   T;
@@ -1551,14 +1894,14 @@ function buildQuery(table, q) {
   });
 }
 function buildSelect(table) {
-  return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file").map((v) => v.fromDataverseName).join(",");
+  return Object.values(table.fields).filter((v2) => v2.kind === "value" || v2.type === "lookupId" || v2.type === "file" || v2.type === "image").map((v2) => v2.fromDataverseName).join(",");
 }
 function buildExpand(table, depth = 0) {
   if (depth > 3) return "";
   return Object.values(table.fields).filter(
-    (v) => v.kind === "navigation" && v.type !== "lookupId" && v.type !== "collectionIds"
-  ).map((v) => {
-    const navProp = v;
+    (v2) => v2.kind === "navigation" && v2.type !== "lookupId" && v2.type !== "collectionIds"
+  ).map((v2) => {
+    const navProp = v2;
     const innerSelect = buildSelect(navProp.table);
     const innerExpand = buildExpand(navProp.table, depth + 1);
     let expandQuery = `$select=${innerSelect}`;
@@ -1590,113 +1933,110 @@ class DataverseIntersectTable {
   }
 }
 
-class BooleanField extends Schema {
+function buildObjectSchema(fields) {
+  const shape = {};
+  for (const [key, field] of Object.entries(fields)) {
+    shape[key] = field.schema;
+  }
+  return object(shape);
+}
+class BooleanField extends FieldBase {
   kind = "value";
   type = "boolean";
-  constructor(name) {
-    super(name, false);
-    this.check(isType("boolean"));
+  constructor(name, options) {
+    super(name, { defaultValue: false, schema: boolean$1() }, options);
   }
 }
-class NumberField extends Schema {
+class NumberField extends FieldBase {
   kind = "value";
   type = "number";
-  constructor(name) {
-    super(name, 0);
-    this.check(isType("number"));
+  constructor(name, options) {
+    super(name, { defaultValue: 0, schema: number$1() }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? 0;
   }
 }
-class NullableNumberField extends Schema {
+class NullableNumberField extends FieldBase {
   kind = "value";
   type = "number";
-  constructor(name) {
-    super(name, null);
-    this.check(isTypeOrNull("number"));
+  constructor(name, options) {
+    super(name, { defaultValue: null, schema: nullable(number$1()) }, options);
   }
 }
-class StringField extends Schema {
+class StringField extends FieldBase {
   kind = "value";
   type = "string";
-  constructor(name) {
-    super(name, "");
-    this.check(isType("string"));
+  constructor(name, options) {
+    super(name, { defaultValue: "", schema: string$1() }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? "";
   }
 }
-class NullableStringField extends Schema {
+class NullableStringField extends FieldBase {
   kind = "value";
   type = "string";
-  constructor(name) {
-    super(name, null);
-    this.check(isTypeOrNull("string"));
+  constructor(name, options) {
+    super(name, { defaultValue: null, schema: nullable(string$1()) }, options);
   }
 }
-class PrimaryKeyField extends Schema {
+class PrimaryKeyField extends FieldBase {
   kind = "value";
   type = "primaryKey";
-  constructor(name) {
-    super(name, "");
-    this.check(isType("string"));
+  constructor(name, options) {
+    super(name, { defaultValue: "", schema: string$1() }, options);
   }
   getDefault() {
     return crypto.randomUUID();
   }
 }
-class ListField extends Schema {
+class ListField extends FieldBase {
   kind = "value";
   type = "list";
   list;
-  constructor(name, list2) {
-    super(name, null);
+  constructor(name, list2, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(custom((v2) => list2.includes(v2), `Value not in [${list2}]`))
+    }, options);
     this.list = list2;
-    this.check((v) => {
-      if (v !== null && !list2.includes(v)) {
-        return `${v} not in [${list2}]`;
-      }
-    });
   }
 }
-class ChoiceField extends Schema {
+class ChoiceField extends FieldBase {
   kind = "value";
   type = "choice";
   #options;
-  constructor(name, options) {
+  constructor(name, options, fieldOptions) {
     const firstKey = Object.keys(options)[0];
-    super(name, options[Number(firstKey)]);
+    const values = Object.values(options);
+    super(name, {
+      defaultValue: options[Number(firstKey)],
+      schema: picklist(values)
+    }, fieldOptions);
     this.#options = options;
-    this.check((v) => {
-      if (v !== null && !Object.values(options).includes(v)) {
-        return `${v} not in [${Object.values(options)}]`;
-      }
-    });
   }
   transformValueFromDataverse(value) {
     return this.#options[value];
   }
   transformValueToDataverse(value) {
-    for (const [k, v] of Object.entries(this.#options)) {
-      if (v === value) return Number(k);
+    for (const [k, v2] of Object.entries(this.#options)) {
+      if (v2 === value) return Number(k);
     }
     return value;
   }
 }
-class NullableChoiceField extends Schema {
+class NullableChoiceField extends FieldBase {
   kind = "value";
   type = "choice";
   #options;
-  constructor(name, options) {
-    super(name, null);
+  constructor(name, options, fieldOptions) {
+    const values = Object.values(options);
+    super(name, {
+      defaultValue: null,
+      schema: nullable(picklist(values))
+    }, fieldOptions);
     this.#options = options;
-    this.check((v) => {
-      if (v !== null && !Object.values(options).includes(v)) {
-        return `${v} not in [${Object.values(options)}]`;
-      }
-    });
   }
   transformValueFromDataverse(value) {
     if (value === null) return null;
@@ -1704,18 +2044,20 @@ class NullableChoiceField extends Schema {
   }
   transformValueToDataverse(value) {
     if (value === null) return null;
-    for (const [k, v] of Object.entries(this.#options)) {
-      if (v === value) return Number(k);
+    for (const [k, v2] of Object.entries(this.#options)) {
+      if (v2 === value) return Number(k);
     }
     return value;
   }
 }
-class DateTimeField extends Schema {
+class DateTimeField extends FieldBase {
   kind = "value";
   type = "date";
-  constructor(name) {
-    super(name, /* @__PURE__ */ new Date());
-    this.check((v) => v instanceof Date ? void 0 : "value is not Date");
+  constructor(name, options) {
+    super(name, {
+      defaultValue: /* @__PURE__ */ new Date(),
+      schema: instance(Date)
+    }, options);
   }
   getDefault() {
     return /* @__PURE__ */ new Date();
@@ -1725,135 +2067,216 @@ class DateTimeField extends Schema {
     return new Date(value);
   }
 }
-class NullableDateTimeField extends Schema {
+class NullableDateTimeField extends FieldBase {
   kind = "value";
   type = "date";
-  constructor(name) {
-    super(name, null);
-    this.check(
-      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
-    );
+  constructor(name, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(instance(Date))
+    }, options);
   }
   transformValueFromDataverse(value) {
     if (value === null) return null;
     return new Date(value);
   }
 }
-class DateField extends Schema {
+class DateField extends FieldBase {
   kind = "value";
   type = "dateOnly";
-  constructor(name) {
-    super(name, parseDateOnly((/* @__PURE__ */ new Date()).toISOString()));
-    this.check(
-      (v) => v instanceof Date ? void 0 : "value is not Date"
-    );
+  constructor(name, options) {
+    super(name, {
+      defaultValue: parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
+      schema: instance(Date)
+    }, options);
   }
   transformValueFromDataverse(value) {
-    if (value === null) return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
+    if (value == null) return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
     return parseDateOnly(value);
   }
   transformValueToDataverse(value) {
     return toDateOnly(value);
   }
 }
-class NullableDateField extends Schema {
+class NullableDateField extends FieldBase {
   kind = "value";
   type = "dateOnly";
-  constructor(name) {
-    super(name, null);
-    this.check(
-      (v) => v === null || v instanceof Date ? void 0 : "value is not Date or null"
-    );
+  constructor(name, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(instance(Date))
+    }, options);
   }
   transformValueFromDataverse(value) {
-    if (value === null) return null;
+    if (value == null) return null;
     return parseDateOnly(value);
   }
   transformValueToDataverse(value) {
     return toDateOnly(value);
   }
 }
-class FormattedField extends Schema {
+class FormattedField extends FieldBase {
   kind = "value";
   type = "formatted";
-  constructor(name) {
-    super(name, null);
+  constructor(name, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(string$1())
+    }, { readonly: true, ...options });
     this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
-    this.setReadOnly(true);
   }
 }
-class ImageField extends Schema {
-  kind = "value";
+class ImageField extends FieldBase {
+  kind = "image";
   type = "image";
-  constructor(name) {
-    super(name, null);
-    this.check(isTypeOrNull("string"));
+  constructor(name, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(object({ url: string$1() }))
+    }, options);
+  }
+  transformValueFromDataverse(value) {
+    if (value == null) return null;
+    const b64 = String(value);
+    const mimeType = b64.startsWith("/9j/") ? "image/jpeg" : b64.startsWith("iVB") ? "image/png" : b64.startsWith("R0lG") ? "image/gif" : "application/octet-stream";
+    return { url: `data:${mimeType};base64,${b64}` };
+  }
+  async transformValueToDataverse(value) {
+    if (value == null) return null;
+    if (value.data == null) return null;
+    if (value.data instanceof Blob) {
+      return blobToBase64(value.data);
+    }
+    return null;
   }
 }
-class FileField extends Schema {
+async function blobToBase64(blob) {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+class FileField extends FieldBase {
   type = "file";
   kind = "file";
   constructor(name) {
-    super(name, "");
+    super(name, {
+      defaultValue: null,
+      schema: nullable(object({ name: string$1() }))
+    }, { readonly: true });
     this.fromDataverseName = `${name}_name`;
-    this.setReadOnly(true);
+  }
+  transformValueFromDataverse(value, ctx) {
+    if (value == null) return null;
+    if (!ctx) return { name: value };
+    const url = `${ctx.table.entitySetName}(${ctx.recordId})/${this.name}/$value`;
+    const client = ctx.client;
+    return Object.defineProperty(
+      { name: value },
+      "data",
+      {
+        get() {
+          return client.fetch(url, { raw: true }).then((r) => {
+            if (!r.ok) throw new Error(r.status + "-" + r.statusText);
+            return r.blob();
+          });
+        },
+        configurable: true
+      }
+    );
+  }
+  transformValueToDataverse() {
+    return SKIP;
+  }
+  async afterSave(ctx, value) {
+    if (value?.data instanceof Blob) {
+      const fileName = value.name ?? this.getDefault()?.name;
+      if (fileName) {
+        await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, fileName, value.data);
+      }
+    }
   }
 }
-function boolean(name) {
-  return new BooleanField(name);
+class JsonField extends FieldBase {
+  kind = "value";
+  type = "json";
+  constructor(name, schema, options) {
+    super(name, { defaultValue: void 0, schema }, options);
+  }
+  transformValueFromDataverse(value) {
+    if (value == null) return this.getDefault();
+    const raw = typeof value === "string" ? JSON.parse(value) : value;
+    return parse(this.schema, raw);
+  }
+  transformValueToDataverse(value) {
+    if (value == null) return null;
+    return JSON.stringify(value);
+  }
 }
-function number(name) {
-  return new NumberField(name);
+function boolean(name, options) {
+  return new BooleanField(name, options);
 }
-function nullableNumber(name) {
-  return new NullableNumberField(name);
+function number(name, options) {
+  return new NumberField(name, options);
 }
-function string(name) {
-  return new StringField(name);
+function nullableNumber(name, options) {
+  return new NullableNumberField(name, options);
 }
-function nullableString(name) {
-  return new NullableStringField(name);
+function string(name, options) {
+  return new StringField(name, options);
 }
-function primaryKey(name) {
-  return new PrimaryKeyField(name);
+function nullableString(name, options) {
+  return new NullableStringField(name, options);
 }
-function list(name, list2) {
-  return new ListField(name, list2);
+function primaryKey(name, options) {
+  return new PrimaryKeyField(name, options);
 }
-function choice(name, options) {
-  return new ChoiceField(name, options);
+function list(name, list2, options) {
+  return new ListField(name, list2, options);
 }
-function nullableChoice(name, options) {
-  return new NullableChoiceField(name, options);
+function choice(name, options, fieldOptions) {
+  return new ChoiceField(name, options, fieldOptions);
 }
-function datetime(name) {
-  return new DateTimeField(name);
+function nullableChoice(name, options, fieldOptions) {
+  return new NullableChoiceField(name, options, fieldOptions);
 }
-function date(name) {
-  return new DateField(name);
+function datetime(name, options) {
+  return new DateTimeField(name, options);
 }
-function nullableDate(name) {
-  return new NullableDateField(name);
+function date(name, options) {
+  return new DateField(name, options);
 }
-function nullableDateTime(name) {
-  return new NullableDateTimeField(name);
+function nullableDate(name, options) {
+  return new NullableDateField(name, options);
 }
-function formatted(name) {
-  return new FormattedField(name);
+function nullableDateTime(name, options) {
+  return new NullableDateTimeField(name, options);
 }
-function image(name) {
-  return new ImageField(name);
+function formatted(name, options) {
+  return new FormattedField(name, options);
+}
+function image(name, options) {
+  return new ImageField(name, options);
 }
 function file(name) {
   return new FileField(name);
 }
-class LookupIdProperty extends Schema {
+function json(name, schema, options) {
+  return new JsonField(name, schema, options);
+}
+class LookupIdProperty extends FieldBase {
   kind = "navigation";
   type = "lookupId";
   navigationName;
   #getTable;
-  constructor(name, getTable) {
-    super(name, null);
+  constructor(name, getTable, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(string$1())
+    }, options);
     this.navigationName = name;
     this.#getTable = getTable;
     this.fromDataverseName = `_${name.toLowerCase()}_value`;
@@ -1863,7 +2286,7 @@ class LookupIdProperty extends Schema {
   get table() {
     if (!this.#table) {
       const table = this.#getTable();
-      const { property } = table.getPrimaryKey();
+      const { property } = table.primaryKey;
       this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
@@ -1876,16 +2299,16 @@ class LookupIdProperty extends Schema {
     }
   }
 }
-class CollectionProperty extends Schema {
+class CollectionProperty extends FieldBase {
   kind = "navigation";
   type = "collection";
   #getTable;
-  constructor(name, getTable) {
-    super(name, []);
+  constructor(name, getTable, options) {
+    super(name, {
+      defaultValue: [],
+      schema: array(lazy(() => buildObjectSchema(getTable().fields)))
+    }, options);
     this.#getTable = getTable;
-    this.check(
-      (v) => !Array.isArray(v) ? "value is not an array" : void 0
-    );
   }
   #table;
   get table() {
@@ -1893,53 +2316,41 @@ class CollectionProperty extends Schema {
   }
   transformValueFromDataverse(value) {
     return Array.from(value ?? []).map(
-      (v) => this.table.transformValueFromDataverse(v)
+      (v2) => this.table.transformValueFromDataverse(v2)
     );
   }
-  getIssues(value, path = []) {
-    const issues = super.getIssues(value, path);
-    if (Array.isArray(value)) {
-      issues.push(
-        ...value.map((v, i) => this.table.getIssues(v, [...path, i])).flat(1)
-      );
-    }
-    return issues;
+  transformValueToDataverse() {
+    return SKIP;
   }
 }
 function collection(name, getTable) {
   return new CollectionProperty(name, getTable);
 }
-class CollectionIdsProperty extends Schema {
+class CollectionIdsProperty extends FieldBase {
   kind = "navigation";
   type = "collectionIds";
   #getTable;
-  constructor(name, getTable) {
-    super(name, []);
+  constructor(name, getTable, options) {
+    super(name, {
+      defaultValue: [],
+      schema: array(string$1())
+    }, options);
     this.#getTable = getTable;
-    this.check(
-      (v) => !Array.isArray(v) ? "value is not an array" : void 0
-    );
   }
   #table;
   get table() {
     if (!this.#table) {
       const table = this.#getTable();
-      const { property } = table.getPrimaryKey();
+      const { property } = table.primaryKey;
       this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
     }
     return this.#table;
   }
   transformValueFromDataverse(value) {
-    return Array.from(value ?? []).map((v) => v[this.table.fields.id.name]);
+    return Array.from(value ?? []).map((v2) => v2[this.table.fields.id.name]);
   }
-  getIssues(value, path = []) {
-    const issues = super.getIssues(value, path);
-    if (Array.isArray(value)) {
-      issues.push(
-        ...value.map((v, i) => this.table.fields.id.getIssues(v, [...path, i])).flat(1)
-      );
-    }
-    return issues;
+  transformValueToDataverse() {
+    return SKIP;
   }
 }
 function collectionIds(name, getTable) {
@@ -1948,12 +2359,15 @@ function collectionIds(name, getTable) {
 function lookupId(name, getTable) {
   return new LookupIdProperty(name, getTable);
 }
-class LookupProperty extends Schema {
+class LookupProperty extends FieldBase {
   kind = "navigation";
   type = "lookup";
   #getTable;
-  constructor(name, getTable) {
-    super(name, null);
+  constructor(name, getTable, options) {
+    super(name, {
+      defaultValue: null,
+      schema: nullable(lazy(() => buildObjectSchema(getTable().fields)))
+    }, options);
     this.#getTable = getTable;
   }
   #table;
@@ -1963,12 +2377,8 @@ class LookupProperty extends Schema {
   transformValueFromDataverse(value) {
     return value == null ? null : this.table.transformValueFromDataverse(value);
   }
-  getIssues(value, path) {
-    const issues = super.getIssues(value, path);
-    if (value !== null) {
-      issues.push(...this.table.getIssues(value, path));
-    }
-    return issues;
+  transformValueToDataverse() {
+    return SKIP;
   }
 }
 function lookup(name, getTable) {
@@ -2842,7 +3252,48 @@ class FetchXmlAggregateQuery {
     this._filters.push(str);
     return this;
   }
-  join(linkType, table, from, to, subquery, intersect) {
+  join(linkType, tableOrIntersect, fromOrSubquery, to, subquery, intersect) {
+    if (tableOrIntersect instanceof DataverseIntersectTable) {
+      const intersectTable = tableOrIntersect;
+      const subqueryFn = fromOrSubquery;
+      let targetTable;
+      if (intersectTable.table1 === this._table) {
+        targetTable = intersectTable.table2;
+      } else if (intersectTable.table2 === this._table) {
+        targetTable = intersectTable.table1;
+      } else {
+        throw new Error(
+          `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
+        );
+      }
+      const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
+      subqueryFn(targetBuilder);
+      const pkName = this._table.primaryKey.property.name;
+      const targetPkName = targetTable.primaryKey.property.name;
+      const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
+      const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
+      intersectBuilder._links.push({
+        name: targetTable.logicalName,
+        from: targetPkName,
+        to: targetPkName,
+        alias: `auto_link_${++this._linkAlias.value}`,
+        linkType,
+        builder: targetBuilder
+      });
+      const intersectAlias = `auto_link_${++this._linkAlias.value}`;
+      this._links.push({
+        name: intersectTable.name,
+        from: pkName,
+        to: pkName,
+        alias: intersectAlias,
+        linkType,
+        builder: intersectBuilder,
+        intersect: true
+      });
+      return this;
+    }
+    const table = tableOrIntersect;
+    const from = fromOrSubquery;
     const nested = new EntityQueryBuilder(table, this._linkAlias);
     subquery(nested);
     const fromFieldName = table.fields[from].name;
@@ -2857,44 +3308,6 @@ class FetchXmlAggregateQuery {
       linkType,
       builder: nested,
       intersect: isIntersect
-    });
-    return this;
-  }
-  intersect(intersectTable, subquery) {
-    let targetTable;
-    if (intersectTable.table1 === this._table) {
-      targetTable = intersectTable.table2;
-    } else if (intersectTable.table2 === this._table) {
-      targetTable = intersectTable.table1;
-    } else {
-      throw new Error(
-        `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
-      );
-    }
-    const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
-    subquery(targetBuilder);
-    const pkName = this._table.getPrimaryKey().property.name;
-    const targetPkName = targetTable.getPrimaryKey().property.name;
-    const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
-    const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
-    intersectBuilder._links.push({
-      name: targetTable.logicalName,
-      from: targetPkName,
-      to: targetPkName,
-      alias: `auto_link_${++this._linkAlias.value}`,
-      linkType: "inner",
-      builder: targetBuilder
-    });
-    `auto_link_${++this._linkAlias.value}`;
-    const intersectAlias = `auto_link_${++this._linkAlias.value}`;
-    this._links.push({
-      name: intersectTable.name,
-      from: pkName,
-      to: pkName,
-      alias: intersectAlias,
-      linkType: "inner",
-      builder: intersectBuilder,
-      intersect: true
     });
     return this;
   }
@@ -3162,7 +3575,7 @@ class EntityQueryBuilder {
       if (value instanceof GroupByExpr) {
         initialAttributes.push({ name: value.field, alias, groupby: true });
       } else if (value instanceof Aggregation) {
-        const fieldName = value.field ? value.field.toString() : this._table.getPrimaryKey().property.name;
+        const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.name;
         initialAttributes.push({ name: fieldName, alias, aggregate: value.operation });
       }
     }
@@ -3193,7 +3606,47 @@ class EntityQueryBuilder {
     this._filters.push(str);
     return this;
   }
-  join(linkType, table, from, to, subquery, intersect) {
+  join(linkType, tableOrIntersect, fromOrSubquery, to, subquery, intersect) {
+    if (tableOrIntersect instanceof DataverseIntersectTable) {
+      const intersectTable = tableOrIntersect;
+      const subqueryFn = fromOrSubquery;
+      let targetTable;
+      if (intersectTable.table1 === this._table) {
+        targetTable = intersectTable.table2;
+      } else if (intersectTable.table2 === this._table) {
+        targetTable = intersectTable.table1;
+      } else {
+        throw new Error(
+          `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
+        );
+      }
+      const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
+      subqueryFn(targetBuilder);
+      const pkName = this._table.primaryKey.property.name;
+      const targetPkName = targetTable.primaryKey.property.name;
+      const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
+      const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
+      intersectBuilder._links.push({
+        name: targetTable.logicalName,
+        from: targetPkName,
+        to: targetPkName,
+        alias: `auto_link_${++this._linkAlias.value}`,
+        linkType,
+        builder: targetBuilder
+      });
+      this._links.push({
+        name: intersectTable.name,
+        from: pkName,
+        to: pkName,
+        alias: `auto_link_${++this._linkAlias.value}`,
+        linkType,
+        builder: intersectBuilder,
+        intersect: true
+      });
+      return this;
+    }
+    const table = tableOrIntersect;
+    const from = fromOrSubquery;
     const isFilterOnly = EntityQueryBuilder._isFilterOnlyLinkType(linkType);
     if (isFilterOnly) {
       const collector = new FilterCollector(table);
@@ -3224,42 +3677,6 @@ class EntityQueryBuilder {
         intersect: intersect ?? table.intersect === true
       });
     }
-    return this;
-  }
-  intersect(intersectTable, subquery) {
-    let targetTable;
-    if (intersectTable.table1 === this._table) {
-      targetTable = intersectTable.table2;
-    } else if (intersectTable.table2 === this._table) {
-      targetTable = intersectTable.table1;
-    } else {
-      throw new Error(
-        `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`
-      );
-    }
-    const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
-    subquery(targetBuilder);
-    const pkName = this._table.getPrimaryKey().property.name;
-    const targetPkName = targetTable.getPrimaryKey().property.name;
-    const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client };
-    const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
-    intersectBuilder._links.push({
-      name: targetTable.logicalName,
-      from: targetPkName,
-      to: targetPkName,
-      alias: `auto_link_${++this._linkAlias.value}`,
-      linkType: "inner",
-      builder: targetBuilder
-    });
-    this._links.push({
-      name: intersectTable.name,
-      from: pkName,
-      to: pkName,
-      alias: `auto_link_${++this._linkAlias.value}`,
-      linkType: "inner",
-      builder: intersectBuilder,
-      intersect: true
-    });
     return this;
   }
   distinct() {
@@ -3475,10 +3892,6 @@ class FetchXmlInitialImpl {
     this.#builder.join(...args);
     return this;
   }
-  intersect(...args) {
-    this.#builder.intersect(...args);
-    return this;
-  }
   distinct() {
     this.#builder.distinct();
     return this;
@@ -3502,4 +3915,4 @@ class FetchXmlInitialImpl {
   }
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, Schema, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, choice, collection, collectionIds, contains, count, date, datetime, desc, email, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, integer, isActive, isInactive, isNonEmptyString, isNotNull, isNull, isType, isTypeOrNull, keys, le, list, lookup, lookupId, lt, mapChoices, max, maxLength, maxValue, mergeRecords, min, minLength, minValue, ne, not, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, numeric, or, orderby, parseDateOnly, pattern, primaryKey, required, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };

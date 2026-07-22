@@ -1,4 +1,4 @@
-import { StandardSchemaV1 } from '@standard-schema/spec';
+import * as v from 'valibot';
 
 export declare function Above(field: FieldRef<any>, value: string): FilterExpr;
 
@@ -94,12 +94,12 @@ export declare function Between(field: FieldRef<any>, value1: string | number, v
  * });
  * // Infer<typeof table>["isActive"] → boolean
  */
-export declare function boolean(name: string): BooleanField;
+export declare function boolean(name: string, options?: FieldOptions<boolean>): BooleanField;
 
-export declare class BooleanField extends Schema<boolean> {
+export declare class BooleanField extends FieldBase<boolean> {
     kind: "value";
     type: "boolean";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<boolean>);
 }
 
 export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
@@ -117,13 +117,13 @@ export declare function buildLambdaProxy<P extends GenericProperties>(alias: str
  * });
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
  */
-export declare function choice<T extends Record<number, string>>(name: string, options: T): ChoiceField<T>;
+export declare function choice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>): ChoiceField<T>;
 
-export declare class ChoiceField<T extends Record<number, string>> extends Schema<T[keyof T]> {
+export declare class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
     #private;
     kind: "value";
     type: "choice";
-    constructor(name: string, options: T);
+    constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>);
     transformValueFromDataverse(value: any): T[keyof T];
     transformValueToDataverse(value: any): number;
 }
@@ -162,30 +162,30 @@ export declare function collection<TProperties extends GenericProperties>(name: 
  */
 export declare function collectionIds(name: string, getTable: GetTable): CollectionIdsProperty;
 
-export declare class CollectionIdsProperty extends Schema<GUID[]> {
+export declare class CollectionIdsProperty extends FieldBase<GUID[]> {
     #private;
     kind: "navigation";
     type: "collectionIds";
-    constructor(name: string, getTable: GetTable);
+    constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>);
     get table(): DataverseTable<{
         id: PrimaryKeyField;
     }>;
     transformValueFromDataverse(value: any): GUID[];
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    transformValueToDataverse(): typeof SKIP;
 }
 
 declare type CollectionKeys<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends CollectionProperty<any> ? K : never;
 }[keyof T];
 
-export declare class CollectionProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties>[]> {
+export declare class CollectionProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties>[]> {
     #private;
     kind: "navigation";
     type: "collection";
-    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>);
+    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>);
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties>[];
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    transformValueToDataverse(): typeof SKIP;
 }
 
 export declare interface CollectionSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
@@ -245,7 +245,9 @@ export declare class DataverseClient {
      *   body: JSON.stringify({ name: "New Account" }),
      * })
      */
-    fetch(resource: string, options?: RequestInit): Promise<any>;
+    fetch(resource: string, options?: RequestInit & {
+        raw?: boolean;
+    }): Promise<any>;
     private _resolvePrefer;
     private _getNextLink;
     /**
@@ -571,16 +573,16 @@ export declare type DataverseClientOptions = {
 /**
  * Represents a Dataverse many-to-many intersect (association) table.
  *
- * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.intersect intersect()}
+ * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.join join()}
  * method. It does NOT extend {@link DataverseTable} — it is not a queryable entity on its own.
  *
  * @example
  * const AccountContact = new DataverseIntersectTable("accountcontact", Account, Contact);
  *
- * // Use in FetchXML via intersect():
+ * // Use in FetchXML via join():
  * fetchXml(Account)
  *   .select(f => ({ name: f.name }))
- *   .intersect(AccountContact, sub =>
+ *   .join("inner", AccountContact, sub =>
  *     sub.select(f => ({ accountName: f.name }))
  *   )
  */
@@ -643,18 +645,26 @@ export declare type DataverseRecord = Record<string, Primitive>;
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-export declare class DataverseTable<TProperties extends GenericProperties> extends Schema<Infer<TProperties>> {
+export declare class DataverseTable<TProperties extends GenericProperties> {
     client: DataverseClient;
     fields: TProperties;
     logicalName: string;
     entitySetName: string;
+    name: string;
     kind: "table";
     type: "table";
+    schema?: ValidationSchema<Infer<TProperties>>;
+    primaryKey: {
+        key: string;
+        property: PrimaryKeyField;
+    };
     /**
      * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
      */
-    constructor(options: DataverseTableOptions<TProperties>);
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    constructor(options: DataverseTableOptions<TProperties> & {
+        schema?: ValidationSchema<Infer<TProperties>>;
+    });
+    getSchema(): v.BaseSchema<unknown, Infer<TProperties>, v.BaseIssue<unknown>>;
     getDefault(value?: Partial<Infer<TProperties>>): Infer<TProperties>;
     /**
      * Retrieves a single record by its primary key (GUID) or alternate key.
@@ -852,18 +862,6 @@ export declare class DataverseTable<TProperties extends GenericProperties> exten
      */
     deleteMultiple(ids: string[]): Promise<any>;
     /**
-     * Returns the primary key field definition for this table.
-     *
-     * @example
-     * const pk = Account.getPrimaryKey();
-     * console.log(pk.key);      // "id"
-     * console.log(pk.property.name); // "accountid"
-     */
-    getPrimaryKey(): {
-        key: string;
-        property: PrimaryKeyField;
-    };
-    /**
      * Extracts the primary key GUID from a record object, or `undefined` if not present.
      *
      * @example
@@ -872,7 +870,7 @@ export declare class DataverseTable<TProperties extends GenericProperties> exten
      */
     getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined;
     transformValueFromDataverse(value: any): Infer<TProperties>;
-    transformValueToDataverse(value: Partial<Infer<TProperties>>): DataverseRecord;
+    transformValueToDataverse(value: Partial<Infer<TProperties>>, ctx?: TransformContext): Promise<DataverseRecord>;
     /**
      * Creates a new `Table` with only the specified properties. Useful for
      * narrowing the type when querying a subset of columns.
@@ -899,6 +897,10 @@ export declare class DataverseTable<TProperties extends GenericProperties> exten
      * // Extended has all original fields plus `customField`
      */
     appendProperties<TAppendedProperties extends GenericProperties>(properties: TAppendedProperties): DataverseTable<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties>;
+    deleteFile(id: GUID, fieldName: string): Promise<void>;
+    downloadImage(id: GUID, fieldName: string): Promise<Blob>;
+    deleteImage(id: GUID, fieldName: string): Promise<void>;
+    private _afterSave;
     /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
     T: Infer<TProperties>;
 }
@@ -908,6 +910,11 @@ export declare type DataverseTableOptions<TProperties extends GenericProperties>
     entitySetName: string;
     logicalName: string;
     fields: TProperties;
+    schema?: ValidationSchema<Infer<TProperties>>;
+    primaryKey?: {
+        key: string;
+        property: PrimaryKeyField;
+    };
 };
 
 /**
@@ -921,12 +928,12 @@ export declare type DataverseTableOptions<TProperties extends GenericProperties>
  * });
  * // Infer<typeof table>["birthDate"] → Date
  */
-export declare function date(name: string): DateField;
+export declare function date(name: string, options?: FieldOptions<Date>): DateField;
 
-export declare class DateField extends Schema<Date> {
+export declare class DateField extends FieldBase<Date> {
     kind: "value";
     type: "dateOnly";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date>);
     transformValueFromDataverse(value: any): Date;
     transformValueToDataverse(value: any): string | null;
 }
@@ -942,12 +949,12 @@ export declare class DateField extends Schema<Date> {
  * });
  * // Infer<typeof table>["createdAt"] → Date
  */
-export declare function datetime(name: string): DateTimeField;
+export declare function datetime(name: string, options?: FieldOptions<Date>): DateTimeField;
 
-export declare class DateTimeField extends Schema<Date> {
+export declare class DateTimeField extends FieldBase<Date> {
     kind: "value";
     type: "date";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date>);
     getDefault(): Date;
     transformValueFromDataverse(value: any): Date;
 }
@@ -955,23 +962,6 @@ export declare class DateTimeField extends Schema<Date> {
 export declare function desc(...fields: Name[]): OrderSpec;
 
 export declare function DoesNotContainValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
-
-/**
- * Creates a validator function that checks if a string is a valid email address.
- * Uses a basic email validation regex.
- *
- * @returns A validator function that returns "Invalid email format" if the string is not a valid email address, otherwise undefined.
- *
- * @example
- * // Create an email validator:
- * const isEmail = email();
- *
- * // Validate an email address:
- * isEmail("test@example.com"); // returns undefined (valid)
- * isEmail("invalid");        // returns "Invalid email format" (invalid)
- * isEmail("test@.com");       // returns "Invalid email format" (invalid)
- */
-export declare function email(): Validator<string>;
 
 export declare function endsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
 
@@ -1014,8 +1004,10 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): EntityQueryBuilder<TProps, TResult>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): EntityQueryBuilder<TProps, TResult>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): EntityQueryBuilder<TProps, TResult>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
     distinct(): this;
     top(n: number): this;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
@@ -1095,9 +1087,9 @@ export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TR
     private _buildProxy;
     private _getEffectiveAttributes;
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FetchLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"]>) => void, intersect?: boolean): this;
-    intersect<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2>) => SubAggregateJoinBuilder<T2>): this;
-    intersect<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubAggregateJoinBuilder<T1>) => SubAggregateJoinBuilder<T1>): this;
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>;
     top(n: number): this;
     orderby(fieldSelector: (f: ApplyAliasProxy_2<TResult>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
@@ -1120,8 +1112,10 @@ export declare interface FetchXmlInitial<TProps extends GenericProperties> {
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlInitial<TProps>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlInitial<TProps>;
-    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlInitial<TProps>;
-    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): FetchXmlInitial<TProps>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): FetchXmlInitial<TProps>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlInitial<TProps>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): FetchXmlInitial<TProps>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlInitial<TProps>;
     distinct(): FetchXmlInitial<TProps>;
     top(n: number): FetchXmlInitial<TProps>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
@@ -1138,8 +1132,10 @@ export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, T
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlSelectQuery<TProps, TResult>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): FetchXmlSelectQuery<TProps, TResult>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): FetchXmlSelectQuery<TProps, TResult>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
     distinct(): FetchXmlSelectQuery<TProps, TResult>;
     top(n: number): FetchXmlSelectQuery<TProps, TResult>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
@@ -1148,6 +1144,31 @@ export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, T
     toString(): string;
     execute(options?: ExecuteOptions): Promise<TResult[]>;
 }
+
+export declare abstract class FieldBase<T> {
+    #private;
+    name: string;
+    fromDataverseName: string;
+    toDataverseName: string;
+    kind: string;
+    type: string;
+    schema: ValidationSchema<T>;
+    constructor(name: string, defaults: {
+        defaultValue: T;
+        schema: ValidationSchema<T>;
+    }, options?: FieldOptions<T>);
+    getDefault(): T;
+    getReadOnly(): boolean;
+    transformValueFromDataverse(value: any, ctx?: TransformContext): T;
+    transformValueToDataverse(value: any, ctx?: TransformContext): any;
+    afterSave?(ctx: TransformContext, value: any): Promise<void>;
+}
+
+export declare type FieldOptions<T> = {
+    default?: T;
+    readonly?: boolean;
+    schema?: ValidationSchema<T>;
+};
 
 export declare type FieldProxy<T extends GenericProperties> = {
     [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>;
@@ -1172,11 +1193,20 @@ declare type FieldSelector<TProps extends GenericProperties> = {
  */
 export declare function file(name: string): FileField;
 
-export declare class FileField extends Schema<string> {
+export declare class FileField extends FieldBase<FileRef | null> {
     type: "file";
     kind: "file";
     constructor(name: string);
+    transformValueFromDataverse(value: any, ctx?: TransformContext): FileRef | null;
+    transformValueToDataverse(): typeof SKIP;
+    afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
+
+export declare type FileRef = {
+    name: string;
+    data?: Blob | Promise<Blob>;
+    mimeType?: string;
+};
 
 export declare class FilterCollector<TProps extends GenericProperties = any> {
     protected _filters: string[];
@@ -1261,12 +1291,12 @@ declare type FilterValue = string | number | boolean | Date | null;
  *   statusLabel: formatted("statuscode"),
  * });
  */
-export declare function formatted(name: string): FormattedField;
+export declare function formatted(name: string, options?: FieldOptions<string | null>): FormattedField;
 
-export declare class FormattedField extends Schema<string | null> {
+export declare class FormattedField extends FieldBase<string | null> {
     kind: "value";
     type: "formatted";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<string | null>);
 }
 
 export declare function ge<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
@@ -1339,13 +1369,20 @@ export declare type GUID = `${string}-${string}-${string}-${string}-${string}`;
  *
  * @param name The Dataverse logical name of the image column.
  */
-export declare function image(name: string): ImageField;
+export declare function image(name: string, options?: FieldOptions<ImageRef | null>): ImageField;
 
-export declare class ImageField extends Schema<string | null> {
-    kind: "value";
+export declare class ImageField extends FieldBase<ImageRef | null> {
+    kind: "image";
     type: "image";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<ImageRef | null>);
+    transformValueFromDataverse(value: any): ImageRef | null;
+    transformValueToDataverse(value: ImageRef | null): Promise<string | null>;
 }
+
+export declare type ImageRef = {
+    readonly url: string;
+    data?: Blob | null;
+};
 
 export declare function In<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
 
@@ -1356,7 +1393,7 @@ export declare function In<T extends string | number>(field: FieldRef<T>, values
  *
  * @template T The Dataverse schema definition.
  */
-export declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends Schema<infer U> ? U : {
+export declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends FieldBase<infer U> ? U : {
     [K in keyof T]: Infer<T[K]>;
 };
 
@@ -1380,26 +1417,6 @@ export declare function InOrAfterFiscalPeriodAndYear(field: FieldRef<any>, fisca
 
 export declare function InOrBeforeFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
 
-/**
- * Creates a validator function that checks if a value is an integer.  It can validate both numbers and strings.
- *
- * @returns A validator function that returns "Must be an integer" if the value is not an integer, otherwise undefined.
- *
- * @example
- * // Create an integer validator:
- * const isInteger = integer();
- *
- * // Validate a number:
- * isInteger(10);     // returns undefined (valid)
- * isInteger(10.5);   // returns "Must be an integer" (invalid)
- *
- * // Validate a string:
- * isInteger("10");   // returns undefined (valid)
- * isInteger("10.5"); // returns "Must be an integer" (invalid)
- * isInteger("abc");  // returns "Must be an integer" (invalid)
- */
-export declare function integer(): Validator<number | string>;
-
 export declare function isActive(): FilterExpr;
 
 export declare function isInactive(): FilterExpr;
@@ -1414,9 +1431,30 @@ export declare function isNull(field: FieldRef<any> | {
     toString(): string;
 }): FilterExpr;
 
-export declare function isType(type: Types): Validator<any>;
+/**
+ * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
+ * in Dataverse and parses/validates it using the provided valibot schema.
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param schema A valibot schema that validates the parsed JSON structure.
+ * @param options Optional field options (default, readonly).
+ *
+ * @example
+ * const Address = v.object({ street: v.string(), city: v.string() });
+ * const table = new DataverseTable({
+ *   address: json("address_data", Address),
+ * });
+ * // Infer<typeof table>["address"] → { street: string; city: string }
+ */
+export declare function json<T>(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>): JsonField<T>;
 
-export declare function isTypeOrNull(type: Types): Validator<any>;
+export declare class JsonField<T> extends FieldBase<T> {
+    kind: "value";
+    type: "json";
+    constructor(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>);
+    transformValueFromDataverse(value: any): T;
+    transformValueToDataverse(value: any): string | null;
+}
 
 export declare function keys(keyValues: {
     [key: string]: string | number;
@@ -1462,13 +1500,13 @@ export declare function le<T extends number | string | Date | null>(field: Field
  * });
  * // Infer<typeof table>["gender"] → 1 | 2 | null
  */
-export declare function list<T extends string | number>(name: string, list: Array<T>): ListField<T>;
+export declare function list<T extends string | number>(name: string, list: Array<T>, options?: FieldOptions<T | null>): ListField<T>;
 
-export declare class ListField<T extends string | number> extends Schema<T | null> {
+export declare class ListField<T extends string | number> extends FieldBase<T | null> {
     kind: "value";
     type: "list";
     list: Array<T>;
-    constructor(name: string, list: Array<T>);
+    constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>);
 }
 
 /**
@@ -1505,12 +1543,12 @@ export declare function lookup<TProperties extends GenericProperties>(name: stri
  */
 export declare function lookupId(name: string, getTable: GetTable): LookupIdProperty;
 
-export declare class LookupIdProperty extends Schema<GUID | null> {
+export declare class LookupIdProperty extends FieldBase<GUID | null> {
     #private;
     kind: "navigation";
     type: "lookupId";
     navigationName: string;
-    constructor(name: string, getTable: GetTable);
+    constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>);
     get table(): DataverseTable<{
         id: PrimaryKeyField;
     }>;
@@ -1521,14 +1559,14 @@ declare type LookupKeys<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends LookupProperty<any> ? K : never;
 }[keyof T];
 
-export declare class LookupProperty<TProperties extends GenericProperties> extends Schema<Infer<TProperties> | null> {
+export declare class LookupProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties> | null> {
     #private;
     kind: "navigation";
     type: "lookup";
-    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>);
+    constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>);
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties> | null;
-    getIssues(value: any, path?: PropertyKey[]): StandardSchemaV1.Issue[];
+    transformValueToDataverse(): typeof SKIP;
 }
 
 export declare interface LookupSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
@@ -1552,44 +1590,6 @@ export declare function mapChoices(data: any): {
 
 export declare function max<V>(field: FieldRef<V>): Aggregation<V>;
 
-/**
- * Creates a validator function that checks if the length of a value is less than or equal to a maximum length.
- *
- * @param max The maximum length.
- * @returns A validator function that returns an error message if the length is greater than the maximum, otherwise undefined.
- *
- * @example
- * // Create a maxLength validator:
- * const maxLength10 = maxLength(10);
- *
- * // Validate a string:
- * maxLength10("hello");         // returns undefined (valid)
- * maxLength10("hello world!"); // returns "Length more than 10" (invalid)
- *
- * // Validate an array:
- * maxLength10([1, 2, 3, 4, 5]);   // returns undefined (valid)
- * maxLength10([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]); // returns "Length more than 10" (invalid)
- */
-export declare function maxLength(max: number): (v: {
-    length: number;
-}) => string | undefined;
-
-/**
- * Creates a validator function that checks if a number is less than or equal to a maximum value.
- *
- * @param max The maximum value.
- * @returns A validator function that returns an error message if the number is greater than the maximum, otherwise undefined.
- *
- * @example
- * // Create a maxValue validator:
- * const maxAge65 = maxValue(65);
- *
- * // Validate an age:
- * maxAge65(40); // returns undefined (valid)
- * maxAge65(70); // returns "Must be no more than 65" (invalid)
- */
-export declare function maxValue(max: number): Validator<number>;
-
 declare type MergeExpand<T, K extends string, V> = {
     [P in keyof T | K]: P extends K ? V : P extends keyof T ? T[P] : never;
 };
@@ -1604,44 +1604,6 @@ declare type MergeExpand<T, K extends string, V> = {
 export declare function mergeRecords<T>(prevRecords: T[], newRecords: T[]): T[];
 
 export declare function min<V>(field: FieldRef<V>): Aggregation<V>;
-
-/**
- * Creates a validator function that checks if the length of a value is greater than or equal to a minimum length.
- *
- * @param min The minimum length.
- * @returns A validator function that returns an error message if the length is less than the minimum, otherwise undefined.
- *
- * @example
- * // Create a minLength validator:
- * const minLength5 = minLength(5);
- *
- * // Validate a string:
- * minLength5("hello");       // returns undefined (valid)
- * minLength5("hi");          // returns "Length less than 5" (invalid)
- *
- * // Validate an array:
- * minLength5([1, 2, 3, 4, 5]); // returns undefined (valid)
- * minLength5([1, 2, 3]);       // returns "Length less than 5" (invalid)
- */
-export declare function minLength(min: number): (v: {
-    length: number;
-}) => string | undefined;
-
-/**
- * Creates a validator function that checks if a number is greater than or equal to a minimum value.
- *
- * @param min The minimum value.
- * @returns A validator function that returns an error message if the number is less than the minimum, otherwise undefined.
- *
- * @example
- * // Create a minValue validator:
- * const minAge18 = minValue(18);
- *
- * // Validate an age:
- * minAge18(21); // returns undefined (valid)
- * minAge18(15); // returns "Must be at least 18" (invalid)
- */
-export declare function minValue(min: number): Validator<number>;
 
 /** A field name can be a string or an object with a name or toString method. */
 export declare type Name = string | {
@@ -1733,13 +1695,13 @@ export declare function NotUnder(field: FieldRef<any>, value: string): FilterExp
  * });
  * // Infer<typeof table>["priority"] → "Low" | "High" | null
  */
-export declare function nullableChoice<T extends Record<number, string>>(name: string, options: T): NullableChoiceField<T>;
+export declare function nullableChoice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
 
-export declare class NullableChoiceField<T extends Record<number, string>> extends Schema<T[keyof T] | null> {
+export declare class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
     #private;
     kind: "value";
     type: "choice";
-    constructor(name: string, options: T);
+    constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>);
     transformValueFromDataverse(value: any): T[keyof T] | null;
     transformValueToDataverse(value: any): number | null;
 }
@@ -1749,12 +1711,12 @@ export declare class NullableChoiceField<T extends Record<number, string>> exten
  *
  * @param name The Dataverse logical name of the column.
  */
-export declare function nullableDate(name: string): NullableDateField;
+export declare function nullableDate(name: string, options?: FieldOptions<Date | null>): NullableDateField;
 
-export declare class NullableDateField extends Schema<Date | null> {
+export declare class NullableDateField extends FieldBase<Date | null> {
     kind: "value";
     type: "dateOnly";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date | null>);
     transformValueFromDataverse(value: any): Date | null;
     transformValueToDataverse(value: any): string | null;
 }
@@ -1764,12 +1726,12 @@ export declare class NullableDateField extends Schema<Date | null> {
  *
  * @param name The Dataverse logical name of the column.
  */
-export declare function nullableDateTime(name: string): NullableDateTimeField;
+export declare function nullableDateTime(name: string, options?: FieldOptions<Date | null>): NullableDateTimeField;
 
-export declare class NullableDateTimeField extends Schema<Date | null> {
+export declare class NullableDateTimeField extends FieldBase<Date | null> {
     kind: "value";
     type: "date";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<Date | null>);
     transformValueFromDataverse(value: any): Date | null;
 }
 
@@ -1784,12 +1746,12 @@ export declare class NullableDateTimeField extends Schema<Date | null> {
  * });
  * // Infer<typeof table>["age"] → number | null
  */
-export declare function nullableNumber(name: string): NullableNumberField;
+export declare function nullableNumber(name: string, options?: FieldOptions<number | null>): NullableNumberField;
 
-export declare class NullableNumberField extends Schema<number | null> {
+export declare class NullableNumberField extends FieldBase<number | null> {
     kind: "value";
     type: "number";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<number | null>);
 }
 
 /**
@@ -1803,12 +1765,12 @@ export declare class NullableNumberField extends Schema<number | null> {
  * });
  * // Infer<typeof table>["middleName"] → string | null
  */
-export declare function nullableString(name: string): NullableStringField;
+export declare function nullableString(name: string, options?: FieldOptions<string | null>): NullableStringField;
 
-export declare class NullableStringField extends Schema<string | null> {
+export declare class NullableStringField extends FieldBase<string | null> {
     kind: "value";
     type: "string";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<string | null>);
 }
 
 /**
@@ -1822,34 +1784,14 @@ export declare class NullableStringField extends Schema<string | null> {
  * });
  * // Infer<typeof table>["age"] → number
  */
-export declare function number(name: string): NumberField;
+export declare function number(name: string, options?: FieldOptions<number>): NumberField;
 
-export declare class NumberField extends Schema<number> {
+export declare class NumberField extends FieldBase<number> {
     kind: "value";
     type: "number";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<number>);
     transformValueFromDataverse(value: any): number;
 }
-
-/**
- * Creates a validator function that checks if a value is a number. It can validate both numbers and strings.
- *
- * @returns A validator function that returns "Must be a number" if the value is not a number, otherwise undefined.
- *
- * @example
- * // Create a numeric validator:
- * const isNumeric = numeric();
- *
- * // Validate a number:
- * isNumeric(10);     // returns undefined (valid)
- * isNumeric(10.5);   // returns undefined (valid)
- *
- * // Validate a string:
- * isNumeric("10");   // returns undefined (valid)
- * isNumeric("10.5"); // returns undefined (valid)
- * isNumeric("abc");  // returns "Must be a number" (invalid)
- */
-export declare function numeric(): Validator<number | string>;
 
 export declare class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
     private _table;
@@ -1925,8 +1867,6 @@ export declare class OrderSpec {
 
 export declare function parseDateOnly(dateString: string): Date;
 
-export declare function pattern(regex: RegExp, message?: string): Validator<string>;
-
 /**
  * A single Prefer value — either a raw string or a structured object
  * for annotations and page size.
@@ -1960,12 +1900,12 @@ export declare type PreferOption = "return=representation" | "respond-async" | "
  * });
  * // Infer<typeof table>["id"] → `${string}-${string}-${string}-${string}-${string}`
  */
-export declare function primaryKey(name: string): PrimaryKeyField;
+export declare function primaryKey(name: string, options?: FieldOptions<GUID>): PrimaryKeyField;
 
-export declare class PrimaryKeyField extends Schema<GUID> {
+export declare class PrimaryKeyField extends FieldBase<GUID> {
     kind: "value";
     type: "primaryKey";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<GUID>);
     getDefault(): GUID;
 }
 
@@ -1978,8 +1918,6 @@ export declare type QueryForTable<T> = {
 };
 
 declare type RelatedProps<T extends GenericProperties, K extends keyof T> = T[K] extends CollectionProperty<infer P> ? P : T[K] extends LookupProperty<infer P> ? P : never;
-
-export declare function required(): (v: any) => "Required" | undefined;
 
 /**
  * Retrieves the roles assigned to a user in Azure Active Directory (AAD).
@@ -2004,147 +1942,6 @@ export declare function RetrieveChoices(client: DataverseClient, name: string): 
  */
 export declare function RetrieveTotalRecordCount(client: DataverseClient, logicalName: string): Promise<number>;
 
-/**
- * Base class for all Dataverse schema properties. Implements the StandardSchemaV1 interface
- * for validation and transformation.
- *
- * @template T The TypeScript type of the property's value (e.g. `string`, `number`, `Date`).
- *
- * @example
- * // Custom string property with a regex validator
- * class SSNField extends Schema<string> {
- *   constructor(name: string) {
- *     super(name, "");
- *     this.check((v) => /^\d{3}-\d{2}-\d{4}$/.test(v) ? undefined : "Invalid SSN");
- *   }
- * }
- */
-export declare class Schema<T> implements StandardSchemaV1<T> {
-    #private;
-    name: string;
-    toDataverseName: string;
-    fromDataverseName: string;
-    kind: string;
-    type: string;
-    /**
-     * @param name The Dataverse logical name of the column/attribute.
-     * @param defaultValue The default value used when no value is provided.
-     */
-    constructor(name: string, defaultValue: T);
-    /**
-     * Overrides the default value for this property.
-     *
-     * @example
-     * const field = new StringField("firstname").setDefault("John");
-     * field.getDefault(); // "John"
-     */
-    setDefault(value: T): this;
-    /**
-     * Returns the default value for this property.
-     */
-    getDefault(): T;
-    /**
-     * Marks this property as read-only. Read-only properties are excluded
-     * when transforming data for Dataverse (e.g. they won't be sent in create/update).
-     *
-     * @param value Whether the property should be read-only. Defaults to `true`.
-     *
-     * @example
-     * const field = new StringField("createdby").setReadOnly(true);
-     * field.getReadOnly(); // true
-     */
-    setReadOnly(value?: boolean): this;
-    /**
-     * Returns whether this property is read-only.
-     */
-    getReadOnly(): boolean;
-    /**
-     * Adds a validation function to this property. Validators run during
-     * {@link validate} and {@link parse}. A validator returns `undefined` if valid,
-     * or an error message string if invalid.
-     *
-     * @example
-     * const field = new StringField("zip").check((v) =>
-     *   /^\d{5}(-\d{4})?$/.test(v) ? undefined : "Invalid ZIP code"
-     * );
-     * field.parse("12345"); // ok
-     * field.parse("abc");   // throws
-     */
-    check(v: Validator<T>): this;
-    /**
-     * Adds a "required" validator that rejects `null` or `undefined` values.
-     *
-     * @example
-     * const field = new StringField("email").required();
-     * field.validate(null);  // { issues: [{ message: "Required" }] }
-     * field.validate("a@b"); // { value: "a@b" }
-     */
-    required(): this;
-    /**
-     * Transforms a raw value from Dataverse into the property's TypeScript type.
-     * Override this in subclasses for custom deserialization (e.g. string → Date).
-     *
-     * @param value The raw value from the Dataverse API.
-     * @returns The typed value.
-     *
-     * @example
-     * // A custom date-only field
-     * class DateOnlyField extends Schema<Date> {
-     *   transformValueFromDataverse(value: any): Date {
-     *     return new Date(value + "T00:00:00Z");
-     *   }
-     * }
-     */
-    transformValueFromDataverse(value: any): T;
-    /**
-     * Transforms the property's value into a format suitable for Dataverse.
-     * Override this in subclasses for custom serialization (e.g. Date → string).
-     *
-     * @param value The property value to send to Dataverse.
-     * @returns The serialized value.
-     *
-     * @example
-     * class DateOnlyField extends Schema<Date> {
-     *   transformValueToDataverse(value: Date): string {
-     *     return value.toISOString().slice(0, 10);
-     *   }
-     * }
-     */
-    transformValueToDataverse(value: any): any;
-    getIssues(value: unknown, path?: PropertyKey[]): StandardSchemaV1.Issue[];
-    /**
-     * Validates a value against this property's validators. Returns either
-     * `{ value }` on success or `{ issues }` on failure.
-     *
-     * @example
-     * const field = new StringField("email").required();
-     * field.validate("test@example.com"); // { value: "test@example.com" }
-     * field.validate(null);               // { issues: [{ message: "Required", path: [] }] }
-     */
-    validate(value: unknown, path?: PropertyKey[]): StandardSchemaV1.Result<T>;
-    /**
-     * Validates a value and returns it if valid, or throws if invalid.
-     * This is a convenience wrapper around {@link validate}.
-     *
-     * @throws {Error} If validation fails, the error message contains the JSON-serialized issues.
-     *
-     * @example
-     * const field = new StringField("age").check((v) =>
-     *   Number(v) >= 0 ? undefined : "Must be non-negative"
-     * );
-     * field.parse("25");  // "25"
-     * field.parse("-1");  // throws Error("[{\"message\":\"Must be non-negative\",\"path\":[]}]")
-     */
-    parse(value: unknown): T;
-    /**
-     * Provides access to the standard schema properties for this property.
-     * This is a computed property.
-     *
-     * @returns An object containing the standard schema properties, including version, vendor, and a validation function.
-     */
-    get ["~standard"](): StandardSchemaV1.Props<T>;
-}
-
 export declare function select(...values: (Name)[]): string;
 
 export declare interface SelectQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
@@ -2165,6 +1962,8 @@ declare type Simplify<T> = {
     [Key in keyof T]: T[Key];
 } & {};
 
+export declare const SKIP: unique symbol;
+
 export declare function startsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
 
 /**
@@ -2178,12 +1977,12 @@ export declare function startsWith<T extends string | null>(field: FieldRef<T>, 
  * });
  * // Infer<typeof table>["name"] → string
  */
-export declare function string(name: string): StringField;
+export declare function string(name: string, options?: FieldOptions<string>): StringField;
 
-export declare class StringField extends Schema<string> {
+export declare class StringField extends FieldBase<string> {
     kind: "value";
     type: "string";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<string>);
     transformValueFromDataverse(value: any): string;
 }
 
@@ -2192,8 +1991,10 @@ declare type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult e
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
-    intersect<T2 extends GenericProperties>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    intersect<T1 extends GenericProperties>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubAggregateJoinBuilder<T1>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
     toXml(): string;
@@ -2207,8 +2008,10 @@ declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Re
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult, TSelected>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubJoinBuilder<TProps, TResult, TSelected>;
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
-    intersect<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
-    intersect<T1 extends GenericProperties, TJoinResult extends Record<string, any>>(intersectTable: DataverseIntersectTable<T1, TProps>, subquery: (q: SubJoinBuilder<T1, {}>) => SubJoinBuilder<T1, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): SubJoinBuilder<TProps, TResult, TSelected>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
+    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): SubJoinBuilder<TProps, TResult, TSelected>;
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>;
     toXml(): string;
@@ -2248,13 +2051,17 @@ export declare function Today(field: FieldRef<any>): FilterExpr;
 
 export declare function Tomorrow(field: FieldRef<any>): FilterExpr;
 
-export declare type Types = "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function";
+export declare type TransformContext = {
+    table: DataverseTable<any>;
+    client: DataverseClient;
+    recordId: string;
+};
 
 export declare function Under(field: FieldRef<any>, value: string): FilterExpr;
 
 export declare function UnderOrEqual(field: FieldRef<any>, value: string): FilterExpr;
 
-export declare type Validator<T> = (value: T) => void | undefined | string;
+export declare type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>;
 
 declare type ValueKeys<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends {
