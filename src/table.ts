@@ -223,66 +223,33 @@ export class DataverseTable<TProperties extends GenericProperties> {
     value: Infer<TProperties[TKey]>,
   ): Promise<GUID> {
     const prop = this.fields[key];
-    if (prop.kind === "navigation") {
-      await this.updateNavigationProperty(prop, id, value);
+    const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
+
+    if (prop.type === "lookupId") {
+      const name = (prop as any).navigationName as string;
+      if (value === null) {
+        await this.client.dissociateRecord(this.entitySetName, id, name);
+      } else {
+        await this.client.associateRecord(
+          this.entitySetName, id, name,
+          prop.table.entitySetName, value as GUID,
+        );
+      }
+    } else if (prop.kind === "navigation" && prop.afterSave) {
+      await prop.afterSave(ctx, value);
     } else {
-        const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
-        let v = (prop as FieldBase<any>).transformValueToDataverse(value as any, ctx);
-        if (v instanceof Promise) v = await v;
-        if (v !== SKIP) {
-          await this.client.updatePropertyValue(
-            this.entitySetName,
-            id,
-            this.fields[key].name,
-            v,
-          );
-        }
+      let v = (prop as FieldBase<any>).transformValueToDataverse(value as any, ctx);
+      if (v instanceof Promise) v = await v;
+      if (v !== SKIP) {
+        await this.client.updatePropertyValue(
+          this.entitySetName,
+          id,
+          this.fields[key].name,
+          v,
+        );
+      }
     }
     return id as GUID;
-  }
-
-  protected async updateNavigationProperty(
-    property: GenericNavigationProperty,
-    id: DataverseKey,
-    value: any,
-  ) {
-    if (property.type === "collection" || property.type === "collectionIds") {
-      if (Array.isArray(value)) {
-        const ids =
-          property.type === "collection"
-            ? await Promise.all(
-                value.map((v: any) => property.table.upsertRecord(undefined, v)),
-              )
-            : (value as GUID[]);
-        return this.client.associateRecordToList(
-          this.entitySetName,
-          id,
-          property.name,
-          property.table.entitySetName,
-          property.table.primaryKey.property.name,
-          ids,
-        );
-      }
-    }
-    if (property.type === "lookup" || property.type == "lookupId") {
-      const name =
-        property.type === "lookup" ? property.name : property.navigationName;
-      if (value === null) {
-        return this.client.dissociateRecord(this.entitySetName, id, name);
-      } else {
-        const childId =
-          property.type === "lookup"
-            ? await property.table.upsertRecord(undefined, value)
-            : (value as GUID);
-        return this.client.associateRecord(
-          this.entitySetName,
-          id,
-          name,
-          property.table.entitySetName,
-          childId,
-        );
-      }
-    }
   }
 
   /**
@@ -404,20 +371,18 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
   async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
-    const promises: Promise<any>[] = [];
     const pkName = this.primaryKey.property.name;
+    const ctx: TransformContext = { table: this as any, client: this.client, recordId: "" };
 
     if (id) {
-      const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
+      ctx.recordId = id as string;
       const transformed = await this.transformValueToDataverse(value, ctx);
-      promises.push(
-        this.client.patchRecord(
-          this.entitySetName,
-          id,
-          transformed,
-          queryString({ select: pkName }),
-          etag,
-        ),
+      await this.client.patchRecord(
+        this.entitySetName,
+        id,
+        transformed,
+        queryString({ select: pkName }),
+        etag,
       );
     } else {
       const record = await this.client.postRecord(
@@ -426,23 +391,10 @@ export class DataverseTable<TProperties extends GenericProperties> {
         queryString({ select: pkName }),
       );
       id = record[pkName] as GUID;
-      const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
-      await this._afterSave(ctx, value);
+      ctx.recordId = id;
     }
 
-    for (const [key, property] of Object.entries(this.fields)) {
-      if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "navigation" && property.type !== "lookupId") {
-        promises.push(
-          this.updateNavigationProperty(
-            property,
-            id,
-            value[key as keyof typeof value],
-          ),
-        );
-      }
-    }
-    await Promise.all(promises);
+    await this._afterSave(ctx, value);
     return id as GUID;
   }
 
@@ -705,11 +657,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
   }
 
   private async _afterSave(ctx: TransformContext, value: Partial<Infer<TProperties>>): Promise<void> {
+    const promises: Promise<void>[] = [];
     for (const [key, property] of Object.entries(this.fields)) {
-      if (property.afterSave) {
-        await property.afterSave(ctx, (value as any)[key]);
+      if (key in value && property.afterSave) {
+        promises.push(property.afterSave(ctx, (value as any)[key]));
       }
     }
+    await Promise.all(promises);
   }
 
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */

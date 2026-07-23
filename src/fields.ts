@@ -635,6 +635,21 @@ export class CollectionProperty<
   transformValueToDataverse(): typeof SKIP {
     return SKIP;
   }
+
+  async afterSave(ctx: TransformContext, value: any): Promise<void> {
+    if (!Array.isArray(value)) return;
+    const ids = await Promise.all(
+      value.map((v: any) => this.table.upsertRecord(undefined, v)),
+    );
+    await ctx.client.associateRecordToList(
+      ctx.table.entitySetName,
+      ctx.recordId,
+      this.name,
+      this.table.entitySetName,
+      this.table.primaryKey.property.name,
+      ids,
+    );
+  }
 }
 
 /**
@@ -688,6 +703,18 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
 
   transformValueToDataverse(): typeof SKIP {
     return SKIP;
+  }
+
+  async afterSave(ctx: TransformContext, value: any): Promise<void> {
+    if (!Array.isArray(value)) return;
+    await ctx.client.associateRecordToList(
+      ctx.table.entitySetName,
+      ctx.recordId,
+      this.name,
+      this.table.entitySetName,
+      this.table.primaryKey.property.name,
+      value as GUID[],
+    );
   }
 }
 
@@ -755,6 +782,18 @@ export class LookupProperty<
 
   transformValueToDataverse(): typeof SKIP {
     return SKIP;
+  }
+
+  async afterSave(ctx: TransformContext, value: any): Promise<void> {
+    if (value === null) {
+      await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.name);
+    } else {
+      const childId = await this.table.upsertRecord(undefined, value);
+      await ctx.client.associateRecord(
+        ctx.table.entitySetName, ctx.recordId, this.name,
+        this.table.entitySetName, childId,
+      );
+    }
   }
 }
 
