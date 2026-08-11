@@ -732,6 +732,102 @@ test("execute transforms datetime fields", async () => {
   expect(results[0].createdOn?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
 })
 
+test("iterate yields transformed records like execute", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          active: true,
+          createdon: "2024-06-15T12:00:00Z",
+        }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    ),
+    http.get(`https://nextlink-contoso.com/api/data/v9.2/accounts`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-2",
+          fullname: "Jane",
+          person_age: 25,
+          active: false,
+          createdon: "2024-06-16T12:00:00Z",
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person).select("name", "age", "active", "createdOn")
+  const records: any[] = []
+  for await (const record of q.iterate()) {
+    records.push(record)
+  }
+  expect(records).toHaveLength(2)
+  expect(records[0].name).toBe("John")
+  expect(records[0].createdOn).toBeInstanceOf(Date)
+  expect(records[1].name).toBe("Jane")
+  expect(records[1].createdOn).toBeInstanceOf(Date)
+})
+
+test("iteratePages yields transformed pages", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-1",
+          fullname: "John",
+          person_age: 30,
+          active: true,
+          createdon: "2024-06-15T12:00:00Z",
+        }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    ),
+    http.get(`https://nextlink-contoso.com/api/data/v9.2/accounts`, () =>
+      HttpResponse.json({
+        value: [{
+          personid: "id-2",
+          fullname: "Jane",
+          person_age: 25,
+          active: false,
+          createdon: "2024-06-16T12:00:00Z",
+        }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person).select("name", "age", "active", "createdOn")
+  const pages: any[] = []
+  for await (const page of q.iteratePages()) {
+    pages.push(page)
+  }
+  expect(pages).toHaveLength(2)
+  expect(pages[0]).toHaveLength(1)
+  expect(pages[0][0].name).toBe("John")
+  expect(pages[0][0].createdOn).toBeInstanceOf(Date)
+  expect(pages[1][0].name).toBe("Jane")
+})
+
+test("iterate on apply query yields records", async () => {
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/people`, () =>
+      HttpResponse.json({
+        value: [{ total: 3 }],
+      })
+    ),
+  )
+  const q = fetchOdata(Person).apply(f => ({ total: count() }))
+  const records: any[] = []
+  for await (const record of q.iterate()) {
+    records.push(record)
+  }
+  expect(records).toHaveLength(1)
+  expect(records[0]).toMatchObject({ total: 3 })
+})
+
 // --- apply excludes select, orderby, expand from query string ---
 
 test("apply excludes select, expand from query string", () => {

@@ -209,6 +209,8 @@ export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult e
     toXml(): string
     toString(): string
     execute(options?: ExecuteOptions): Promise<TResult[]>
+    iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult>
+    iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult[]>
 }
 
 // --- Initial entry point interface (forces select or apply first) ---
@@ -263,6 +265,8 @@ export interface FetchXmlInitial<TProps extends GenericProperties> {
     toXml(): string
     toString(): string
     execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>
+    iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>>
+    iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>[]>
 }
 
 export class FilterCollector<TProps extends GenericProperties = any> {
@@ -539,32 +543,56 @@ export class FetchXmlAggregateQuery<
         return `fetchXml=${encodeURIComponent(this.toXml())}`;
     }
 
-    public async execute(options?: ExecuteOptions): Promise<TResult[]> {
+    protected _applyExecuteOptions(options?: ExecuteOptions): void {
         if (options?.datasource) this._datasource = options.datasource;
         if (options?.lateMaterialize) this._lateMaterialize = true;
         if (options?.aggregateLimit !== undefined) this._aggregateLimit = options.aggregateLimit;
         if (options?.useRawOrderBy) this._useRawOrderBy = true;
         if (options?.options) this._options = options.options;
-        const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+    }
+
+    private _transformRow(v: any): TResult {
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
-            return raw.map((v: any) => {
-                const result: Record<string | symbol, any> = {};
-                for (const [alias, info] of aliasInfo) {
-                    if (info.name in v) {
-                        result[alias] = info.transform(v[info.name]);
-                    } else {
-                        result[alias] = info.getDefault();
-                    }
+            const result: Record<string | symbol, any> = {};
+            for (const [alias, info] of aliasInfo) {
+                if (info.name in v) {
+                    result[alias] = info.transform(v[info.name]);
+                } else {
+                    result[alias] = info.getDefault();
                 }
-                result[Etag] = v["@odata.etag"];
-                return result as TResult;
-            });
+            }
+            result[Etag] = v["@odata.etag"];
+            return result as TResult;
         }
-        return raw.map((v: any) => {
-            const r = this._table.transformValueFromDataverse(v);
-            return r;
-        }) as TResult[];
+        return this._table.transformValueFromDataverse(v) as TResult;
+    }
+
+    public async execute(options?: ExecuteOptions): Promise<TResult[]> {
+        this._applyExecuteOptions(options);
+        const results: TResult[] = [];
+        for await (const page of this.iteratePages(options)) {
+            results.push(...page);
+        }
+        return results;
+    }
+
+    public async *iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult> {
+        this._applyExecuteOptions(options);
+        for await (const page of this.iteratePages(options)) {
+            yield* page;
+        }
+    }
+
+    public async *iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult[]> {
+        this._applyExecuteOptions(options);
+        for await (const page of this._table.client.iteratePages(
+            this._table.entitySetName,
+            this.toString(),
+            options,
+        )) {
+            yield page.map((v: any) => this._transformRow(v));
+        }
     }
 
     private _buildAliasInfo(): Map<string, AliasInfo> {
@@ -1110,32 +1138,56 @@ export class EntityQueryBuilder<
         return `fetchXml=${encodeURIComponent(this.toXml())}`;
     }
 
-    public async execute(options?: ExecuteOptions): Promise<TResult[]> {
+    protected _applyExecuteOptions(options?: ExecuteOptions): void {
         if (options?.datasource) this._datasource = options.datasource;
         if (options?.lateMaterialize) this._lateMaterialize = true;
         if (options?.aggregateLimit !== undefined) this._aggregateLimit = options.aggregateLimit;
         if (options?.useRawOrderBy) this._useRawOrderBy = true;
         if (options?.options) this._options = options.options;
-        const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+    }
+
+    private _transformRow(v: any): TResult {
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
-            return raw.map((v: any) => {
-                const result: Record<string | symbol, any> = {};
-                for (const [alias, info] of aliasInfo) {
-                    if (info.name in v) {
-                        result[alias] = info.transform(v[info.name]);
-                    } else {
-                        result[alias] = info.getDefault();
-                    }
+            const result: Record<string | symbol, any> = {};
+            for (const [alias, info] of aliasInfo) {
+                if (info.name in v) {
+                    result[alias] = info.transform(v[info.name]);
+                } else {
+                    result[alias] = info.getDefault();
                 }
-                result[Etag] = v["@odata.etag"];
-                return result as TResult;
-            });
+            }
+            result[Etag] = v["@odata.etag"];
+            return result as TResult;
         }
-        return raw.map((v: any) => {
-            const r = this._table.transformValueFromDataverse(v);
-            return r;
-        }) as TResult[];
+        return this._table.transformValueFromDataverse(v) as TResult;
+    }
+
+    public async execute(options?: ExecuteOptions): Promise<TResult[]> {
+        this._applyExecuteOptions(options);
+        const results: TResult[] = [];
+        for await (const page of this.iteratePages(options)) {
+            results.push(...page);
+        }
+        return results;
+    }
+
+    public async *iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult> {
+        this._applyExecuteOptions(options);
+        for await (const page of this.iteratePages(options)) {
+            yield* page;
+        }
+    }
+
+    public async *iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult[]> {
+        this._applyExecuteOptions(options);
+        for await (const page of this._table.client.iteratePages(
+            this._table.entitySetName,
+            this.toString(),
+            options,
+        )) {
+            yield page.map((v: any) => this._transformRow(v));
+        }
     }
 
     private _buildAliasInfo(): Map<string, AliasInfo> {
@@ -1247,5 +1299,13 @@ class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlI
 
     async execute(options?: ExecuteOptions): Promise<Infer<TProps>[]> {
         return this.#builder.execute(options)
+    }
+
+    async *iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>> {
+        yield* this.#builder.iterate(options)
+    }
+
+    async *iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>[]> {
+        yield* this.#builder.iteratePages(options)
     }
 }

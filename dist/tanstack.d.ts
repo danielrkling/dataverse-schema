@@ -90,7 +90,7 @@ declare class DataverseClient {
         raw?: boolean;
     }): Promise<any>;
     private _resolvePrefer;
-    private _getNextLink;
+    private _iteratePages;
     /**
      * Retrieves a single record by ID.
      *
@@ -107,6 +107,41 @@ declare class DataverseClient {
      *   "$select=name,revenue&$filter=revenue gt 10000")
      */
     getRecords(entitySetName: Name, query?: string): Promise<any[]>;
+    /**
+     * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+     * Records within a page are yielded synchronously once the page arrives; only page
+     * boundaries trigger HTTP requests. A `break` stops further requests.
+     *
+     * @param entitySetName The entity set to query (e.g. `"accounts"`).
+     * @param query OData query string (e.g. `"$select=name&$top=10"`).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const account of client.iterateRecords("accounts", "$select=name", { pageSize: 100 })) {
+     *   console.log(account.name);
+     * }
+     */
+    iterateRecords(entitySetName: Name, query?: string, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<any>;
+    /**
+     * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+     * The next page is only fetched when the consumer requests it, so `break`
+     * stops further requests. Prefer this over {@link iterateRecords} when you
+     * want to iterate a page's array synchronously.
+     *
+     * @param entitySetName The entity set to query (e.g. `"accounts"`).
+     * @param query OData query string (e.g. `"$select=name&$top=10"`).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const page of client.iteratePages("accounts", "$select=name", { pageSize: 100 })) {
+     *   for (const account of page) console.log(account.name);
+     * }
+     */
+    iteratePages(entitySetName: Name, query?: string, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<any[]>;
     /**
      * Creates a record and returns its full representation.
      *
@@ -534,6 +569,41 @@ declare class DataverseTable<TProperties extends GenericProperties> {
      * });
      */
     getRecords(queryOptions?: QueryForTable<TProperties>): Promise<Infer<TProperties>[]>;
+    /**
+     * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+     * Each record is transformed like {@link getRecords}. Records within a page are
+     * yielded synchronously once the page arrives; only page boundaries trigger HTTP
+     * requests. A `break` stops further requests.
+     *
+     * @param queryOptions Optional query parameters (filter, orderby, top).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const account of Account.iterateRecords({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+     *   console.log(account.name);
+     * }
+     */
+    iterateRecords(queryOptions?: QueryForTable<TProperties>, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<Infer<TProperties>>;
+    /**
+     * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+     * Each yielded page is transformed like {@link getRecords}. The next page is
+     * only fetched when the consumer requests it, so `break` stops further requests.
+     * Prefer this over {@link iterateRecords} when you want to iterate a page's
+     * array synchronously.
+     *
+     * @param queryOptions Optional query parameters (filter, orderby, top).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const page of Account.iteratePages({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+     *   for (const account of page) console.log(account.name);
+     * }
+     */
+    iteratePages(queryOptions?: QueryForTable<TProperties>, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<Infer<TProperties>[]>;
     /**
      * Retrieves the value of a single property for a record by ID.
      * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.

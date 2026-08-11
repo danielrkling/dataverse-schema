@@ -41,6 +41,12 @@ export declare interface ApplyQuery<T extends GenericProperties, TResult extends
     top(n: number): ApplyQuery<T, TResult>;
     toString(): string;
     execute(): Promise<TResult[]>;
+    iterate(options?: {
+        pageSize?: number;
+    }): AsyncGenerator<TResult>;
+    iteratePages(options?: {
+        pageSize?: number;
+    }): AsyncGenerator<TResult[]>;
 }
 
 declare type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
@@ -251,7 +257,7 @@ export declare class DataverseClient {
         raw?: boolean;
     }): Promise<any>;
     private _resolvePrefer;
-    private _getNextLink;
+    private _iteratePages;
     /**
      * Retrieves a single record by ID.
      *
@@ -268,6 +274,41 @@ export declare class DataverseClient {
      *   "$select=name,revenue&$filter=revenue gt 10000")
      */
     getRecords(entitySetName: Name, query?: string): Promise<any[]>;
+    /**
+     * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+     * Records within a page are yielded synchronously once the page arrives; only page
+     * boundaries trigger HTTP requests. A `break` stops further requests.
+     *
+     * @param entitySetName The entity set to query (e.g. `"accounts"`).
+     * @param query OData query string (e.g. `"$select=name&$top=10"`).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const account of client.iterateRecords("accounts", "$select=name", { pageSize: 100 })) {
+     *   console.log(account.name);
+     * }
+     */
+    iterateRecords(entitySetName: Name, query?: string, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<any>;
+    /**
+     * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+     * The next page is only fetched when the consumer requests it, so `break`
+     * stops further requests. Prefer this over {@link iterateRecords} when you
+     * want to iterate a page's array synchronously.
+     *
+     * @param entitySetName The entity set to query (e.g. `"accounts"`).
+     * @param query OData query string (e.g. `"$select=name&$top=10"`).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const page of client.iteratePages("accounts", "$select=name", { pageSize: 100 })) {
+     *   for (const account of page) console.log(account.name);
+     * }
+     */
+    iteratePages(entitySetName: Name, query?: string, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<any[]>;
     /**
      * Creates a record and returns its full representation.
      *
@@ -694,6 +735,41 @@ export declare class DataverseTable<TProperties extends GenericProperties> {
      */
     getRecords(queryOptions?: QueryForTable<TProperties>): Promise<Infer<TProperties>[]>;
     /**
+     * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+     * Each record is transformed like {@link getRecords}. Records within a page are
+     * yielded synchronously once the page arrives; only page boundaries trigger HTTP
+     * requests. A `break` stops further requests.
+     *
+     * @param queryOptions Optional query parameters (filter, orderby, top).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const account of Account.iterateRecords({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+     *   console.log(account.name);
+     * }
+     */
+    iterateRecords(queryOptions?: QueryForTable<TProperties>, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<Infer<TProperties>>;
+    /**
+     * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+     * Each yielded page is transformed like {@link getRecords}. The next page is
+     * only fetched when the consumer requests it, so `break` stops further requests.
+     * Prefer this over {@link iterateRecords} when you want to iterate a page's
+     * array synchronously.
+     *
+     * @param queryOptions Optional query parameters (filter, orderby, top).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const page of Account.iteratePages({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+     *   for (const account of page) console.log(account.name);
+     * }
+     */
+    iteratePages(queryOptions?: QueryForTable<TProperties>, options?: {
+        pageSize?: number;
+    }): AsyncGenerator<Infer<TProperties>[]>;
+    /**
      * Retrieves the value of a single property for a record by ID.
      * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
      *
@@ -1017,7 +1093,15 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean;
     private _renderLinkEntity;
     toString(): string;
+    protected _applyExecuteOptions(options?: ExecuteOptions): void;
+    private _transformRow;
     execute(options?: ExecuteOptions): Promise<TResult[]>;
+    iterate(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<TResult>;
+    iteratePages(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<TResult[]>;
     private _buildAliasInfo;
     private _collectAliases;
 }
@@ -1096,7 +1180,15 @@ export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TR
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
     toXml(): string;
     toString(): string;
+    protected _applyExecuteOptions(options?: ExecuteOptions): void;
+    private _transformRow;
     execute(options?: ExecuteOptions): Promise<TResult[]>;
+    iterate(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<TResult>;
+    iteratePages(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<TResult[]>;
     private _buildAliasInfo;
     private _collectAliases;
     private static _isFilterOnlyLinkType;
@@ -1124,6 +1216,12 @@ export declare interface FetchXmlInitial<TProps extends GenericProperties> {
     toXml(): string;
     toString(): string;
     execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>;
+    iterate(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<Infer<TProps>>;
+    iteratePages(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<Infer<TProps>[]>;
 }
 
 export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
@@ -1144,6 +1242,12 @@ export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, T
     toXml(): string;
     toString(): string;
     execute(options?: ExecuteOptions): Promise<TResult[]>;
+    iterate(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<TResult>;
+    iteratePages(options?: ExecuteOptions & {
+        pageSize?: number;
+    }): AsyncGenerator<TResult[]>;
 }
 
 export declare abstract class FieldBase<T> {
@@ -1812,7 +1916,14 @@ export declare class ODataApplyQuery<T extends GenericProperties, TResult extend
     top(n: number): this;
     private _build;
     toString(): string;
+    private _transformRow;
     execute(): Promise<TResult[]>;
+    iterate(options?: {
+        pageSize?: number;
+    }): AsyncGenerator<TResult>;
+    iteratePages(options?: {
+        pageSize?: number;
+    }): AsyncGenerator<TResult[]>;
 }
 
 declare type ODataCollectionNavProxy<P extends GenericProperties> = {
@@ -1959,6 +2070,12 @@ export declare interface SelectQuery<TAll extends GenericProperties, TChosen ext
     top(n: number): SelectQuery<TAll, TChosen, TResult>;
     toString(): string;
     execute(): Promise<TResult[]>;
+    iterate(options?: {
+        pageSize?: number;
+    }): AsyncGenerator<TResult>;
+    iteratePages(options?: {
+        pageSize?: number;
+    }): AsyncGenerator<TResult[]>;
 }
 
 declare type Simplify<T> = {

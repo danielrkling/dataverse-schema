@@ -669,6 +669,76 @@ test("execute transforms date fields via alias map", async () => {
   expect(results[0].date?.toISOString()).toBe("2024-06-15T12:00:00.000Z")
 })
 
+test("iterate yields records transformed via alias map", async () => {
+  const Log = new DataverseTable({
+    client, entitySetName: "logs", logicalName: "log",
+    fields: {
+      id: primaryKey("logid"),
+      message: string("log_message"),
+      entryDate: datetime("log_entrydate"),
+    },
+  })
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/logs`, () =>
+      HttpResponse.json({
+        value: [{ logid: "id-1", log_message: "Test entry", log_entrydate: "2024-06-15T12:00:00Z" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    ),
+    http.get(`https://nextlink-contoso.com/api/data/v9.2/accounts`, () =>
+      HttpResponse.json({
+        value: [{ logid: "id-2", log_message: "Second entry", log_entrydate: "2024-06-16T12:00:00Z" }],
+      })
+    ),
+  )
+  const q = fetchXml(Log).select(f => ({ msg: f.message, date: f.entryDate }))
+  const records: any[] = []
+  for await (const record of q.iterate()) {
+    records.push(record)
+  }
+  expect(records).toHaveLength(2)
+  expect(records[0].msg).toBe("Test entry")
+  expect(records[0].date).toBeInstanceOf(Date)
+  expect(records[1].msg).toBe("Second entry")
+  expect(records[1].date).toBeInstanceOf(Date)
+})
+
+test("iteratePages yields pages transformed via alias map", async () => {
+  const Log = new DataverseTable({
+    client, entitySetName: "logs", logicalName: "log",
+    fields: {
+      id: primaryKey("logid"),
+      message: string("log_message"),
+      entryDate: datetime("log_entrydate"),
+    },
+  })
+  const API = `${BASE_URL}/api/data/v9.2`
+  server.use(
+    http.get(`${API}/logs`, () =>
+      HttpResponse.json({
+        value: [{ logid: "id-1", log_message: "Test entry", log_entrydate: "2024-06-15T12:00:00Z" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    ),
+    http.get(`https://nextlink-contoso.com/api/data/v9.2/accounts`, () =>
+      HttpResponse.json({
+        value: [{ logid: "id-2", log_message: "Second entry", log_entrydate: "2024-06-16T12:00:00Z" }],
+      })
+    ),
+  )
+  const q = fetchXml(Log).select(f => ({ msg: f.message, date: f.entryDate }))
+  const pages: any[] = []
+  for await (const page of q.iteratePages()) {
+    pages.push(page)
+  }
+  expect(pages).toHaveLength(2)
+  expect(pages[0]).toHaveLength(1)
+  expect(pages[0][0].msg).toBe("Test entry")
+  expect(pages[0][0].date).toBeInstanceOf(Date)
+  expect(pages[1][0].msg).toBe("Second entry")
+})
+
 test("execute transforms joined date fields via alias map", async () => {
   const Order = new DataverseTable({
     client, entitySetName: "orders", logicalName: "order",

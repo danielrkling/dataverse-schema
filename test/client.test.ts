@@ -51,6 +51,127 @@ test("getRecords follows @odata.nextLink", async () => {
   expect(results[1].name).toBe("Paginated Record")
 })
 
+test("iterateRecords yields records following @odata.nextLink", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, () => {
+      return HttpResponse.json({
+        value: [{ accountid: "first-id", name: "First" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    }),
+  )
+  const records: any[] = []
+  for await (const record of client.iterateRecords("accounts")) {
+    records.push(record)
+  }
+  expect(records).toHaveLength(2)
+  expect(records[0]).toEqual({ accountid: "first-id", name: "First" })
+  expect(records[1]).toEqual({ accountid: "paginated-id", name: "Paginated Record" })
+})
+
+test("iteratePages yields pages following @odata.nextLink", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, () => {
+      return HttpResponse.json({
+        value: [{ accountid: "first-id", name: "First" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    }),
+  )
+  const pages: any[] = []
+  for await (const page of client.iteratePages("accounts")) {
+    pages.push(page)
+  }
+  expect(pages).toHaveLength(2)
+  expect(pages[0]).toEqual([{ accountid: "first-id", name: "First" }])
+  expect(pages[1]).toEqual([{ accountid: "paginated-id", name: "Paginated Record" }])
+})
+
+test("iterateRecords only fetches the next page after the boundary is crossed", async () => {
+  let accountCalls = 0
+  let nextLinkCalls = 0
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, () => {
+      accountCalls++
+      return HttpResponse.json({
+        value: [{ accountid: "first-id", name: "First" }, { accountid: "second-id", name: "Second" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    }),
+    http.get(`https://nextlink-contoso.com/api/data/v9.2/accounts`, () => {
+      nextLinkCalls++
+      return HttpResponse.json({ value: [{ accountid: "paginated-id", name: "Paginated Record" }] })
+    }),
+  )
+  const iterator = client.iterateRecords("accounts")[Symbol.asyncIterator]()
+  const first = await iterator.next()
+  expect(first.value).toEqual({ accountid: "first-id", name: "First" })
+  expect(accountCalls).toBe(1)
+  expect(nextLinkCalls).toBe(0)
+  const second = await iterator.next()
+  expect(second.value).toEqual({ accountid: "second-id", name: "Second" })
+  expect(accountCalls).toBe(1)
+  expect(nextLinkCalls).toBe(0)
+  const third = await iterator.next()
+  expect(third.value).toEqual({ accountid: "paginated-id", name: "Paginated Record" })
+  expect(accountCalls).toBe(1)
+  expect(nextLinkCalls).toBe(1)
+})
+
+test("iterateRecords is lazy and stops fetching after break", async () => {
+  let accountCalls = 0
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, () => {
+      accountCalls++
+      return HttpResponse.json({
+        value: [{ accountid: "first-id", name: "First" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    }),
+  )
+  let count = 0
+  for await (const record of client.iterateRecords("accounts")) {
+    count++
+    break
+  }
+  expect(count).toBe(1)
+  expect(accountCalls).toBe(1)
+})
+
+test("iterateRecords sends odata.maxpagesize Prefer header", async () => {
+  let capturedPrefer = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [{ accountid: "id-1", name: "First" }] })
+    }),
+  )
+  const records: any[] = []
+  for await (const record of client.iterateRecords("accounts", "$select=name", { pageSize: 100 })) {
+    records.push(record)
+  }
+  expect(capturedPrefer).toBe("odata.maxpagesize=100")
+  expect(records).toHaveLength(1)
+  expect(records[0].name).toBe("First")
+})
+
+test("iterateRecords preserves configured Prefer values when paging", async () => {
+  const pagingClient = new DataverseClient({ url: BASE_URL, prefer: [{ annotations: "*" }] })
+  let capturedPrefer = ""
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedPrefer = request.headers.get("Prefer") ?? ""
+      return HttpResponse.json({ value: [{ accountid: "id-1", name: "First" }] })
+    }),
+  )
+  const records: any[] = []
+  for await (const record of pagingClient.iterateRecords("accounts", "", { pageSize: 50 })) {
+    records.push(record)
+  }
+  expect(records).toHaveLength(1)
+  expect(capturedPrefer).toBe('odata.include-annotations="*",odata.maxpagesize=50')
+})
+
 test.skip("postRecord creates a record and returns it with Prefer header", async () => {
   const result = await client.postRecord("accounts", { name: "New Corp" })
   expect(result.accountid).toBeDefined()

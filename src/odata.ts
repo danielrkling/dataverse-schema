@@ -79,6 +79,8 @@ export interface ApplyQuery<T extends GenericProperties, TResult extends Record<
   top(n: number): ApplyQuery<T, TResult>
   toString(): string
   execute(): Promise<TResult[]>
+  iterate(options?: { pageSize?: number }): AsyncGenerator<TResult>
+  iteratePages(options?: { pageSize?: number }): AsyncGenerator<TResult[]>
 }
 
 // --- State-machine interfaces ---
@@ -109,6 +111,8 @@ export interface SelectQuery<TAll extends GenericProperties, TChosen extends Rec
   top(n: number): SelectQuery<TAll, TChosen, TResult>
   toString(): string
   execute(): Promise<TResult[]>
+  iterate(options?: { pageSize?: number }): AsyncGenerator<TResult>
+  iteratePages(options?: { pageSize?: number }): AsyncGenerator<TResult[]>
 }
 
 export interface CollectionSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
@@ -216,15 +220,33 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
     return this._build()
   }
 
+  private _transformRow(v: any): TResult {
+    const r = { ...v }
+    r[Etag] = v["@odata.etag"]
+    delete r["@odata.etag"]
+    return r as TResult
+  }
+
   async execute(): Promise<TResult[]> {
+    const results: TResult[] = []
+    for await (const page of this.iteratePages()) {
+      results.push(...page)
+    }
+    return results
+  }
+
+  async *iterate(options?: { pageSize?: number }): AsyncGenerator<TResult> {
+    for await (const page of this.iteratePages(options)) {
+      yield* page
+    }
+  }
+
+  async *iteratePages(options?: { pageSize?: number }): AsyncGenerator<TResult[]> {
     const qs = this.toString()
-    const raw = await this._table.client.getRecords(this._table.entitySetName, qs)
-    return raw.map((v: any) => {
-      const r = { ...v }
-      r[Etag] = v["@odata.etag"]
-      delete r["@odata.etag"]
-      return r
-    }) as TResult[]
+    const raw = this._table.client.iteratePages(this._table.entitySetName, qs, options)
+    for await (const page of raw) {
+      yield page.map((v: any) => this._transformRow(v))
+    }
   }
 }
 
@@ -444,17 +466,48 @@ class ODataQuery<T extends GenericProperties> {
     return result
   }
 
-  async execute(): Promise<any[]> {
-    const qs = this.toString()
-    if (!qs) return this.#table.getRecords() as Promise<any[]>
-    const raw = await this.#table.client.getRecords(this.#table.entitySetName, qs)
+  private _transformRow(value: any): any {
     if (this.#selectedKeys.length > 0) {
-      return raw.map((v: unknown) => this._partialTransform(v))
+      return this._partialTransform(value)
     }
     if (this.#expandMeta.some(e => e.selectedKeys)) {
-      return raw.map((v: unknown) => this._partialTransform(v))
+      return this._partialTransform(value)
     }
-    return raw.map((v: unknown) => this.#table.transformValueFromDataverse(v)) as any[]
+    return this.#table.transformValueFromDataverse(value)
+  }
+
+  async execute(): Promise<any[]> {
+    const results: any[] = []
+    for await (const page of this.iteratePages()) {
+      results.push(...page)
+    }
+    return results
+  }
+
+  async *iterate(options?: { pageSize?: number }): AsyncGenerator<any> {
+    const qs = this.toString()
+    if (!qs) {
+      yield* this.#table.iterateRecords(undefined, options)
+      return
+    }
+    for await (const page of this.iteratePages(options)) {
+      yield* page
+    }
+  }
+
+  async *iteratePages(options?: { pageSize?: number }): AsyncGenerator<any[]> {
+    const qs = this.toString()
+    if (!qs) {
+      yield* this.#table.iteratePages(undefined, options)
+      return
+    }
+    for await (const page of this.#table.client.iteratePages(
+      this.#table.entitySetName,
+      qs,
+      options,
+    )) {
+      yield page.map((v: unknown) => this._transformRow(v))
+    }
   }
 }
 

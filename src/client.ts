@@ -183,13 +183,23 @@ export class DataverseClient {
             .join(",");
     }
 
-    private async _getNextLink(result: any): Promise<any[]> {
-        if (result["@odata.nextLink"]) {
-            const nextResult = await this.fetch(result["@odata.nextLink"]);
-            const recursiveResults = await this._getNextLink(nextResult);
-            return [...result.value, ...recursiveResults];
+    private async *_iteratePages(
+        resource: string,
+        pageSize?: number,
+    ): AsyncGenerator<any[]> {
+        const extraHeaders: Record<string, string> = {};
+        if (pageSize) {
+            const basePrefer = this._resolvePrefer(this.options.prefer ?? []);
+            extraHeaders["Prefer"] = basePrefer
+                ? `${basePrefer},odata.maxpagesize=${pageSize}`
+                : `odata.maxpagesize=${pageSize}`;
         }
-        return result.value;
+        let nextLink: string | undefined = resource;
+        while (nextLink) {
+            const result = await this.fetch(nextLink, { headers: extraHeaders });
+            yield result.value;
+            nextLink = result["@odata.nextLink"];
+        }
     }
 
     //
@@ -219,8 +229,58 @@ export class DataverseClient {
      *   "$select=name,revenue&$filter=revenue gt 10000")
      */
     async getRecords(entitySetName: Name, query: string = ""): Promise<any[]> {
-        const resource = `${entitySetName}?${query}`;
-        return this.fetch(resource).then((r) => this._getNextLink(r));
+        const results: any[] = [];
+        for await (const page of this.iteratePages(entitySetName, query)) {
+            results.push(...page);
+        }
+        return results;
+    }
+
+    /**
+     * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+     * Records within a page are yielded synchronously once the page arrives; only page
+     * boundaries trigger HTTP requests. A `break` stops further requests.
+     *
+     * @param entitySetName The entity set to query (e.g. `"accounts"`).
+     * @param query OData query string (e.g. `"$select=name&$top=10"`).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const account of client.iterateRecords("accounts", "$select=name", { pageSize: 100 })) {
+     *   console.log(account.name);
+     * }
+     */
+    async *iterateRecords(
+        entitySetName: Name,
+        query: string = "",
+        options?: { pageSize?: number },
+    ): AsyncGenerator<any> {
+        for await (const page of this.iteratePages(entitySetName, query, options)) {
+            yield* page;
+        }
+    }
+
+    /**
+     * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+     * The next page is only fetched when the consumer requests it, so `break`
+     * stops further requests. Prefer this over {@link iterateRecords} when you
+     * want to iterate a page's array synchronously.
+     *
+     * @param entitySetName The entity set to query (e.g. `"accounts"`).
+     * @param query OData query string (e.g. `"$select=name&$top=10"`).
+     * @param options Optional page-size control.
+     *
+     * @example
+     * for await (const page of client.iteratePages("accounts", "$select=name", { pageSize: 100 })) {
+     *   for (const account of page) console.log(account.name);
+     * }
+     */
+    async *iteratePages(
+        entitySetName: Name,
+        query: string = "",
+        options?: { pageSize?: number },
+    ): AsyncGenerator<any[]> {
+        yield* this._iteratePages(`${entitySetName}?${query}`, options?.pageSize);
     }
 
     /**

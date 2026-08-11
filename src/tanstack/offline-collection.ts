@@ -14,7 +14,6 @@ import {
 } from "./idb";
 import { compactMutations } from "./compact";
 
-const MAX_DEFAULT_ROWS = 5000;
 const DEFAULT_POLL_INTERVAL = 30000;
 
 function buildSelect(table: DataverseTable<GenericProperties>): string {
@@ -31,8 +30,7 @@ function buildQueryForTable(
   const params = new URLSearchParams();
   const select = buildSelect(table);
   if (select) params.set("$select", select);
-  const top = query?.top ?? MAX_DEFAULT_ROWS;
-  params.set("$top", String(top));
+  if (query?.top) params.set("$top", String(query.top));
   if (query?.filter) params.set("$filter", query.filter);
   if (query?.orderby) {
     const ob = typeof query.orderby === "string"
@@ -151,16 +149,15 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           // Phase 2: sync from Dataverse
           try {
             const queryString = buildQueryForTable(table as DataverseTable<GenericProperties>, query);
-            const raw = await table.client.getRecords(table.entitySetName, queryString);
-            const records = raw.map((v: any) => table.transformValueFromDataverse(v));
-
             begin();
-            for (const record of records) {
-              write({ type: "insert", value: record });
+            for await (const page of table.client.iteratePages(table.entitySetName, queryString)) {
+              const records = page.map((v: any) => table.transformValueFromDataverse(v));
+              for (const record of records) {
+                write({ type: "insert", value: record });
+              }
+              await putAllToIDB(dbName, dataStore, records, pk.key);
             }
             commit();
-
-            await putAllToIDB(dbName, dataStore, records, pk.key);
 
             if (navigator.onLine) {
               await replayQueue();

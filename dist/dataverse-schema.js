@@ -215,13 +215,18 @@ class DataverseClient {
       return "";
     }).filter(Boolean).join(",");
   }
-  async _getNextLink(result) {
-    if (result["@odata.nextLink"]) {
-      const nextResult = await this.fetch(result["@odata.nextLink"]);
-      const recursiveResults = await this._getNextLink(nextResult);
-      return [...result.value, ...recursiveResults];
+  async *_iteratePages(resource, pageSize) {
+    const extraHeaders = {};
+    if (pageSize) {
+      const basePrefer = this._resolvePrefer(this.options.prefer ?? []);
+      extraHeaders["Prefer"] = basePrefer ? `${basePrefer},odata.maxpagesize=${pageSize}` : `odata.maxpagesize=${pageSize}`;
     }
-    return result.value;
+    let nextLink = resource;
+    while (nextLink) {
+      const result = await this.fetch(nextLink, { headers: extraHeaders });
+      yield result.value;
+      nextLink = result["@odata.nextLink"];
+    }
   }
   //
   // --- PUBLIC API METHODS ---
@@ -248,8 +253,48 @@ class DataverseClient {
    *   "$select=name,revenue&$filter=revenue gt 10000")
    */
   async getRecords(entitySetName, query = "") {
-    const resource = `${entitySetName}?${query}`;
-    return this.fetch(resource).then((r) => this._getNextLink(r));
+    const results = [];
+    for await (const page of this.iteratePages(entitySetName, query)) {
+      results.push(...page);
+    }
+    return results;
+  }
+  /**
+   * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+   * Records within a page are yielded synchronously once the page arrives; only page
+   * boundaries trigger HTTP requests. A `break` stops further requests.
+   *
+   * @param entitySetName The entity set to query (e.g. `"accounts"`).
+   * @param query OData query string (e.g. `"$select=name&$top=10"`).
+   * @param options Optional page-size control.
+   *
+   * @example
+   * for await (const account of client.iterateRecords("accounts", "$select=name", { pageSize: 100 })) {
+   *   console.log(account.name);
+   * }
+   */
+  async *iterateRecords(entitySetName, query = "", options) {
+    for await (const page of this.iteratePages(entitySetName, query, options)) {
+      yield* page;
+    }
+  }
+  /**
+   * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+   * The next page is only fetched when the consumer requests it, so `break`
+   * stops further requests. Prefer this over {@link iterateRecords} when you
+   * want to iterate a page's array synchronously.
+   *
+   * @param entitySetName The entity set to query (e.g. `"accounts"`).
+   * @param query OData query string (e.g. `"$select=name&$top=10"`).
+   * @param options Optional page-size control.
+   *
+   * @example
+   * for await (const page of client.iteratePages("accounts", "$select=name", { pageSize: 100 })) {
+   *   for (const account of page) console.log(account.name);
+   * }
+   */
+  async *iteratePages(entitySetName, query = "", options) {
+    yield* this._iteratePages(`${entitySetName}?${query}`, options?.pageSize);
   }
   /**
    * Creates a record and returns its full representation.
@@ -1393,6 +1438,53 @@ class DataverseTable {
    */
   async getRecords(queryOptions) {
     return this.client.getRecords(this.entitySetName, buildQuery(this, queryOptions)).then((values) => values.map((v2) => this.transformValueFromDataverse(v2)));
+  }
+  /**
+   * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+   * Each record is transformed like {@link getRecords}. Records within a page are
+   * yielded synchronously once the page arrives; only page boundaries trigger HTTP
+   * requests. A `break` stops further requests.
+   *
+   * @param queryOptions Optional query parameters (filter, orderby, top).
+   * @param options Optional page-size control.
+   *
+   * @example
+   * for await (const account of Account.iterateRecords({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+   *   console.log(account.name);
+   * }
+   */
+  async *iterateRecords(queryOptions, options) {
+    for await (const record of this.client.iterateRecords(
+      this.entitySetName,
+      buildQuery(this, queryOptions),
+      options
+    )) {
+      yield this.transformValueFromDataverse(record);
+    }
+  }
+  /**
+   * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+   * Each yielded page is transformed like {@link getRecords}. The next page is
+   * only fetched when the consumer requests it, so `break` stops further requests.
+   * Prefer this over {@link iterateRecords} when you want to iterate a page's
+   * array synchronously.
+   *
+   * @param queryOptions Optional query parameters (filter, orderby, top).
+   * @param options Optional page-size control.
+   *
+   * @example
+   * for await (const page of Account.iteratePages({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+   *   for (const account of page) console.log(account.name);
+   * }
+   */
+  async *iteratePages(queryOptions, options) {
+    for await (const page of this.client.iteratePages(
+      this.entitySetName,
+      buildQuery(this, queryOptions),
+      options
+    )) {
+      yield page.map((v2) => this.transformValueFromDataverse(v2));
+    }
   }
   /**
    * Retrieves the value of a single property for a record by ID.
@@ -2850,15 +2942,30 @@ class ODataApplyQuery {
   toString() {
     return this._build();
   }
+  _transformRow(v) {
+    const r = { ...v };
+    r[Etag] = v["@odata.etag"];
+    delete r["@odata.etag"];
+    return r;
+  }
   async execute() {
+    const results = [];
+    for await (const page of this.iteratePages()) {
+      results.push(...page);
+    }
+    return results;
+  }
+  async *iterate(options) {
+    for await (const page of this.iteratePages(options)) {
+      yield* page;
+    }
+  }
+  async *iteratePages(options) {
     const qs = this.toString();
-    const raw = await this._table.client.getRecords(this._table.entitySetName, qs);
-    return raw.map((v) => {
-      const r = { ...v };
-      r[Etag] = v["@odata.etag"];
-      delete r["@odata.etag"];
-      return r;
-    });
+    const raw = this._table.client.iteratePages(this._table.entitySetName, qs, options);
+    for await (const page of raw) {
+      yield page.map((v) => this._transformRow(v));
+    }
   }
 }
 class ODataQuery {
@@ -3035,17 +3142,45 @@ class ODataQuery {
     result[Etag] = value["@odata.etag"];
     return result;
   }
-  async execute() {
-    const qs = this.toString();
-    if (!qs) return this.#table.getRecords();
-    const raw = await this.#table.client.getRecords(this.#table.entitySetName, qs);
+  _transformRow(value) {
     if (this.#selectedKeys.length > 0) {
-      return raw.map((v) => this._partialTransform(v));
+      return this._partialTransform(value);
     }
     if (this.#expandMeta.some((e) => e.selectedKeys)) {
-      return raw.map((v) => this._partialTransform(v));
+      return this._partialTransform(value);
     }
-    return raw.map((v) => this.#table.transformValueFromDataverse(v));
+    return this.#table.transformValueFromDataverse(value);
+  }
+  async execute() {
+    const results = [];
+    for await (const page of this.iteratePages()) {
+      results.push(...page);
+    }
+    return results;
+  }
+  async *iterate(options) {
+    const qs = this.toString();
+    if (!qs) {
+      yield* this.#table.iterateRecords(void 0, options);
+      return;
+    }
+    for await (const page of this.iteratePages(options)) {
+      yield* page;
+    }
+  }
+  async *iteratePages(options) {
+    const qs = this.toString();
+    if (!qs) {
+      yield* this.#table.iteratePages(void 0, options);
+      return;
+    }
+    for await (const page of this.#table.client.iteratePages(
+      this.#table.entitySetName,
+      qs,
+      options
+    )) {
+      yield page.map((v) => this._transformRow(v));
+    }
   }
 }
 class InitialQueryImpl {
@@ -3373,32 +3508,52 @@ class FetchXmlAggregateQuery {
   toString() {
     return `fetchXml=${encodeURIComponent(this.toXml())}`;
   }
-  async execute(options) {
+  _applyExecuteOptions(options) {
     if (options?.datasource) this._datasource = options.datasource;
     if (options?.lateMaterialize) this._lateMaterialize = true;
     if (options?.aggregateLimit !== void 0) this._aggregateLimit = options.aggregateLimit;
     if (options?.useRawOrderBy) this._useRawOrderBy = true;
     if (options?.options) this._options = options.options;
-    const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+  }
+  _transformRow(v) {
     const aliasInfo = this._buildAliasInfo();
     if (aliasInfo.size > 0) {
-      return raw.map((v) => {
-        const result = {};
-        for (const [alias, info] of aliasInfo) {
-          if (info.name in v) {
-            result[alias] = info.transform(v[info.name]);
-          } else {
-            result[alias] = info.getDefault();
-          }
+      const result = {};
+      for (const [alias, info] of aliasInfo) {
+        if (info.name in v) {
+          result[alias] = info.transform(v[info.name]);
+        } else {
+          result[alias] = info.getDefault();
         }
-        result[Etag] = v["@odata.etag"];
-        return result;
-      });
+      }
+      result[Etag] = v["@odata.etag"];
+      return result;
     }
-    return raw.map((v) => {
-      const r = this._table.transformValueFromDataverse(v);
-      return r;
-    });
+    return this._table.transformValueFromDataverse(v);
+  }
+  async execute(options) {
+    this._applyExecuteOptions(options);
+    const results = [];
+    for await (const page of this.iteratePages(options)) {
+      results.push(...page);
+    }
+    return results;
+  }
+  async *iterate(options) {
+    this._applyExecuteOptions(options);
+    for await (const page of this.iteratePages(options)) {
+      yield* page;
+    }
+  }
+  async *iteratePages(options) {
+    this._applyExecuteOptions(options);
+    for await (const page of this._table.client.iteratePages(
+      this._table.entitySetName,
+      this.toString(),
+      options
+    )) {
+      yield page.map((v) => this._transformRow(v));
+    }
   }
   _buildAliasInfo() {
     const map = /* @__PURE__ */ new Map();
@@ -3798,32 +3953,52 @@ class EntityQueryBuilder {
   toString() {
     return `fetchXml=${encodeURIComponent(this.toXml())}`;
   }
-  async execute(options) {
+  _applyExecuteOptions(options) {
     if (options?.datasource) this._datasource = options.datasource;
     if (options?.lateMaterialize) this._lateMaterialize = true;
     if (options?.aggregateLimit !== void 0) this._aggregateLimit = options.aggregateLimit;
     if (options?.useRawOrderBy) this._useRawOrderBy = true;
     if (options?.options) this._options = options.options;
-    const raw = await this._table.client.getRecords(this._table.entitySetName, this.toString());
+  }
+  _transformRow(v) {
     const aliasInfo = this._buildAliasInfo();
     if (aliasInfo.size > 0) {
-      return raw.map((v) => {
-        const result = {};
-        for (const [alias, info] of aliasInfo) {
-          if (info.name in v) {
-            result[alias] = info.transform(v[info.name]);
-          } else {
-            result[alias] = info.getDefault();
-          }
+      const result = {};
+      for (const [alias, info] of aliasInfo) {
+        if (info.name in v) {
+          result[alias] = info.transform(v[info.name]);
+        } else {
+          result[alias] = info.getDefault();
         }
-        result[Etag] = v["@odata.etag"];
-        return result;
-      });
+      }
+      result[Etag] = v["@odata.etag"];
+      return result;
     }
-    return raw.map((v) => {
-      const r = this._table.transformValueFromDataverse(v);
-      return r;
-    });
+    return this._table.transformValueFromDataverse(v);
+  }
+  async execute(options) {
+    this._applyExecuteOptions(options);
+    const results = [];
+    for await (const page of this.iteratePages(options)) {
+      results.push(...page);
+    }
+    return results;
+  }
+  async *iterate(options) {
+    this._applyExecuteOptions(options);
+    for await (const page of this.iteratePages(options)) {
+      yield* page;
+    }
+  }
+  async *iteratePages(options) {
+    this._applyExecuteOptions(options);
+    for await (const page of this._table.client.iteratePages(
+      this._table.entitySetName,
+      this.toString(),
+      options
+    )) {
+      yield page.map((v) => this._transformRow(v));
+    }
   }
   _buildAliasInfo() {
     const map = /* @__PURE__ */ new Map();
@@ -3911,6 +4086,12 @@ class FetchXmlInitialImpl {
   }
   async execute(options) {
     return this.#builder.execute(options);
+  }
+  async *iterate(options) {
+    yield* this.#builder.iterate(options);
+  }
+  async *iteratePages(options) {
+    yield* this.#builder.iteratePages(options);
   }
 }
 

@@ -161,6 +161,61 @@ export class DataverseTable<TProperties extends GenericProperties> {
   }
 
   /**
+   * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
+   * Each record is transformed like {@link getRecords}. Records within a page are
+   * yielded synchronously once the page arrives; only page boundaries trigger HTTP
+   * requests. A `break` stops further requests.
+   *
+   * @param queryOptions Optional query parameters (filter, orderby, top).
+   * @param options Optional page-size control.
+   *
+   * @example
+   * for await (const account of Account.iterateRecords({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+   *   console.log(account.name);
+   * }
+   */
+  async *iterateRecords(
+    queryOptions?: QueryForTable<TProperties>,
+    options?: { pageSize?: number },
+  ): AsyncGenerator<Infer<TProperties>> {
+    for await (const record of this.client.iterateRecords(
+      this.entitySetName,
+      buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+      options,
+    )) {
+      yield this.transformValueFromDataverse(record);
+    }
+  }
+
+  /**
+   * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
+   * Each yielded page is transformed like {@link getRecords}. The next page is
+   * only fetched when the consumer requests it, so `break` stops further requests.
+   * Prefer this over {@link iterateRecords} when you want to iterate a page's
+   * array synchronously.
+   *
+   * @param queryOptions Optional query parameters (filter, orderby, top).
+   * @param options Optional page-size control.
+   *
+   * @example
+   * for await (const page of Account.iteratePages({ filter: "statecode eq 0" }, { pageSize: 100 })) {
+   *   for (const account of page) console.log(account.name);
+   * }
+   */
+  async *iteratePages(
+    queryOptions?: QueryForTable<TProperties>,
+    options?: { pageSize?: number },
+  ): AsyncGenerator<Infer<TProperties>[]> {
+    for await (const page of this.client.iteratePages(
+      this.entitySetName,
+      buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+      options,
+    )) {
+      yield page.map((v) => this.transformValueFromDataverse(v));
+    }
+  }
+
+  /**
    * Retrieves the value of a single property for a record by ID.
    * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
    *

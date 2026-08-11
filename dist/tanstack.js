@@ -1,4 +1,3 @@
-const MAX_DEFAULT_ROWS$1 = 5e3;
 const DEFAULT_POLL_INTERVAL$1 = 3e4;
 function buildSelect$1(table) {
   return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file" || v.type === "image").map((v) => v.fromDataverseName).join(",");
@@ -7,8 +6,7 @@ function buildQueryForTable$1(table, query) {
   const params = new URLSearchParams();
   const select = buildSelect$1(table);
   if (select) params.set("$select", select);
-  const top = query?.top ?? MAX_DEFAULT_ROWS$1;
-  params.set("$top", String(top));
+  if (query?.top) params.set("$top", String(query.top));
   if (query?.filter) params.set("$filter", query.filter);
   if (query?.orderby) {
     const ob = typeof query.orderby === "string" ? query.orderby : Object.entries(query.orderby).map(([key, value]) => `${table.fields[key].name} ${value}`).join(",");
@@ -52,11 +50,9 @@ function dataverseCollectionOptions(config) {
       syncFn = async () => {
         try {
           const queryString = buildQueryForTable$1(table, query);
-          const raw = await table.client.getRecords(table.entitySetName, queryString);
-          const records = raw.map((v) => table.transformValueFromDataverse(v));
           begin();
-          for (const record of records) {
-            write({ type: "insert", value: record });
+          for await (const record of table.client.iterateRecords(table.entitySetName, queryString)) {
+            write({ type: "insert", value: table.transformValueFromDataverse(record) });
           }
           commit();
         } catch (err) {
@@ -235,7 +231,6 @@ function compactMutations(mutations) {
   return compacted;
 }
 
-const MAX_DEFAULT_ROWS = 5e3;
 const DEFAULT_POLL_INTERVAL = 3e4;
 function buildSelect(table) {
   return Object.values(table.fields).filter((v) => v.kind === "value" || v.type === "lookupId" || v.type === "file" || v.type === "image").map((v) => v.fromDataverseName).join(",");
@@ -244,8 +239,7 @@ function buildQueryForTable(table, query) {
   const params = new URLSearchParams();
   const select = buildSelect(table);
   if (select) params.set("$select", select);
-  const top = query?.top ?? MAX_DEFAULT_ROWS;
-  params.set("$top", String(top));
+  if (query?.top) params.set("$top", String(query.top));
   if (query?.filter) params.set("$filter", query.filter);
   if (query?.orderby) {
     const ob = typeof query.orderby === "string" ? query.orderby : Object.entries(query.orderby).map(([key, value]) => `${table.fields[key].name} ${value}`).join(",");
@@ -338,14 +332,15 @@ function dataverseOfflineCollectionOptions(config) {
           }
           try {
             const queryString = buildQueryForTable(table, query);
-            const raw = await table.client.getRecords(table.entitySetName, queryString);
-            const records = raw.map((v) => table.transformValueFromDataverse(v));
             begin();
-            for (const record of records) {
-              write({ type: "insert", value: record });
+            for await (const page of table.client.iteratePages(table.entitySetName, queryString)) {
+              const records = page.map((v) => table.transformValueFromDataverse(v));
+              for (const record of records) {
+                write({ type: "insert", value: record });
+              }
+              await putAllToIDB(dbName, dataStore, records, pk.key);
             }
             commit();
-            await putAllToIDB(dbName, dataStore, records, pk.key);
             if (navigator.onLine) {
               await replayQueue();
             }

@@ -80,6 +80,51 @@ test.skip("table.getRecord fetches and transforms a record", async () => {
   expect(records[0].age).toBe(30)
 })
 
+test("table.iterateRecords yields transformed records", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people`, () => {
+      return HttpResponse.json({
+        value: [
+          { personid: "id-1", fullname: "John", person_age: 30 },
+          { personid: "id-2", fullname: "Jane", person_age: 25 },
+        ],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    }),
+  )
+  const records: Infer<typeof Person>[] = []
+  for await (const record of Person.iterateRecords()) {
+    records.push(record)
+  }
+  expect(records).toHaveLength(3)
+  expect(records[0].name).toBe("John")
+  expect(records[0].age).toBe(30)
+  expect(records[1].name).toBe("Jane")
+})
+
+test("table.iteratePages yields transformed pages", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/people`, () => {
+      return HttpResponse.json({
+        value: [
+          { personid: "id-1", fullname: "John", person_age: 30 },
+          { personid: "id-2", fullname: "Jane", person_age: 25 },
+        ],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      })
+    }),
+  )
+  const pages: Infer<typeof Person>[][] = []
+  for await (const page of Person.iteratePages()) {
+    pages.push(page)
+  }
+  expect(pages).toHaveLength(2)
+  expect(pages[0]).toHaveLength(2)
+  expect(pages[0][0].name).toBe("John")
+  expect(pages[0][0].age).toBe(30)
+  expect(pages[1]).toHaveLength(1)
+})
+
 test.skip("table.getRecord fetches a single record by id", async () => {
   server.use(
     http.get(`${BASE_URL}/api/data/v9.2/people(test-id)`, () => {

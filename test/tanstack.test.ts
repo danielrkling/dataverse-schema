@@ -208,6 +208,104 @@ test("sync function fetches records and calls write/commit/markReady", async () 
   if (typeof cleanup === "function") cleanup();
 });
 
+test("sync function follows @odata.nextLink pagination", async () => {
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, () => {
+      return HttpResponse.json({
+        value: [{ accountid: "first-id", name: "First" }],
+        "@odata.nextLink": "https://nextlink-contoso.com/api/data/v9.2/accounts",
+      });
+    }),
+  );
+
+  const { dataverseCollectionOptions } = await import("../src/tanstack/collection");
+  const config = dataverseCollectionOptions({ table: Account }) as any;
+
+  const begin = vi.fn();
+  const write = vi.fn();
+  const commit = vi.fn();
+  const markReady = vi.fn();
+
+  const cleanup = config.sync.sync({ begin, write, commit, markReady } as any);
+
+  await vi.waitFor(() => {
+    expect(markReady).toHaveBeenCalled();
+  });
+
+  expect(write).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenCalledWith({
+    type: "insert",
+    value: expect.objectContaining({ name: "First" }),
+  });
+  expect(write).toHaveBeenCalledWith({
+    type: "insert",
+    value: expect.objectContaining({ name: "Paginated Record" }),
+  });
+  expect(begin).toHaveBeenCalled();
+  expect(commit).toHaveBeenCalled();
+
+  if (typeof cleanup === "function") cleanup();
+});
+
+test("sync function does not set $top by default", async () => {
+  let capturedUrl = "";
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedUrl = request.url;
+      return HttpResponse.json({ value: [] });
+    }),
+  );
+
+  const { dataverseCollectionOptions } = await import("../src/tanstack/collection");
+  const config = dataverseCollectionOptions({ table: Account }) as any;
+
+  const begin = vi.fn();
+  const write = vi.fn();
+  const commit = vi.fn();
+  const markReady = vi.fn();
+
+  const cleanup = config.sync.sync({ begin, write, commit, markReady } as any);
+
+  await vi.waitFor(() => {
+    expect(markReady).toHaveBeenCalled();
+  });
+
+  const params = new URL(capturedUrl).searchParams;
+  expect(params.get("$top")).toBeNull();
+  expect(params.get("$select")).toContain("name");
+
+  if (typeof cleanup === "function") cleanup();
+});
+
+test("sync function honors a configured top", async () => {
+  let capturedUrl = "";
+  server.use(
+    http.get(`${BASE_URL}/api/data/v9.2/accounts`, ({ request }) => {
+      capturedUrl = request.url;
+      return HttpResponse.json({ value: [] });
+    }),
+  );
+
+  const { dataverseCollectionOptions } = await import("../src/tanstack/collection");
+  const config = dataverseCollectionOptions({ table: Account, query: { top: 5 } }) as any;
+
+  const begin = vi.fn();
+  const write = vi.fn();
+  const commit = vi.fn();
+  const markReady = vi.fn();
+
+  const cleanup = config.sync.sync({ begin, write, commit, markReady } as any);
+
+  await vi.waitFor(() => {
+    expect(markReady).toHaveBeenCalled();
+  });
+
+  const params = new URL(capturedUrl).searchParams;
+  expect(params.get("$top")).toBe("5");
+
+  if (typeof cleanup === "function") cleanup();
+});
+
 // --- dataverseOfflineCollectionOptions ---
 
 test("dataverseOfflineCollectionOptions returns correct config shape", async () => {
