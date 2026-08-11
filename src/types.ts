@@ -19,7 +19,7 @@ import {
   NullableChoiceField,
 } from "./fields";
 import { DateField } from "./fields";
-import { FieldBase } from "./fieldBase";
+import { FieldBase } from "./fields";
 import { DataverseTable } from "./table";
 import { Etag } from "./util";
 

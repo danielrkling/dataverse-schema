@@ -1,7 +1,7 @@
 import * as v from "valibot"
 import { DataverseClient } from "./client";
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField, ImageField } from "./fields";
-import { FieldBase, SKIP, TransformContext, ValidationSchema } from "./fieldBase";
+import { FieldBase, SKIP, TransformContext, ValidationSchema } from "./fields";
 function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
   const params = new URLSearchParams()
   if (opts.select) params.set("$select", opts.select)

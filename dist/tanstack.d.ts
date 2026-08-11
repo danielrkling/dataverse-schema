@@ -37,6 +37,7 @@ declare class CollectionIdsProperty extends FieldBase<GUID[]> {
     }>;
     transformValueFromDataverse(value: any): GUID[];
     transformValueToDataverse(): typeof SKIP;
+    afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
 
 declare class CollectionProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties>[]> {
@@ -47,6 +48,7 @@ declare class CollectionProperty<TProperties extends GenericProperties> extends 
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties>[];
     transformValueToDataverse(): typeof SKIP;
+    afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
 
 /**
@@ -549,7 +551,6 @@ declare class DataverseTable<TProperties extends GenericProperties> {
      * await Person.updatePropertyValue("age", "some-guid", 35);
      */
     updatePropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, value: Infer<TProperties[TKey]>): Promise<GUID>;
-    protected updateNavigationProperty(property: GenericNavigationProperty, id: DataverseKey, value: any): Promise<`${string}-${string}-${string}-${string}-${string}` | `${string}-${string}-${string}-${string}-${string}`[] | undefined>;
     /**
      * Links an existing child record to a parent record through a navigation property.
      *
@@ -900,6 +901,7 @@ declare class LookupProperty<TProperties extends GenericProperties> extends Fiel
     get table(): DataverseTable<TProperties>;
     transformValueFromDataverse(value: any): Infer<TProperties> | null;
     transformValueToDataverse(): typeof SKIP;
+    afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
 
 /** A field name can be a string or an object with a name or toString method. */

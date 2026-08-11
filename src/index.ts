@@ -2,7 +2,6 @@ export * from "./client";
 export * from './functions';
 export * from './fields';
 export * from './filter';
-export * from './fieldBase';
 export * from './table';
 export * from './types';
 export * from './util';

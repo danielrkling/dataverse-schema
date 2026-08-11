@@ -1307,38 +1307,6 @@ function parse(schema, input, config$1) {
 	return dataset.value;
 }
 
-const SKIP = Symbol("skip");
-class FieldBase {
-  name;
-  fromDataverseName;
-  toDataverseName;
-  kind;
-  type;
-  schema;
-  #default;
-  #readOnly;
-  constructor(name, defaults, options) {
-    this.name = name;
-    this.fromDataverseName = name;
-    this.toDataverseName = name;
-    this.#default = options?.default ?? defaults.defaultValue;
-    this.#readOnly = options?.readonly ?? false;
-    this.schema = options?.schema ?? defaults.schema;
-  }
-  getDefault() {
-    return this.#default;
-  }
-  getReadOnly() {
-    return this.#readOnly;
-  }
-  transformValueFromDataverse(value, ctx) {
-    return value;
-  }
-  transformValueToDataverse(value, ctx) {
-    return value;
-  }
-}
-
 function queryString(opts) {
   const params = new URLSearchParams();
   if (opts.select) params.set("$select", opts.select);
@@ -1471,10 +1439,23 @@ class DataverseTable {
    */
   async updatePropertyValue(key, id, value) {
     const prop = this.fields[key];
-    if (prop.kind === "navigation") {
-      await this.updateNavigationProperty(prop, id, value);
+    const ctx = { table: this, client: this.client, recordId: id };
+    if (prop.type === "lookupId") {
+      const name = prop.navigationName;
+      if (value === null) {
+        await this.client.dissociateRecord(this.entitySetName, id, name);
+      } else {
+        await this.client.associateRecord(
+          this.entitySetName,
+          id,
+          name,
+          prop.table.entitySetName,
+          value
+        );
+      }
+    } else if (prop.kind === "navigation" && prop.afterSave) {
+      await prop.afterSave(ctx, value);
     } else {
-      const ctx = { table: this, client: this.client, recordId: id };
       let v2 = prop.transformValueToDataverse(value, ctx);
       if (v2 instanceof Promise) v2 = await v2;
       if (v2 !== SKIP) {
@@ -1487,38 +1468,6 @@ class DataverseTable {
       }
     }
     return id;
-  }
-  async updateNavigationProperty(property, id, value) {
-    if (property.type === "collection" || property.type === "collectionIds") {
-      if (Array.isArray(value)) {
-        const ids = property.type === "collection" ? await Promise.all(
-          value.map((v2) => property.table.upsertRecord(void 0, v2))
-        ) : value;
-        return this.client.associateRecordToList(
-          this.entitySetName,
-          id,
-          property.name,
-          property.table.entitySetName,
-          property.table.primaryKey.property.name,
-          ids
-        );
-      }
-    }
-    if (property.type === "lookup" || property.type == "lookupId") {
-      const name = property.type === "lookup" ? property.name : property.navigationName;
-      if (value === null) {
-        return this.client.dissociateRecord(this.entitySetName, id, name);
-      } else {
-        const childId = property.type === "lookup" ? await property.table.upsertRecord(void 0, value) : value;
-        return this.client.associateRecord(
-          this.entitySetName,
-          id,
-          name,
-          property.table.entitySetName,
-          childId
-        );
-      }
-    }
   }
   /**
    * Links an existing child record to a parent record through a navigation property.
@@ -1609,19 +1558,17 @@ class DataverseTable {
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
   async upsertRecord(id, value, etag) {
-    const promises = [];
     const pkName = this.primaryKey.property.name;
+    const ctx = { table: this, client: this.client, recordId: "" };
     if (id) {
-      const ctx = { table: this, client: this.client, recordId: id };
+      ctx.recordId = id;
       const transformed = await this.transformValueToDataverse(value, ctx);
-      promises.push(
-        this.client.patchRecord(
-          this.entitySetName,
-          id,
-          transformed,
-          queryString({ select: pkName }),
-          etag
-        )
+      await this.client.patchRecord(
+        this.entitySetName,
+        id,
+        transformed,
+        queryString({ select: pkName }),
+        etag
       );
     } else {
       const record = await this.client.postRecord(
@@ -1630,22 +1577,9 @@ class DataverseTable {
         queryString({ select: pkName })
       );
       id = record[pkName];
-      const ctx = { table: this, client: this.client, recordId: id };
-      await this._afterSave(ctx, value);
+      ctx.recordId = id;
     }
-    for (const [key, property] of Object.entries(this.fields)) {
-      if (property.getReadOnly() || !(key in value)) continue;
-      if (property.kind === "navigation" && property.type !== "lookupId") {
-        promises.push(
-          this.updateNavigationProperty(
-            property,
-            id,
-            value[key]
-          )
-        );
-      }
-    }
-    await Promise.all(promises);
+    await this._afterSave(ctx, value);
     return id;
   }
   /**
@@ -1876,11 +1810,13 @@ class DataverseTable {
     await this.client.deletePropertyValue(this.entitySetName, id, field.name);
   }
   async _afterSave(ctx, value) {
+    const promises = [];
     for (const [key, property] of Object.entries(this.fields)) {
-      if (property.afterSave) {
-        await property.afterSave(ctx, value[key]);
+      if (key in value && property.afterSave) {
+        promises.push(property.afterSave(ctx, value[key]));
       }
     }
+    await Promise.all(promises);
   }
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
   T;
@@ -1934,6 +1870,37 @@ class DataverseIntersectTable {
   }
 }
 
+const SKIP = Symbol("skip");
+class FieldBase {
+  name;
+  fromDataverseName;
+  toDataverseName;
+  kind;
+  type;
+  schema;
+  #default;
+  #readOnly;
+  constructor(name, defaults, options) {
+    this.name = name;
+    this.fromDataverseName = name;
+    this.toDataverseName = name;
+    this.#default = options?.default ?? defaults.defaultValue;
+    this.#readOnly = options?.readonly ?? false;
+    this.schema = options?.schema ?? defaults.schema;
+  }
+  getDefault() {
+    return this.#default;
+  }
+  getReadOnly() {
+    return this.#readOnly;
+  }
+  transformValueFromDataverse(value, ctx) {
+    return value;
+  }
+  transformValueToDataverse(value, ctx) {
+    return value;
+  }
+}
 function buildObjectSchema(fields) {
   const shape = {};
   for (const [key, field] of Object.entries(fields)) {
@@ -2315,6 +2282,20 @@ class CollectionProperty extends FieldBase {
   transformValueToDataverse() {
     return SKIP;
   }
+  async afterSave(ctx, value) {
+    if (!Array.isArray(value)) return;
+    const ids = await Promise.all(
+      value.map((v2) => this.table.upsertRecord(void 0, v2))
+    );
+    await ctx.client.associateRecordToList(
+      ctx.table.entitySetName,
+      ctx.recordId,
+      this.name,
+      this.table.entitySetName,
+      this.table.primaryKey.property.name,
+      ids
+    );
+  }
 }
 function collection(name, getTable) {
   return new CollectionProperty(name, getTable);
@@ -2345,6 +2326,17 @@ class CollectionIdsProperty extends FieldBase {
   transformValueToDataverse() {
     return SKIP;
   }
+  async afterSave(ctx, value) {
+    if (!Array.isArray(value)) return;
+    await ctx.client.associateRecordToList(
+      ctx.table.entitySetName,
+      ctx.recordId,
+      this.name,
+      this.table.entitySetName,
+      this.table.primaryKey.property.name,
+      value
+    );
+  }
 }
 function collectionIds(name, getTable) {
   return new CollectionIdsProperty(name, getTable);
@@ -2372,6 +2364,20 @@ class LookupProperty extends FieldBase {
   }
   transformValueToDataverse() {
     return SKIP;
+  }
+  async afterSave(ctx, value) {
+    if (value === null) {
+      await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.name);
+    } else {
+      const childId = await this.table.upsertRecord(void 0, value);
+      await ctx.client.associateRecord(
+        ctx.table.entitySetName,
+        ctx.recordId,
+        this.name,
+        this.table.entitySetName,
+        childId
+      );
+    }
   }
 }
 function lookup(name, getTable) {
