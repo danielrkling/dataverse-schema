@@ -325,6 +325,17 @@ test("table.transformValueToDataverse maps field names", async () => {
   expect(result.personid).toBeUndefined()
 })
 
+test("table.transformValueToDataverse omits undefined but preserves null", async () => {
+  const result = await Person.transformValueToDataverse({
+    name: undefined,
+    age: undefined,
+    primaryAddressId: null,
+  })
+  expect(result.fullname).toBeUndefined()
+  expect(result.person_age).toBeUndefined()
+  expect(result["person_Address@odata.bind"]).toBeNull()
+})
+
 test.skip("table.transformValueToDataverse skips read-only fields", async () => {
   const result = await Person.transformValueToDataverse({ pk: "some-id" as unknown as GUID, name: "Charlie", age: 40 })
   expect(result.personid).toBeUndefined()

@@ -588,8 +588,7 @@ export class FetchXmlAggregateQuery<
         this._applyExecuteOptions(options);
         for await (const page of this._table.client.iteratePages(
             this._table.entitySetName,
-            this.toString(),
-            options,
+            { ...options, query: this.toString() },
         )) {
             yield page.map((v: any) => this._transformRow(v));
         }
@@ -1183,8 +1182,7 @@ export class EntityQueryBuilder<
         this._applyExecuteOptions(options);
         for await (const page of this._table.client.iteratePages(
             this._table.entitySetName,
-            this.toString(),
-            options,
+            { ...options, query: this.toString() },
         )) {
             yield page.map((v: any) => this._transformRow(v));
         }

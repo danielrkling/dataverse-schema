@@ -75,7 +75,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         try {
           const queryString = buildQueryForTable(table as DataverseTable<GenericProperties>, query);
           begin();
-          for await (const record of table.client.iterateRecords(table.entitySetName, queryString)) {
+          for await (const record of table.client.iterateRecords(table.entitySetName, { query: queryString })) {
             write({ type: "insert", value: table.transformValueFromDataverse(record) });
           }
           commit();

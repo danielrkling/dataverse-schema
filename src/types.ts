@@ -17,6 +17,7 @@ import {
   FileField,
   ChoiceField,
   NullableChoiceField,
+  JsonField,
 } from "./fields";
 import { DateField } from "./fields";
 import { FieldBase } from "./fields";
@@ -130,6 +131,7 @@ export type GenericValueProperty =
   | FileField
   | ChoiceField<Record<number, string>>
   | NullableChoiceField<Record<number, string>>
+  | JsonField<any>
 
 /**
  * Represents a generic property in a Dataverse entity.  A property can be

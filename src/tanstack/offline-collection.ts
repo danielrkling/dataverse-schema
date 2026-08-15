@@ -144,7 +144,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
             const queryString = buildQueryForTable(table as DataverseTable<GenericProperties>, query);
             begin();
             try {
-              for await (const page of table.client.iteratePages(table.entitySetName, queryString)) {
+              for await (const page of table.client.iteratePages(table.entitySetName, { query: queryString })) {
                 const records = page.map((v: any) => table.transformValueFromDataverse(v));
                 for (const record of records) {
                   write({ type: "insert", value: record });

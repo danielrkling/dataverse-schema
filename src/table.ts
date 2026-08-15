@@ -30,6 +30,11 @@ export type QueryForTable<T> = {
   top?: number;
 };
 
+export type TableRequestOptions = {
+  pageSize?: number;
+  signal?: AbortSignal;
+};
+
 export type DataverseTableOptions<TProperties extends GenericProperties> = {
   client: DataverseClient;
   entitySetName: string;
@@ -128,9 +133,12 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * const account = await Account.getRecord("acme-1234-abcd");
    * if (account) console.log(account.name);
    */
-  async getRecord(id: DataverseKey): Promise<Infer<TProperties> | null> {
+  async getRecord(id: DataverseKey, options?: { signal?: AbortSignal }): Promise<Infer<TProperties> | null> {
     return this.client
-      .getRecord(this.entitySetName, id, buildQuery(this as unknown as DataverseTable<GenericProperties>))
+      .getRecord(this.entitySetName, id, {
+        ...options,
+        query: buildQuery(this as unknown as DataverseTable<GenericProperties>),
+      })
       .then((v) => this.transformValueFromDataverse(v));
   }
 
@@ -154,9 +162,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
    */
   async getRecords(
     queryOptions?: QueryForTable<TProperties>,
+    options?: TableRequestOptions,
   ): Promise<Infer<TProperties>[]> {
     return this.client
-      .getRecords(this.entitySetName, buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>))
+      .getRecords(this.entitySetName, {
+        ...options,
+        query: buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+      })
       .then((values) => values.map((v) => this.transformValueFromDataverse(v)));
   }
 
@@ -176,12 +188,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
    */
   async *iterateRecords(
     queryOptions?: QueryForTable<TProperties>,
-    options?: { pageSize?: number },
+    options?: TableRequestOptions,
   ): AsyncGenerator<Infer<TProperties>> {
     for await (const record of this.client.iterateRecords(
       this.entitySetName,
-      buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
-      options,
+      {
+        ...options,
+        query: buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+      },
     )) {
       yield this.transformValueFromDataverse(record);
     }
@@ -204,12 +218,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
    */
   async *iteratePages(
     queryOptions?: QueryForTable<TProperties>,
-    options?: { pageSize?: number },
+    options?: TableRequestOptions,
   ): AsyncGenerator<Infer<TProperties>[]> {
     for await (const page of this.client.iteratePages(
       this.entitySetName,
-      buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
-      options,
+      {
+        ...options,
+        query: buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+      },
     )) {
       yield page.map((v) => this.transformValueFromDataverse(v));
     }
@@ -242,7 +258,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
           this.entitySetName,
           id,
           prop.name,
-          buildQuery(prop.table as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>), // Note: buildQuery needs to handle related table schema
+          { query: buildQuery(prop.table as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>) }, // Note: buildQuery needs to handle related table schema
         )
         .then(
           (v) =>
@@ -255,7 +271,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
           this.entitySetName,
           id,
           prop.name,
-          buildQuery(prop.table, queryOptions),
+          { query: buildQuery(prop.table, queryOptions) },
         )
         .then(
           (v) =>
@@ -376,7 +392,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
-      queryString({ select: pkName }),
+      { query: queryString({ select: pkName }) },
     );
     const guid = record?.[pkName] as GUID;
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
@@ -403,8 +419,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       this.entitySetName,
       id,
       await this.transformValueToDataverse(value, ctx),
-      "",
-      etag,
+      { etag },
     );
     await this._afterSave(ctx, value);
     return id as GUID;
@@ -436,14 +451,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
         this.entitySetName,
         id,
         transformed,
-        queryString({ select: pkName }),
-        etag,
+        { query: queryString({ select: pkName }), etag },
       );
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        queryString({ select: pkName }),
+        { query: queryString({ select: pkName }) },
       );
       id = record[pkName] as GUID;
       ctx.recordId = id;
@@ -463,7 +477,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * await Person.deleteRecord("some-guid");
    */
   async deleteRecord(id: DataverseKey, etag?: string): Promise<GUID> {
-    return this.client.deleteRecord(this.entitySetName, id, etag);
+    return this.client.deleteRecord(this.entitySetName, id, { etag });
   }
 
   /**
@@ -630,7 +644,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     if (value === null) return null as unknown as DataverseRecord;
     const result = {} as Record<string, any>;
     for (const [key, property] of Object.entries(this.fields)) {
-      if (property.getReadOnly() || !(key in value)) continue;
+      if (property.getReadOnly() || !(key in value) || value[key as keyof typeof value] === undefined) continue;
       let v = (property as FieldBase<any>).transformValueToDataverse(
         value[key as keyof typeof value] as any,
         ctx,
@@ -714,7 +728,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   private async _afterSave(ctx: TransformContext, value: Partial<Infer<TProperties>>): Promise<void> {
     const promises: Promise<void>[] = [];
     for (const [key, property] of Object.entries(this.fields)) {
-      if (key in value && property.afterSave) {
+      if (key in value && (value as any)[key] !== undefined && property.afterSave) {
         promises.push(property.afterSave(ctx, (value as any)[key]));
       }
     }

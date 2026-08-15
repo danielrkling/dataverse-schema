@@ -27,6 +27,26 @@ export type PreferOption =
     | { annotations: "*" | string[] }
     | { maxPageSize: number };
 
+export type RequestOptions = { signal?: AbortSignal };
+export type QueryRequestOptions = RequestOptions & { query?: string };
+export type GetRecordOptions = QueryRequestOptions & { etag?: string };
+export type PatchRecordOptions = QueryRequestOptions & { etag?: string };
+export type DeleteRecordOptions = RequestOptions & { etag?: string };
+export type PostRecordOptions = QueryRequestOptions;
+
+export class DataverseHttpError extends Error {
+    constructor(
+        message: string,
+        readonly status: number,
+        readonly statusText: string,
+        readonly body: unknown,
+        readonly response?: Response,
+    ) {
+        super(message);
+        this.name = "DataverseHttpError";
+    }
+}
+
 /** Options for configuring a DataverseClient instance. */
 export type DataverseClientOptions = {
     /** Base URL of the Dataverse environment (defaults to `location.origin`). */
@@ -80,9 +100,12 @@ export class DataverseClient {
 
     /** @param options Connection and authentication options. */
     constructor(options: DataverseClientOptions = {}) {
+        const defaultUrl = typeof location !== "undefined" ? location.origin : undefined;
+        const url = options.url ?? defaultUrl;
+        if (!url) throw new Error("A Dataverse URL is required outside a browser");
         this.options = {
-            url: location.origin,
             ...options,
+            url: url.replace(/\/+$/, ""),
         };
     }
 
@@ -105,7 +128,9 @@ export class DataverseClient {
         if (this._processBatch(resource, options)) return;
         const { raw, ...fetchOptions } = options;
         // Handle full URLs from @odata.nextLink
-        const url = resource.startsWith("http") ? resource : `${this.options.url}/api/data/v9.2/${resource}`;
+        const url = /^https?:\/\//i.test(resource)
+            ? resource
+            : `${this.options.url}/api/data/v9.2/${resource.replace(/^\/+/, "")}`;
 
         const {
             headers, impersonateByAAId, impersonateByUserId, token,
@@ -116,10 +141,12 @@ export class DataverseClient {
         const response = await fetch(url, {
             ...fetchOptions,
             headers: {
-                "OData-MaxVersion": "4.0",
-                "OData-Version": "4.0",
-                Accept: "application/json",
-                "Content-Type": "application/json; charset=utf-8",
+                ...(raw ? {} : {
+                    "OData-MaxVersion": "4.0",
+                    "OData-Version": "4.0",
+                    Accept: "application/json",
+                    "Content-Type": "application/json; charset=utf-8",
+                }),
                 "If-None-Match": "null",
                 ...(impersonateByUserId ? { MSCRMCallerID: impersonateByUserId } : {}),
                 ...(impersonateByAAId ? { CallerObjectId: impersonateByAAId } : {}),
@@ -148,17 +175,33 @@ export class DataverseClient {
             return null;
         }
 
-        if (response.headers.get("Content-Type")?.includes("application/json")) {
+        const isJson = response.headers.get("Content-Type")?.includes("application/json");
+        if (isJson) {
             const data = await response.json();
             if (data.error) {
-                if (data.error.code === "0x80060891") return null; // Record not Found
                 throw data.error;
+            }
+            if (!response.ok) {
+                throw new DataverseHttpError(
+                    `${response.status} ${response.statusText}`,
+                    response.status,
+                    response.statusText,
+                    data,
+                    response,
+                );
             }
             return data;
         }
 
         if (!response.ok) {
-            throw new Error(response.status + "-" + response.statusText);
+            const body = await response.text();
+            throw new DataverseHttpError(
+                `${response.status} ${response.statusText}`,
+                response.status,
+                response.statusText,
+                body,
+                response,
+            );
         }
 
         return await response.text();
@@ -186,6 +229,7 @@ export class DataverseClient {
     private async *_iteratePages(
         resource: string,
         pageSize?: number,
+        signal?: AbortSignal,
     ): AsyncGenerator<any[]> {
         const extraHeaders: Record<string, string> = {};
         if (pageSize) {
@@ -196,10 +240,18 @@ export class DataverseClient {
         }
         let nextLink: string | undefined = resource;
         while (nextLink) {
-            const result = await this.fetch(nextLink, { headers: extraHeaders });
+            const result = await this.fetch(nextLink, {
+                headers: extraHeaders,
+                signal,
+            });
             yield result.value;
             nextLink = result["@odata.nextLink"];
         }
+    }
+
+    private _resource(path: string, query = ""): string {
+        if (!query) return path;
+        return `${path}${query.startsWith("?") ? query : `?${query}`}`;
     }
 
     //
@@ -213,12 +265,21 @@ export class DataverseClient {
      * const account = await client.getRecord("accounts", "00000000-0000-0000-0000-000000000001",
      *   "$select=name,revenue")
      */
-    async getRecord(entitySetName: Name, id: DataverseKey, query: string = "", etag?: string) {
-        const resource = `${getName(entitySetName)}(${id})?${query}`;
-        if (etag) {
-            return this.fetch(resource, { headers: { "If-None-Match": etag } as Record<string, string> });
+    async getRecord(
+        entitySetName: Name,
+        id: DataverseKey,
+        options: GetRecordOptions = {},
+    ) {
+        try {
+            const resource = this._resource(`${getName(entitySetName)}(${id})`, options.query);
+            return await this.fetch(resource, {
+                ...(options.etag ? { headers: { "If-None-Match": options.etag } as Record<string, string> } : {}),
+                signal: options.signal,
+            });
+        } catch (error: any) {
+            if (error?.code === "0x80060891") return null;
+            throw error;
         }
-        return this.fetch(resource);
     }
 
     /**
@@ -228,9 +289,12 @@ export class DataverseClient {
      * const accounts = await client.getRecords("accounts",
      *   "$select=name,revenue&$filter=revenue gt 10000")
      */
-    async getRecords(entitySetName: Name, query: string = ""): Promise<any[]> {
+    async getRecords(
+        entitySetName: Name,
+        options: QueryRequestOptions & { pageSize?: number } = {},
+    ): Promise<any[]> {
         const results: any[] = [];
-        for await (const page of this.iteratePages(entitySetName, query)) {
+        for await (const page of this.iteratePages(entitySetName, options)) {
             results.push(...page);
         }
         return results;
@@ -252,10 +316,9 @@ export class DataverseClient {
      */
     async *iterateRecords(
         entitySetName: Name,
-        query: string = "",
-        options?: { pageSize?: number },
+        options: QueryRequestOptions & { pageSize?: number } = {},
     ): AsyncGenerator<any> {
-        for await (const page of this.iteratePages(entitySetName, query, options)) {
+        for await (const page of this.iteratePages(entitySetName, options)) {
             yield* page;
         }
     }
@@ -277,10 +340,13 @@ export class DataverseClient {
      */
     async *iteratePages(
         entitySetName: Name,
-        query: string = "",
-        options?: { pageSize?: number },
+        options: QueryRequestOptions & { pageSize?: number } = {},
     ): AsyncGenerator<any[]> {
-        yield* this._iteratePages(`${entitySetName}?${query}`, options?.pageSize);
+        yield* this._iteratePages(
+            this._resource(getName(entitySetName), options.query),
+            options.pageSize,
+            options.signal,
+        );
     }
 
     /**
@@ -290,11 +356,12 @@ export class DataverseClient {
      * const newAccount = await client.postRecord("accounts",
      *   { name: "New Account", revenue: 50000 })
      */
-    async postRecord(entitySetName: Name, value: object, query: string = "") {
-        return this.fetch(`${getName(entitySetName)}?${query}`, {
+    async postRecord(entitySetName: Name, value: object, options: PostRecordOptions = {}) {
+        return this.fetch(this._resource(getName(entitySetName), options.query), {
             method: "POST",
             headers: { Prefer: "return=representation" },
             body: JSON.stringify(value),
+            signal: options.signal,
         });
     }
 
@@ -306,10 +373,16 @@ export class DataverseClient {
      *   { name: "New Account" })
      * // id: "00000000-0000-0000-0000-000000000001"
      */
-    async postRecordGetId(entitySetName: Name, value: object): Promise<GUID> {
+    async postRecordGetId(entitySetName: Name, value: object, options?: RequestOptions): Promise<GUID> {
         return this.fetch(getName(entitySetName), {
             method: "POST",
             body: JSON.stringify(value),
+            ...options,
+        }).then((id) => {
+            if (typeof id !== "string" || !id) {
+                throw new Error("Dataverse did not return a record ID");
+            }
+            return id as GUID;
         });
     }
 
@@ -320,13 +393,19 @@ export class DataverseClient {
      * await client.patchRecord("accounts", "00000000-0000-0000-0000-000000000001",
      *   { name: "Updated Name", revenue: 75000 })
      */
-    async patchRecord(entitySetName: Name, id: string, value: object, query: string = "", etag?: string) {
+    async patchRecord(
+        entitySetName: Name,
+        id: string,
+        value: object,
+        options: PatchRecordOptions = {},
+    ) {
         const extraHeaders: Record<string, string> = { Prefer: "return=representation" };
-        if (etag) extraHeaders["If-Match"] = etag;
-        return this.fetch(`${getName(entitySetName)}(${id})?${query}`, {
+        if (options.etag) extraHeaders["If-Match"] = options.etag;
+        return this.fetch(this._resource(`${getName(entitySetName)}(${id})`, options.query), {
             method: "PATCH",
             headers: extraHeaders,
             body: JSON.stringify(value),
+            signal: options.signal,
         });
     }
 
@@ -337,10 +416,10 @@ export class DataverseClient {
      * const deletedId = await client.deleteRecord("accounts",
      *   "00000000-0000-0000-0000-000000000001")
      */
-    async deleteRecord(entitySetName: Name, id: string, etag?: string): Promise<GUID> {
-        const options: RequestInit = { method: "DELETE" };
-        if (etag) options.headers = { "If-Match": etag } as Record<string, string>;
-        await this.fetch(`${getName(entitySetName)}(${id})`, options);
+    async deleteRecord(entitySetName: Name, id: string, options: DeleteRecordOptions = {}): Promise<GUID> {
+        const request: RequestInit = { method: "DELETE", signal: options.signal };
+        if (options.etag) request.headers = { "If-Match": options.etag } as Record<string, string>;
+        await this.fetch(`${getName(entitySetName)}(${id})`, request);
         return id as GUID;
     }
 
@@ -351,13 +430,20 @@ export class DataverseClient {
      * await client.updatePropertyValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "name", "New Name")
      */
-    async updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, etag?: string): Promise<GUID> {
-        const options: RequestInit = {
+    async updatePropertyValue(
+        entitySetName: Name,
+        id: string,
+        propertyName: Name,
+        value: any,
+        options: RequestOptions & { etag?: string } = {},
+    ): Promise<GUID> {
+        const request: RequestInit = {
             method: "PUT",
             body: JSON.stringify({ value }),
+            signal: options.signal,
         };
-        if (etag) options.headers = { "If-Match": etag } as Record<string, string>;
-        await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options);
+        if (options.etag) request.headers = { "If-Match": options.etag } as Record<string, string>;
+        await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, request);
         return id as GUID;
     }
 
@@ -368,9 +454,10 @@ export class DataverseClient {
      * await client.deletePropertyValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "emailaddress1")
      */
-    async deletePropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<GUID> {
+    async deletePropertyValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<GUID> {
         await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
             method: "DELETE",
+            ...options,
         });
         return id as GUID;
     }
@@ -382,8 +469,8 @@ export class DataverseClient {
      * const name = await client.getPropertyValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "name")
      */
-    async getPropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<any> {
-        return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`).then((r) => r.value);
+    async getPropertyValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<any> {
+        return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r.value);
     }
 
     /**
@@ -393,8 +480,8 @@ export class DataverseClient {
      * const imageData = await client.getPropertyRawValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "entityimage")
      */
-    async getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name): Promise<any> {
-        return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`);
+    async getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<any> {
+        return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}/$value`, { raw: true, ...options });
     }
 
     /**
@@ -438,7 +525,7 @@ export class DataverseClient {
      *   "00000000-0000-0000-0000-000000000001",
      *   "myfile", "report.pdf", fileBlob)
      */
-    async updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource) {
+    async updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource, options?: RequestOptions) {
         return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, {
             method: "PATCH",
             headers: {
@@ -446,6 +533,7 @@ export class DataverseClient {
                 "x-ms-file-name": filename,
             },
             body,
+            ...options,
         });
     }
 
@@ -489,12 +577,14 @@ export class DataverseClient {
         propertyName: Name,
         childEntitySetName: Name,
         childId: string,
+        options?: RequestOptions,
     ): Promise<GUID> {
         await this.fetch(`${getName(entitySetName)}(${parentId})/${getName(propertyName)}/$ref`, {
             method: "PUT",
             body: JSON.stringify({
                 "@odata.id": `${this.options.url}/api/data/v9.2/${getName(childEntitySetName)}(${childId})`,
             }),
+            ...options,
         });
         return childId as GUID;
     }
@@ -508,9 +598,9 @@ export class DataverseClient {
      *   "primarycontactid",
      *   "00000000-0000-0000-0000-000000000002")
      */
-    async dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string): Promise<GUID> {
+    async dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string, options?: RequestOptions): Promise<GUID> {
         const resource = `${getName(entitySetName)}(${parentId})/${getName(propertyName)}${childId ? `(${childId})` : ""}/$ref`;
-        await this.fetch(resource, { method: "DELETE" });
+        await this.fetch(resource, { method: "DELETE", ...options });
         return (childId ?? parentId) as GUID;
     }
 
@@ -527,10 +617,17 @@ export class DataverseClient {
         entitySetName: Name,
         id: string,
         navigationPropertyName: Name,
-        query: string = "",
+        options: QueryRequestOptions & { pageSize?: number } = {},
     ): Promise<any[]> {
-        const resource = `${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}?${query}`;
-        return this.fetch(resource).then((r) => r.value);
+        const records: any[] = [];
+        for await (const page of this._iteratePages(
+            this._resource(`${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}`, options.query),
+            options?.pageSize,
+            options?.signal,
+        )) {
+            records.push(...page);
+        }
+        return records;
     }
 
     /**
@@ -542,9 +639,14 @@ export class DataverseClient {
      *   "primarycontactid",
      *   "$select=fullname,email")
      */
-    async getAssociatedRecord(entitySetName: Name, id: string, navigationPropertyName: Name, query: string = "") {
-        const resource = `${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}?${query}`;
-        return this.fetch(resource);
+    async getAssociatedRecord(
+        entitySetName: Name,
+        id: string,
+        navigationPropertyName: Name,
+        options: QueryRequestOptions = {},
+    ) {
+        const resource = this._resource(`${getName(entitySetName)}(${id})/${getName(navigationPropertyName)}`, options.query);
+        return this.fetch(resource, { signal: options.signal });
     }
 
     /**
@@ -571,7 +673,7 @@ export class DataverseClient {
             entitySetName,
             parentId,
             propertyName,
-            `$select=${getName(childPrimaryKeyName)}`,
+            { query: `$select=${getName(childPrimaryKeyName)}` },
         );
         const currentIds = currentAssociated.map((r) => r[getName(childPrimaryKeyName)]);
 

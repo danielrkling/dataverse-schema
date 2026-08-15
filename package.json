@@ -6,17 +6,21 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/dataverse-schema.js",
-  "module": "dist/dataverse-schema.js",
+  "main": "./dist/dataverse-schema.mjs",
+  "module": "dist/dataverse-schema.mjs",
   "typings": "dist/dataverse-schema.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/dataverse-schema.js",
+      "import": "./dist/dataverse-schema.mjs",
       "types": "./dist/dataverse-schema.d.ts"
     },
     "./tanstack": {
-      "import": "./dist/tanstack.js",
+      "import": "./dist/tanstack.mjs",
       "types": "./dist/tanstack.d.ts"
+    },
+    "./tanstack-db": {
+      "import": "./dist/tanstack-db.mjs",
+      "types": "./dist/tanstack-db.d.ts"
     }
   },
   "keywords": [
@@ -49,6 +53,7 @@
   },
   "dependencies": {
     "@standard-schema/spec": "^1.0.0",
+    "idb": "^8.0.3",
     "valibot": "^1.4.2"
   },
   "peerDependencies": {
@@ -60,7 +65,7 @@
     }
   },
   "scripts": {
-    "build": "vite build && vite build --mode tanstack",
+    "build": "vite build && vite build --mode tanstack && vite build --mode tanstack-db",
     "dev": "vite"
   }
 }

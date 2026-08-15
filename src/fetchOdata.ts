@@ -243,7 +243,7 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
 
   async *iteratePages(options?: { pageSize?: number }): AsyncGenerator<TResult[]> {
     const qs = this.toString()
-    const raw = this._table.client.iteratePages(this._table.entitySetName, qs, options)
+    const raw = this._table.client.iteratePages(this._table.entitySetName, { ...options, query: qs })
     for await (const page of raw) {
       yield page.map((v: any) => this._transformRow(v))
     }
@@ -503,8 +503,7 @@ class ODataQuery<T extends GenericProperties> {
     }
     for await (const page of this.#table.client.iteratePages(
       this.#table.entitySetName,
-      qs,
-      options,
+      { ...options, query: qs },
     )) {
       yield page.map((v: unknown) => this._transformRow(v))
     }

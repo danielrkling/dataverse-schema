@@ -6,6 +6,23 @@ import { parseDateOnly, toDateOnly } from "./util";
 
 export type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>
 
+const DATE_SCHEMA = v.date();
+
+function isValidDate(value: Date): boolean {
+  return v.safeParse(DATE_SCHEMA, value).success;
+}
+
+function parseValidDateOnly(value: unknown): Date {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
+  const text = value as string;
+  const result = parseDateOnly(text);
+  const [year, month, day] = text.slice(0, 10).split("-").map(Number);
+  if (!isValidDate(result) || result.getFullYear() !== year || result.getMonth() !== month - 1 || result.getDate() !== day) {
+    throw new Error(`Invalid date-only value: ${text}`);
+  }
+  return result;
+}
+
 export type FieldOptions<T> = {
   default?: T
   readonly?: boolean
@@ -93,6 +110,10 @@ export class NullableNumberField extends FieldBase<number | null> {
   constructor(name: string, options?: FieldOptions<number | null>) {
     super(name, { defaultValue: null, schema: v.nullable(v.number()) as ValidationSchema<number | null> }, options);
   }
+
+  transformValueFromDataverse(value: any): number | null {
+    return value ?? null;
+  }
 }
 
 export class StringField extends FieldBase<string> {
@@ -113,30 +134,38 @@ export class NullableStringField extends FieldBase<string | null> {
   constructor(name: string, options?: FieldOptions<string | null>) {
     super(name, { defaultValue: null, schema: v.nullable(v.string()) as ValidationSchema<string | null> }, options);
   }
+
+  transformValueFromDataverse(value: any): string | null {
+    return value ?? null;
+  }
 }
 
 export class PrimaryKeyField extends FieldBase<GUID> {
   kind = "value" as const;
   type = "primaryKey" as const;
   constructor(name: string, options?: FieldOptions<GUID>) {
-    super(name, { defaultValue: "" as GUID, schema: v.string() as ValidationSchema<GUID> }, options);
+    super(name, {
+      defaultValue: "" as GUID,
+      schema: v.pipe(v.string(), v.uuid()) as unknown as ValidationSchema<GUID>,
+    }, options);
   }
 
   getDefault(): GUID {
-    return crypto.randomUUID();
+    return (super.getDefault() || crypto.randomUUID()) as GUID;
   }
 }
 
 export class ListField<T extends string | number> extends FieldBase<T | null> {
   kind = "value" as const;
   type = "list" as const;
-  list: Array<T>;
+  readonly list: readonly T[];
   constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>) {
+    const values = Object.freeze([...list]) as readonly T[];
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.custom<T>((v) => list.includes(v as T), `Value not in [${list}]`)) as ValidationSchema<T | null>,
+      schema: v.nullable(v.custom<T>((value) => values.includes(value as T), `Value not in [${values}]`)) as ValidationSchema<T | null>,
     }, options);
-    this.list = list;
+    this.list = values;
   }
 }
 
@@ -146,6 +175,7 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
   #options: T;
   constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>) {
     const firstKey = Object.keys(options)[0];
+    if (firstKey === undefined) throw new Error("Choice fields require at least one option");
     const values = Object.values(options) as [string, ...string[]];
     super(name, {
       defaultValue: options[Number(firstKey) as keyof T],
@@ -155,14 +185,16 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
   }
 
   transformValueFromDataverse(value: any): T[keyof T] {
-    return this.#options[value as keyof T];
+    const result = this.#options[value as keyof T];
+    if (result === undefined) throw new Error(`Unknown choice value: ${value}`);
+    return result;
   }
 
   transformValueToDataverse(value: any): number {
     for (const [k, v] of Object.entries(this.#options)) {
       if (v === value) return Number(k);
     }
-    return value as any;
+    throw new Error(`Unknown choice label: ${value}`);
   }
 }
 
@@ -171,6 +203,7 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
   type = "choice" as const;
   #options: T;
   constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>) {
+    if (Object.keys(options).length === 0) throw new Error("Choice fields require at least one option");
     const values = Object.values(options) as [string, ...string[]];
     super(name, {
       defaultValue: null,
@@ -181,7 +214,9 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
 
   transformValueFromDataverse(value: any): T[keyof T] | null {
     if (value === null) return null;
-    return this.#options[value as keyof T];
+    const result = this.#options[value as keyof T];
+    if (result === undefined) throw new Error(`Unknown choice value: ${value}`);
+    return result;
   }
 
   transformValueToDataverse(value: any): number | null {
@@ -189,7 +224,7 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
     for (const [k, v] of Object.entries(this.#options)) {
       if (v === value) return Number(k);
     }
-    return value as any;
+    throw new Error(`Unknown choice label: ${value}`);
   }
 }
 
@@ -206,8 +241,10 @@ export class DateTimeField extends FieldBase<Date> {
     return new Date();
   }
   transformValueFromDataverse(value: any): Date {
-    if (value === null) return new Date();
-    return new Date(value);
+    if (value == null) return new Date();
+    const result = new Date(value);
+    if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
+    return result;
   }
 }
 
@@ -222,7 +259,10 @@ export class NullableDateTimeField extends FieldBase<Date | null> {
   }
   transformValueFromDataverse(value: any): Date | null {
     if (value === null) return null;
-    return new Date(value);
+    if (value === undefined) return null;
+    const result = new Date(value);
+    if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
+    return result;
   }
 }
 
@@ -237,9 +277,10 @@ export class DateField extends FieldBase<Date> {
   }
   transformValueFromDataverse(value: any): Date {
     if (value == null) return parseDateOnly(new Date().toISOString());
-    return parseDateOnly(value);
+    return parseValidDateOnly(value);
   }
   transformValueToDataverse(value: any) {
+    if (!(value instanceof Date) || !isValidDate(value)) throw new Error("Invalid date value");
     return toDateOnly(value);
   }
 }
@@ -255,9 +296,10 @@ export class NullableDateField extends FieldBase<Date | null> {
   }
   transformValueFromDataverse(value: any): Date | null {
     if (value == null) return null;
-    return parseDateOnly(value);
+    return parseValidDateOnly(value);
   }
   transformValueToDataverse(value: any) {
+    if (value !== null && (!(value instanceof Date) || !isValidDate(value))) throw new Error("Invalid date value");
     return toDateOnly(value);
   }
 }
@@ -280,24 +322,30 @@ export class ImageField extends FieldBase<ImageRef | null> {
   constructor(name: string, options?: FieldOptions<ImageRef | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.object({ url: v.string() })) as ValidationSchema<ImageRef | null>,
+      schema: v.nullable(v.object({
+        url: v.optional(v.string()),
+        fullSizeUrl: v.optional(v.string()),
+        data: v.optional(v.nullable(v.instance(Blob))),
+      })) as ValidationSchema<ImageRef | null>,
     }, options);
   }
 
-  transformValueFromDataverse(value: any, ctx: TransformContext): ImageRef | null {
+  transformValueFromDataverse(value: any, ctx?: TransformContext): ImageRef | null {
     if (value == null) return null;
     const b64 = String(value);
     const mimeType = b64.startsWith("/9j/") ? "image/jpeg"
       : b64.startsWith("iVB") ? "image/png"
         : b64.startsWith("R0lG") ? "image/gif"
           : "application/octet-stream";
-          const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName,ctx.recordId,this.name)
-    return { url: `data:${mimeType};base64,${b64}`, fullSizeUrl };
+    const url = `data:${mimeType};base64,${b64}`;
+    if (!ctx) return { url };
+    const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.name);
+    return { url, fullSizeUrl };
   }
 
-  async transformValueToDataverse(value: ImageRef | null): Promise<string | null> {
+  async transformValueToDataverse(value: ImageRef | null): Promise<string | null | typeof SKIP> {
     if (value == null) return null;
-    if (value.data == null) return null;
+    if (value.data == null) return SKIP;
     if (value.data instanceof Blob) {
       return blobToBase64(value.data);
     }
@@ -322,8 +370,8 @@ export type FileRef = {
 }
 
 export type ImageRef = {
-  readonly url: string;
-  readonly fullSizeUrl: string
+  readonly url?: string;
+  readonly fullSizeUrl?: string
   data?: Blob | null;
 }
 
@@ -331,11 +379,11 @@ export class FileField extends FieldBase<FileRef | null> {
   type = "file" as const;
   kind = "file" as const;
 
-  constructor(name: string) {
+  constructor(name: string, options?: FieldOptions<FileRef | null>) {
     super(name, {
       defaultValue: null,
       schema: v.nullable(v.object({ name: v.string() })) as ValidationSchema<FileRef | null>,
-    }, { readonly: true });
+    }, { ...options, readonly: true });
     this.fromDataverseName = `${name}_name`;
   }
 
@@ -601,8 +649,8 @@ export function image(name: string, options?: FieldOptions<ImageRef | null>) {
  *
  * @param name The Dataverse logical name of the file column.
  */
-export function file(name: string) {
-  return new FileField(name)
+export function file(name: string, options?: FieldOptions<FileRef | null>) {
+  return new FileField(name, options)
 }
 
 /**

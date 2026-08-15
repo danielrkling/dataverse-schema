@@ -1,11 +1,12 @@
 import type { CollectionConfig, InsertMutationFn, UpdateMutationFn, DeleteMutationFn, SyncConfig, UtilsRecord } from "@tanstack/db";
-import { getEtag, type DataverseTable, type GenericProperties, type Infer } from "../index";
+import { getEtag, type DataverseTable, type GenericProperties, type Infer } from "dataverse-schema";
 
 const DEFAULT_SYNC_INTERVAL = 30000;
 
 export type DataverseCollectionConfig<T extends GenericProperties> = {
     table: DataverseTable<T>;
     syncInterval?: number;
+    readOnlyWhenOffline?: boolean;
 } & Omit<CollectionConfig<Infer<T>>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
 
 export interface DataverseCollectionUtils<T extends GenericProperties> extends UtilsRecord {
