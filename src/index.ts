@@ -5,5 +5,5 @@ export * from './filter';
 export * from './table';
 export * from './types';
 export * from './util';
-export * from './odata';
+export * from './fetchOdata';
 export * from './fetchXml';

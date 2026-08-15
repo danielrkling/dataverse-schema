@@ -1,5 +1,5 @@
 import type { CollectionConfig, InsertMutationFn, UpdateMutationFn, DeleteMutationFn, SyncConfig } from "@tanstack/db";
-import type { DataverseTable, GenericProperties, Infer } from "../index";
+import type { DataverseTable, GenericProperties, Infer } from "dataverse-schema";
 import type {
   DataverseOfflineCollectionConfig,
   DataverseOfflineCollectionUtils,
@@ -8,11 +8,23 @@ import type {
 import { DEFAULT_QUEUE_STORE } from "./types";
 import {
   getAllFromIDB,
+  getFromIDB,
   putAllToIDB,
+  putToIDB,
+  enqueueToIDB,
   deleteManyFromIDB,
   clearIDBStore,
+  deleteWhereFromIDB,
 } from "./idb";
-import { compactMutations } from "./compact";
+import { replayMutations } from "./replay";
+import type { OfflineChannelMessage } from "./coordination";
+import {
+  requireCrossTabApis,
+  withLock,
+  replayLockName,
+  openChannel,
+  postToChannel,
+} from "./coordination";
 
 const DEFAULT_POLL_INTERVAL = 30000;
 
@@ -46,16 +58,22 @@ function buildQueryForTable(
 export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
   config: DataverseOfflineCollectionConfig<T>,
 ): CollectionConfig<Infer<T>, string | number, never, DataverseOfflineCollectionUtils> & { utils: DataverseOfflineCollectionUtils } {
+  requireCrossTabApis();
+
   const { table, query, id, dbName = "dataverse-schema", storeName, syncInterval = DEFAULT_POLL_INTERVAL, queueStoreName = DEFAULT_QUEUE_STORE, ...rest } = config;
   const pk = table.primaryKey;
   const getKey = config.getKey ?? ((item: Infer<T>) => (item as any)[pk.key]);
   const collectionId = id ?? table.entitySetName;
   const dataStore = storeName ?? table.entitySetName;
+  const lockName = replayLockName(dbName, collectionId);
+  // Identifies this options instance so BroadcastChannel self-delivery can be
+  // ignored instead of triggering a redundant sync cycle on the sender.
+  const instanceId = crypto.randomUUID();
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
-  let syncFn: (() => Promise<void>) | null = null;
   let onlineHandler: (() => void) | null = null;
-  let nextSequence = 1;
+  let channelCleanup: (() => void) | null = null;
+  let syncFn: (() => Promise<void>) | null = null;
 
   async function getQueue(): Promise<QueuedMutation[]> {
     try {
@@ -65,115 +83,116 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
     }
   }
 
-  async function enqueue(mutation: Omit<QueuedMutation, "sequence">): Promise<void> {
-    const queue = await getQueue();
-    const seq = nextSequence++;
-    queue.push({ ...mutation, sequence: seq });
-    await putAllToIDB(dbName, queueStoreName, queue, "id");
+  function broadcast(
+    message: Omit<OfflineChannelMessage, "dbName" | "collectionId" | "source">,
+  ): void {
+    postToChannel({ ...message, dbName, collectionId, source: instanceId });
   }
 
-  async function removeSuccessful(mutations: QueuedMutation[]): Promise<void> {
-    if (mutations.length === 0) return;
-    await deleteManyFromIDB(
-      dbName,
-      queueStoreName,
-      mutations.map((m) => m.id),
-    );
-  }
-
-  async function replayQueue(): Promise<void> {
-    const allMutations = await getQueue();
-    if (allMutations.length === 0) return;
-
-    // Filter to this collection's mutations, then compact
-    const myMutations = allMutations.filter((m) => m.collectionId === collectionId);
-    const compacted = compactMutations(myMutations);
-
-    // Sort: inserts first (FK-safe), then by sequence
-    const TYPE_ORDER: Record<string, number> = { insert: 0, update: 1, delete: 2 };
-    compacted.sort((a, b) => {
-      const d = TYPE_ORDER[a.type] - TYPE_ORDER[b.type];
-      return d !== 0 ? d : a.sequence - b.sequence;
-    });
-
-    const succeeded: QueuedMutation[] = [];
-    const failed: QueuedMutation[] = [];
-
-    for (const mutation of compacted) {
-      try {
-        switch (mutation.type) {
-          case "insert":
-            await table.insertRecord(mutation.value);
-            break;
-          case "update":
-            await table.updateRecord(mutation.key as string, mutation.value);
-            break;
-          case "delete":
-            await table.deleteRecord(mutation.key as string);
-            break;
-        }
-        succeeded.push(mutation);
-      } catch (err) {
-        console.warn(`[dataverse-offline] failed to replay mutation ${mutation.id}:`, err);
-        failed.push(mutation);
-      }
-    }
-
-    await removeSuccessful(succeeded);
-
-    if (failed.length > 0) {
-      console.warn(`[dataverse-offline] ${failed.length} mutations failed for "${collectionId}", will retry next cycle`);
-    }
+  async function queueMutation(
+    mutation: Omit<QueuedMutation, "sequence">,
+  ): Promise<void> {
+    await enqueueToIDB<QueuedMutation>(dbName, queueStoreName, [mutation]);
+    broadcast({ type: "queue-changed" });
   }
 
   const syncConfig: SyncConfig<Infer<T>> = {
     sync: ({ begin, write, commit, markReady }) => {
-      syncFn = async () => {
+      // Coalescing: concurrent sync requests (poll, online, forceSync,
+      // BroadcastChannel) collapse into one in-flight cycle plus at most one
+      // follow-up rerun.
+      let running = false;
+      let rerunRequested = false;
+      let currentRun: Promise<void> = Promise.resolve();
+
+      const runCycle = async (): Promise<void> => {
+        // Phase 1: hydrate from IDB (fast) — runs in every tab, so offline and
+        // non-leader tabs still get instant cached UI.
+        let cached: Infer<T>[] = [];
         try {
-          // Phase 1: hydrate from IDB (fast)
-          let cached: Infer<T>[] = [];
-          try {
-            cached = await getAllFromIDB<Infer<T>>(dbName, dataStore);
-          } catch {
-            // IDB may not exist yet
-          }
+          cached = await getAllFromIDB<Infer<T>>(dbName, dataStore);
+        } catch {
+          // IDB may not exist yet
+        }
 
-          if (cached.length > 0) {
-            begin();
-            for (const item of cached) {
-              write({ type: "insert", value: item });
-            }
-            commit();
+        if (cached.length > 0) {
+          begin();
+          for (const item of cached) {
+            write({ type: "insert", value: item });
           }
+          commit();
+        }
 
-          // Phase 2: sync from Dataverse
-          try {
+        if (!navigator.onLine) {
+          markReady();
+          return;
+        }
+
+        // Phase 2: leader-tab only. Replay local mutations first so the remote
+        // snapshot (and therefore IDB) includes our pending writes, preventing
+        // the optimistic-clobber bug. Non-leaders skip this — their own fresh
+        // snapshot arrives via the sync-complete broadcast.
+        try {
+          await withLock(lockName, async () => {
+            await replayMutations({
+              dbName,
+              queueStoreName,
+              tables: { [collectionId]: table as DataverseTable<GenericProperties> },
+              collectionId,
+            });
+
             const queryString = buildQueryForTable(table as DataverseTable<GenericProperties>, query);
             begin();
-            for await (const page of table.client.iteratePages(table.entitySetName, queryString)) {
-              const records = page.map((v: any) => table.transformValueFromDataverse(v));
-              for (const record of records) {
-                write({ type: "insert", value: record });
+            try {
+              for await (const page of table.client.iteratePages(table.entitySetName, queryString)) {
+                const records = page.map((v: any) => table.transformValueFromDataverse(v));
+                for (const record of records) {
+                  write({ type: "insert", value: record });
+                }
+                await putAllToIDB(dbName, dataStore, records, pk.key);
               }
-              await putAllToIDB(dbName, dataStore, records, pk.key);
+            } finally {
+              commit();
             }
-            commit();
 
-            if (navigator.onLine) {
-              await replayQueue();
-            }
-          } catch (err) {
-            console.warn(`[dataverse-offline] remote sync failed for "${collectionId}":`, err);
-          }
-
-          markReady();
+            broadcast({ type: "sync-complete" });
+          });
         } catch (err) {
-          console.warn(`[dataverse-offline] sync error for "${collectionId}":`, err);
-          markReady();
+          console.warn(`[dataverse-offline] remote sync failed for "${collectionId}":`, err);
         }
+
+        markReady();
       };
 
-      syncFn();
+      const runSync = (): Promise<void> => {
+        if (running) {
+          rerunRequested = true;
+          return currentRun;
+        }
+        running = true;
+        currentRun = (async () => {
+          try {
+            do {
+              rerunRequested = false;
+              await runCycle();
+            } while (rerunRequested);
+          } catch (err) {
+            console.warn(`[dataverse-offline] sync error for "${collectionId}":`, err);
+          } finally {
+            running = false;
+          }
+        })();
+        return currentRun;
+      };
+      syncFn = runSync;
+
+      channelCleanup = openChannel((message) => {
+        if (message.source === instanceId) return;
+        if (message.dbName !== dbName || message.collectionId !== collectionId) return;
+        syncFn?.();
+      });
+
+      syncFn?.();
 
       if (syncInterval > 0) {
         pollTimer = setInterval(() => syncFn?.(), syncInterval);
@@ -191,6 +210,10 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           window.removeEventListener("online", onlineHandler);
           onlineHandler = null;
         }
+        if (channelCleanup) {
+          channelCleanup();
+          channelCleanup = null;
+        }
       };
     },
     rowUpdateMode: "partial",
@@ -199,10 +222,8 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
   const defaultOnInsert: InsertMutationFn<Infer<T>> = async ({ transaction }) => {
     const results: (string | number)[] = [];
     for (const mutation of transaction.mutations) {
-      let existing: any[];
-      try { existing = await getAllFromIDB<any>(dbName, dataStore); } catch { existing = []; }
-      existing.push(mutation.modified);
-      await putAllToIDB(dbName, dataStore, existing, pk.key);
+      const key = (mutation.modified as any)[pk.key] ?? crypto.randomUUID();
+      await putToIDB(dbName, dataStore, mutation.modified);
 
       if (navigator.onLine) {
         try {
@@ -210,26 +231,26 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           results.push(guid);
         } catch (err) {
           console.warn(`[dataverse-offline] insert failed, queuing:`, err);
-          await enqueue({
+          await queueMutation({
             id: crypto.randomUUID(),
             type: "insert",
-            key: (mutation.modified as any)[pk.key] ?? crypto.randomUUID(),
+            key,
             value: mutation.modified,
             collectionId,
             timestamp: Date.now(),
           });
-          results.push((mutation.modified as any)[pk.key]);
+          results.push(key);
         }
       } else {
-        await enqueue({
+        await queueMutation({
           id: crypto.randomUUID(),
           type: "insert",
-          key: (mutation.modified as any)[pk.key] ?? crypto.randomUUID(),
+          key,
           value: mutation.modified,
           collectionId,
           timestamp: Date.now(),
         });
-        results.push((mutation.modified as any)[pk.key]);
+        results.push(key);
       }
     }
     return results;
@@ -238,15 +259,9 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
   const defaultOnUpdate: UpdateMutationFn<Infer<T>> = async ({ transaction }) => {
     const results: (string | number)[] = [];
     for (const mutation of transaction.mutations) {
-      let existing: any[];
-      try { existing = await getAllFromIDB<any>(dbName, dataStore); } catch { existing = []; }
-      const idx = existing.findIndex((item: any) => item[pk.key] === mutation.key);
-      if (idx !== -1) {
-        existing[idx] = { ...existing[idx], ...mutation.changes };
-      } else {
-        existing.push({ [pk.key]: mutation.key, ...mutation.changes });
-      }
-      await putAllToIDB(dbName, dataStore, existing, pk.key);
+      const existing = await getFromIDB<any>(dbName, dataStore, mutation.key);
+      const merged = { ...(existing ?? { [pk.key]: mutation.key }), ...mutation.changes };
+      await putToIDB(dbName, dataStore, merged);
 
       if (navigator.onLine) {
         try {
@@ -254,7 +269,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           results.push(mutation.key);
         } catch (err) {
           console.warn(`[dataverse-offline] update failed, queuing:`, err);
-          await enqueue({
+          await queueMutation({
             id: crypto.randomUUID(),
             type: "update",
             key: mutation.key,
@@ -265,7 +280,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           results.push(mutation.key);
         }
       } else {
-        await enqueue({
+        await queueMutation({
           id: crypto.randomUUID(),
           type: "update",
           key: mutation.key,
@@ -290,7 +305,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           results.push(mutation.key);
         } catch (err) {
           console.warn(`[dataverse-offline] delete failed, queuing:`, err);
-          await enqueue({
+          await queueMutation({
             id: crypto.randomUUID(),
             type: "delete",
             key: mutation.key,
@@ -300,7 +315,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
           results.push(mutation.key);
         }
       } else {
-        await enqueue({
+        await queueMutation({
           id: crypto.randomUUID(),
           type: "delete",
           key: mutation.key,
@@ -322,9 +337,8 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
     clearLocalData: async () => {
       await clearIDBStore(dbName, dataStore);
       // Only clear this collection's mutations from the shared queue
-      const queue = await getQueue();
-      const remaining = queue.filter((m) => m.collectionId !== collectionId);
-      await putAllToIDB(dbName, queueStoreName, remaining, "id");
+      await deleteWhereFromIDB(dbName, queueStoreName, "collectionId", collectionId);
+      broadcast({ type: "queue-changed", count: 0 });
     },
   };
 

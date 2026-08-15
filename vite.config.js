@@ -1,40 +1,61 @@
-// vite.config.ts
 import { defineConfig } from "vite";
 import dts from "vite-plugin-dts";
 import path from "path";
 
-export default defineConfig({
-  build: {
-    lib: {
-      entry: {
-        "dataverse-schema": path.resolve(__dirname, "src/index.ts"),
-        tanstack: path.resolve(__dirname, "src/tanstack/index.ts"),
-      },
-      formats: ["es"],
-      fileName: (format, entryName) => `${entryName}.js`,
-    },
-    rollupOptions: {
-      external: ["@tanstack/db"],
-    },
-    minify: false,
-    target: "esnext",
-  },
-  test:{
-    environment:"jsdom",
-    setupFiles:["./test/setup.ts"],
-    coverage: {
-      provider: "v8",
-      include: ["src/**/*.ts"],
-    },
-  },
-  plugins: [
-    dts({
-      rollupTypes: true,
-      compilerOptions: {
+const src = path.resolve(__dirname, "src");
+
+export default defineConfig(({ mode }) => {
+  if (mode === "tanstack") {
+    return {
+      build: {
+        lib: {
+          entry: path.resolve(src, "tanstack/index.ts"),
+          formats: ["es"],
+          fileName: () => "tanstack.mjs",
+        },
+        rollupOptions: {
+          external: ["@tanstack/db", "dataverse-schema"],
+        },
+        minify: false,
         target: "esnext",
       },
-      outDir: "dist",
-      entryRoot: "src",
-    }),
-  ],
+
+      plugins: [
+        dts({
+          rollupTypes: true,
+          outDir: "dist",
+          entryRoot: src,
+          compilerOptions: {
+            target: "esnext",
+          },
+        }),
+      ],
+    };
+  }
+
+  return {
+    build: {
+      lib: {
+        entry: path.resolve(src, "index.ts"),
+        formats: ["es"],
+        fileName: () => "dataverse-schema.mjs",
+      },
+      rollupOptions: {
+        external: ["@tanstack/db"],
+      },
+      minify: false,
+      target: "esnext",
+    },
+
+    plugins: [
+      dts({
+        rollupTypes: true,
+        outDir: "dist",
+        entryRoot: src,
+        compilerOptions: {
+          target: "esnext",
+        },
+      }),
+    ],
+  };
 });

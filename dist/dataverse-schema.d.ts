@@ -1,131 +1,27 @@
+import { CollectionConfig } from '@tanstack/db';
+import { DeleteMutationFn } from '@tanstack/db';
+import { InsertMutationFn } from '@tanstack/db';
+import { UpdateMutationFn } from '@tanstack/db';
+import { UtilsRecord } from '@tanstack/db';
 import * as v from 'valibot';
-
-export declare function Above(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare function AboveOrEqual(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare class Aggregation<V = any> {
-    field?: string;
-    operation: string;
-    constructor(operation: string, field?: string);
-    toOdata(alias: string): string;
-}
-
-export declare function all<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
 
 /**
  * Represents an alternate key for a Dataverse entity.  An alternate key is used
  * to uniquely identify a record instead of using its primary key (GUID).
  * It can be a single key-value pair or a combination of multiple key-value pairs.
  */
-export declare type AlternateKey = `${string}=${string}` | `${string}=${string},${string}=${string}`;
+declare type AlternateKey = `${string}=${string}` | `${string}=${string},${string}=${string}`;
 
-export declare function and(...conditions: (FilterExpr | string)[]): FilterExpr;
+/** Exponential backoff: 2^(attempts-1) seconds, capped at 5 minutes. */
+export declare function backoffDelayMs(attempts: number): number;
 
-export declare function any<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
-
-declare type ApplyAliasProxy<R extends Record<string, any>> = {
-    [K in keyof R]: FieldRef<R[K], K extends string ? K : never>;
-};
-
-declare type ApplyAliasProxy_2<R extends Record<string, any>> = {
-    [K in keyof R]: FieldRef<R[K], K extends string ? K : never>;
-};
-
-export declare interface ApplyQuery<T extends GenericProperties, TResult extends Record<string, any>> {
-    filter(filter: string): ApplyQuery<T, TResult>;
-    filter(filter: FilterExpr): ApplyQuery<T, TResult>;
-    filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): ApplyQuery<T, TResult>;
-    orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): ApplyQuery<T, TResult>;
-    orderby(alias: string, direction?: "asc" | "desc"): ApplyQuery<T, TResult>;
-    top(n: number): ApplyQuery<T, TResult>;
-    toString(): string;
-    execute(): Promise<TResult[]>;
-    iterate(options?: {
-        pageSize?: number;
-    }): AsyncGenerator<TResult>;
-    iteratePages(options?: {
-        pageSize?: number;
-    }): AsyncGenerator<TResult[]>;
-}
-
-declare type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
-    [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V : R[K] extends Aggregation<infer V> ? V : never;
-};
-
-declare type ApplyResultType_2<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
-    [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V : R[K] extends Aggregation<infer V> ? V : never;
-};
-
-export declare function asc(...fields: Name[]): OrderSpec;
-
-export declare function attachEtag<T>(v: T): T;
-
-declare type AttrDef = {
-    name: string;
-    alias: string;
-    aggregate?: string;
-    groupby?: boolean;
-    dategrouping?: string;
-    distinct?: boolean;
-    rowaggregate?: string;
-};
-
-export declare function average<V>(field: FieldRef<V>): Aggregation<V>;
-
-/**
- * Creates a data URL from a base64 encoded image string.
- *
- * @param base64 The base64 encoded image string.
- * @returns A data URL representing the image.
- *
- * @example
- * // Create a data URL from a base64 string:
- * const base64String = "iVBORw0KGgoAAAANSUhEUg..."; // A long base64 string
- * const imageUrl = base64ImageToURL(base64String);
- * // returns "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg..."
- */
-export declare function base64ImageToURL(base64: string): string;
-
-export declare function Between(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr;
-
-/**
- * Creates a boolean-typed Dataverse column definition.
- *
- * @param name The Dataverse logical name of the column (e.g. `"is_active"`).
- *
- * @example
- * const table = new DataverseTable({
- *   isActive: boolean("is_active"),
- * });
- * // Infer<typeof table>["isActive"] → boolean
- */
-export declare function boolean(name: string, options?: FieldOptions<boolean>): BooleanField;
-
-export declare class BooleanField extends FieldBase<boolean> {
+declare class BooleanField extends FieldBase<boolean> {
     kind: "value";
     type: "boolean";
     constructor(name: string, options?: FieldOptions<boolean>);
 }
 
-export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
-
-/**
- * Creates a choice/option-set column definition. Maps Dataverse numeric option values
- * to human-readable string labels.
- *
- * @param name The Dataverse logical name of the column.
- * @param options An object mapping numeric option values to string labels.
- *
- * @example
- * const table = new DataverseTable({
- *   status: choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" }),
- * });
- * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
- */
-export declare function choice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>): ChoiceField<T>;
-
-export declare class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
+declare class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
     #private;
     kind: "value";
     type: "choice";
@@ -134,41 +30,7 @@ export declare class ChoiceField<T extends Record<number, string>> extends Field
     transformValueToDataverse(value: any): number;
 }
 
-/**
- * Creates a one-to-many (collection) navigation property definition. The related records
- * can be expanded via OData `$expand` or fetched through the table API.
- *
- * @param name The Dataverse logical name of the collection navigation property.
- * @param getTable A thunk that returns the related table definition.
- *
- * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), street: string("street"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   addresses: collection("person_addresses", () => Address),
- * });
- * // Infer<typeof Person>["addresses"] → { id: GUID; street: string }[]
- */
-export declare function collection<TProperties extends GenericProperties>(name: string, getTable: GetTable<DataverseTable<TProperties>>): CollectionProperty<TProperties>;
-
-/**
- * Creates a collection-of-IDs navigation property definition. Unlike a full collection,
- * this only stores the related record IDs (GUIDs), not the full records.
- *
- * @param name The Dataverse logical name of the navigation property.
- * @param getTable A thunk that returns the related table definition.
- *
- * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   addressIds: collectionIds("person_addresses", () => Address),
- * });
- * // Infer<typeof Person>["addressIds"] → `${string}-${string}-${string}-${string}-${string}`[]
- */
-export declare function collectionIds(name: string, getTable: GetTable): CollectionIdsProperty;
-
-export declare class CollectionIdsProperty extends FieldBase<GUID[]> {
+declare class CollectionIdsProperty extends FieldBase<GUID[]> {
     #private;
     kind: "navigation";
     type: "collectionIds";
@@ -181,11 +43,7 @@ export declare class CollectionIdsProperty extends FieldBase<GUID[]> {
     afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
 
-declare type CollectionKeys<T extends GenericProperties> = {
-    [K in keyof T]: T[K] extends CollectionProperty<any> ? K : never;
-}[keyof T];
-
-export declare class CollectionProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties>[]> {
+declare class CollectionProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties>[]> {
     #private;
     kind: "navigation";
     type: "collection";
@@ -195,28 +53,6 @@ export declare class CollectionProperty<TProperties extends GenericProperties> e
     transformValueToDataverse(): typeof SKIP;
     afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
-
-export declare interface CollectionSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
-    select<K extends ValueKeys<TAll>>(...keys: K[]): CollectionSubQuery<TAll, {
-        [P in K]: TAll[P];
-    }, {
-        [P in K]: Infer<TAll[P]>;
-    }>;
-    expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>): CollectionSubQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>;
-    expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>): CollectionSubQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>;
-    filter(filter: string): CollectionSubQuery<TAll, TChosen, TResult>;
-    filter(filter: FilterExpr): CollectionSubQuery<TAll, TChosen, TResult>;
-    filter(filter: (f: ODataFieldProxy<TAll>) => string | FilterExpr): CollectionSubQuery<TAll, TChosen, TResult>;
-    orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): CollectionSubQuery<TAll, TChosen, TResult>;
-    orderby(alias: string, direction?: "asc" | "desc"): CollectionSubQuery<TAll, TChosen, TResult>;
-    top(n: number): CollectionSubQuery<TAll, TChosen, TResult>;
-}
-
-export declare function contains<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
-
-export declare function ContainsValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
-
-export declare function count<V>(field?: FieldRef<V> | string): Aggregation<number>;
 
 /**
  * Low-level HTTP client for the Dataverse Web API (v9.2).
@@ -235,7 +71,7 @@ export declare function count<V>(field?: FieldRef<V> | string): Aggregation<numb
  *   impersonateByUserId: "00000000-0000-0000-0000-000000000001",
  * });
  */
-export declare class DataverseClient {
+declare class DataverseClient {
     options: DataverseClientOptions;
     /** @param options Connection and authentication options. */
     constructor(options?: DataverseClientOptions);
@@ -583,7 +419,7 @@ export declare class DataverseClient {
 }
 
 /** Options for configuring a DataverseClient instance. */
-export declare type DataverseClientOptions = {
+declare type DataverseClientOptions = {
     /** Base URL of the Dataverse environment (defaults to `location.origin`). */
     url?: string;
     /** Bearer token for authentication. */
@@ -613,44 +449,46 @@ export declare type DataverseClientOptions = {
     headers?: Record<string, string>;
 };
 
-/**
- * Represents a Dataverse many-to-many intersect (association) table.
- *
- * This is a simple descriptor for use with FetchXML's {@link EntityQueryBuilder.join join()}
- * method. It does NOT extend {@link DataverseTable} — it is not a queryable entity on its own.
- *
- * @example
- * const AccountContact = new DataverseIntersectTable("accountcontact", Account, Contact);
- *
- * // Use in FetchXML via join():
- * fetchXml(Account)
- *   .select(f => ({ name: f.name }))
- *   .join("inner", AccountContact, sub =>
- *     sub.select(f => ({ accountName: f.name }))
- *   )
- */
-export declare class DataverseIntersectTable<T1 extends GenericProperties, T2 extends GenericProperties> {
-    /** Marks this table as an intersect table for FetchXML joins. */
-    readonly intersect = true;
-    /**
-     * The intersect table name used in FetchXML `<link-entity name="...">`.
-     * This is the Dataverse entity logical name (e.g. `"accountcontact"`).
-     * It is NOT an entity set name (no pluralization) — unlike {@link DataverseTable.entitySetName}
-     * and {@link DataverseTable.logicalName}, this single `name` serves both roles
-     * for intersect table references in FetchXML join syntax.
-     */
-    readonly name: string;
-    /** The first related table. */
-    readonly table1: DataverseTable<T1>;
-    /** The second related table. */
-    readonly table2: DataverseTable<T2>;
-    constructor(name: string, table1: DataverseTable<T1>, table2: DataverseTable<T2>);
+export declare type DataverseCollectionConfig<T extends GenericProperties> = {
+    id?: string;
+    table: DataverseTable<T>;
+    query?: QueryForTable<Infer<T>>;
+    getKey?: (item: Infer<T>) => string | number;
+    onInsert?: InsertMutationFn<Infer<T>>;
+    onUpdate?: UpdateMutationFn<Infer<T>>;
+    onDelete?: DeleteMutationFn<Infer<T>>;
+} & Omit<CollectionConfig<Infer<T>>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
+
+export declare function dataverseCollectionOptions<T extends GenericProperties>(config: DataverseCollectionConfig<T>): CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils> & {
+    utils: DataverseCollectionUtils;
+};
+
+export declare interface DataverseCollectionUtils extends UtilsRecord {
+    forceSync: () => Promise<void>;
 }
 
 /**
  * Represents a Dataverse key, which can be either a GUID (primary key) or an AlternateKey.
  */
-export declare type DataverseKey = GUID | AlternateKey | string;
+declare type DataverseKey = GUID | AlternateKey | string;
+
+export declare type DataverseOfflineCollectionConfig<T extends GenericProperties> = DataverseCollectionConfig<T> & {
+    dbName?: string;
+    storeName?: string;
+    syncInterval?: number;
+    queueStoreName?: string;
+};
+
+export declare function dataverseOfflineCollectionOptions<T extends GenericProperties>(config: DataverseOfflineCollectionConfig<T>): CollectionConfig<Infer<T>, string | number, never, DataverseOfflineCollectionUtils> & {
+    utils: DataverseOfflineCollectionUtils;
+};
+
+export declare interface DataverseOfflineCollectionUtils extends UtilsRecord {
+    isOnline: () => boolean;
+    getPendingMutations: () => QueuedMutation[];
+    forceSync: () => Promise<void>;
+    clearLocalData: () => Promise<void>;
+}
 
 /**
  * Represents a Dataverse record, which is essentially a JavaScript object
@@ -658,7 +496,7 @@ export declare type DataverseKey = GUID | AlternateKey | string;
  * The 'any' type is used here because the structure of a Dataverse record
  * can vary significantly depending on the entity and the selected attributes.
  */
-export declare type DataverseRecord = Record<string, Primitive>;
+declare type DataverseRecord = Record<string, Primitive>;
 
 /**
  * Represents a Dataverse table (entity) and provides methods for CRUD, querying,
@@ -688,7 +526,7 @@ export declare type DataverseRecord = Record<string, Primitive>;
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-export declare class DataverseTable<TProperties extends GenericProperties> {
+declare class DataverseTable<TProperties extends GenericProperties> {
     client: DataverseClient;
     fields: TProperties;
     logicalName: string;
@@ -982,7 +820,7 @@ export declare class DataverseTable<TProperties extends GenericProperties> {
     T: Infer<TProperties>;
 }
 
-export declare type DataverseTableOptions<TProperties extends GenericProperties> = {
+declare type DataverseTableOptions<TProperties extends GenericProperties> = {
     client: DataverseClient;
     entitySetName: string;
     logicalName: string;
@@ -994,20 +832,7 @@ export declare type DataverseTableOptions<TProperties extends GenericProperties>
     };
 };
 
-/**
- * Creates a date-only column definition (maps to JavaScript `Date`, time portion is zeroed).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   birthDate: date("birthdate"),
- * });
- * // Infer<typeof table>["birthDate"] → Date
- */
-export declare function date(name: string, options?: FieldOptions<Date>): DateField;
-
-export declare class DateField extends FieldBase<Date> {
+declare class DateField extends FieldBase<Date> {
     kind: "value";
     type: "dateOnly";
     constructor(name: string, options?: FieldOptions<Date>);
@@ -1015,20 +840,7 @@ export declare class DateField extends FieldBase<Date> {
     transformValueToDataverse(value: any): string | null;
 }
 
-/**
- * Creates a date-time column definition (maps to JavaScript `Date`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   createdAt: datetime("createdon"),
- * });
- * // Infer<typeof table>["createdAt"] → Date
- */
-export declare function datetime(name: string, options?: FieldOptions<Date>): DateTimeField;
-
-export declare class DateTimeField extends FieldBase<Date> {
+declare class DateTimeField extends FieldBase<Date> {
     kind: "value";
     type: "date";
     constructor(name: string, options?: FieldOptions<Date>);
@@ -1036,221 +848,7 @@ export declare class DateTimeField extends FieldBase<Date> {
     transformValueFromDataverse(value: any): Date;
 }
 
-export declare function desc(...fields: Name[]): OrderSpec;
-
-export declare function DoesNotContainValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
-
-export declare function endsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
-
-export declare class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
-    protected _linkAlias: {
-        value: number;
-    };
-    private _table;
-    private _attributes;
-    protected _links: Array<{
-        name: string;
-        alias: string;
-        from: string;
-        to: string;
-        linkType: FetchLinkType;
-        builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
-        intersect?: boolean;
-    }>;
-    protected _orders: OrderDef[];
-    protected _filters: string[];
-    private _isDistinct;
-    private _proxy;
-    private _top?;
-    private _isAggregate;
-    private _useRawOrderBy;
-    private _lateMaterialize;
-    private _aggregateLimit?;
-    private _datasource?;
-    private _options?;
-    constructor(table: DataverseTable<TProps>, _linkAlias?: {
-        value: number;
-    });
-    private _getEffectiveAttributes;
-    private _buildProxy;
-    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): EntityQueryBuilder<TProps, {
-        [K in keyof R]: Infer<TProps[R[K]]>;
-    }>;
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): FetchXmlAggregateQuery<TProps, ApplyResultType_2<R>>;
-    _toAggregateQuery(): FetchXmlAggregateQuery<TProps, any>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): EntityQueryBuilder<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): EntityQueryBuilder<TProps, TResult>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): EntityQueryBuilder<TProps, TResult>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>;
-    distinct(): this;
-    top(n: number): this;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
-    toXml(): string;
-    static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean;
-    private _renderLinkEntity;
-    toString(): string;
-    protected _applyExecuteOptions(options?: ExecuteOptions): void;
-    private _transformRow;
-    execute(options?: ExecuteOptions): Promise<TResult[]>;
-    iterate(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<TResult>;
-    iteratePages(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<TResult[]>;
-    private _buildAliasInfo;
-    private _collectAliases;
-}
-
-export declare function eq<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
-
-export declare function EqualBusinessId(field: FieldRef<any>): FilterExpr;
-
-export declare function EqualUserId(field: FieldRef<any>): FilterExpr;
-
-export declare function EqualUserLanguage(field: FieldRef<any>): FilterExpr;
-
-export declare function EqualUserOrUserHierarchy(field: FieldRef<any>): FilterExpr;
-
-export declare function EqualUserOrUserHierarchyAndTeams(field: FieldRef<any>): FilterExpr;
-
-export declare function EqualUserOrUserTeams(field: FieldRef<any>): FilterExpr;
-
-export declare const Etag: unique symbol;
-
-declare type ExecuteOptions = {
-    datasource?: string;
-    lateMaterialize?: boolean;
-    aggregateLimit?: number;
-    useRawOrderBy?: boolean;
-    options?: string;
-};
-
-export declare function expand(values: string | ExpandObject): string;
-
-export declare interface ExpandObject {
-    [key: string]: ExpandValue;
-}
-
-export declare type ExpandValue = string | {
-    select?: (Name)[];
-    expand?: ExpandObject;
-    filter?: string;
-    orderby?: {
-        [key: string]: "asc" | "desc";
-    };
-};
-
-export declare type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in" | "matchfirstrowusingcrossapply";
-
-export declare function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): InitialQuery<T>;
-
-export declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
-
-export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
-    private _linkAlias;
-    private _table;
-    private _attributes;
-    private _links;
-    protected _filters: string[];
-    private _aliasProxy;
-    private _proxy;
-    private _top?;
-    private _useRawOrderBy;
-    private _lateMaterialize;
-    private _aggregateLimit?;
-    private _orders;
-    private _datasource?;
-    private _options?;
-    constructor(table: DataverseTable<TProps>, initialAttributes?: AttrDef[], _linkAlias?: {
-        value: number;
-    }, initialFilters?: string[]);
-    private _buildProxy;
-    private _getEffectiveAttributes;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: FetchLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    top(n: number): this;
-    orderby(fieldSelector: (f: ApplyAliasProxy_2<TResult>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
-    toXml(): string;
-    toString(): string;
-    protected _applyExecuteOptions(options?: ExecuteOptions): void;
-    private _transformRow;
-    execute(options?: ExecuteOptions): Promise<TResult[]>;
-    iterate(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<TResult>;
-    iteratePages(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<TResult[]>;
-    private _buildAliasInfo;
-    private _collectAliases;
-    private static _isFilterOnlyLinkType;
-    private _renderLinkEntity;
-    private _collectAliasesFromBuilder;
-}
-
-export declare interface FetchXmlInitial<TProps extends GenericProperties> {
-    select(): FetchXmlSelectQuery<TProps, TProps>;
-    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, {
-        [K in keyof R]: Infer<TProps[R[K]]>;
-    }>;
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): FetchXmlAggregateQuery<TProps, ApplyResultType_2<R>>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlInitial<TProps>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlInitial<TProps>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): FetchXmlInitial<TProps>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlInitial<TProps>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): FetchXmlInitial<TProps>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlInitial<TProps>;
-    distinct(): FetchXmlInitial<TProps>;
-    top(n: number): FetchXmlInitial<TProps>;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
-    toXml(): string;
-    toString(): string;
-    execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>;
-    iterate(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<Infer<TProps>>;
-    iteratePages(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<Infer<TProps>[]>;
-}
-
-export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
-    select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, {
-        [K in keyof R]: Infer<TProps[R[K]]>;
-    }>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlSelectQuery<TProps, TResult>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): FetchXmlSelectQuery<TProps, TResult>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): FetchXmlSelectQuery<TProps, TResult>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>;
-    distinct(): FetchXmlSelectQuery<TProps, TResult>;
-    top(n: number): FetchXmlSelectQuery<TProps, TResult>;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
-    toXml(): string;
-    toString(): string;
-    execute(options?: ExecuteOptions): Promise<TResult[]>;
-    iterate(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<TResult>;
-    iteratePages(options?: ExecuteOptions & {
-        pageSize?: number;
-    }): AsyncGenerator<TResult[]>;
-}
-
-export declare abstract class FieldBase<T> {
+declare abstract class FieldBase<T> {
     #private;
     name: string;
     fromDataverseName: string;
@@ -1269,36 +867,13 @@ export declare abstract class FieldBase<T> {
     afterSave?(ctx: TransformContext, value: any): Promise<void>;
 }
 
-export declare type FieldOptions<T> = {
+declare type FieldOptions<T> = {
     default?: T;
     readonly?: boolean;
     schema?: ValidationSchema<T>;
 };
 
-export declare type FieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>;
-};
-
-export declare class FieldRef<T = any, K extends string = string> {
-    private readonly _dataverseName;
-    readonly fieldDef?: any;
-    constructor(_dataverseName: string, fieldDef?: any);
-    get dataverseName(): string;
-    toString(): string;
-}
-
-declare type FieldSelector<TProps extends GenericProperties> = {
-    [K in keyof TProps]: K;
-};
-
-/**
- * Creates a file column definition. File columns are read-only and store the file name.
- *
- * @param name The Dataverse logical name of the file column.
- */
-export declare function file(name: string): FileField;
-
-export declare class FileField extends FieldBase<FileRef | null> {
+declare class FileField extends FieldBase<FileRef | null> {
     type: "file";
     kind: "file";
     constructor(name: string);
@@ -1307,176 +882,47 @@ export declare class FileField extends FieldBase<FileRef | null> {
     afterSave(ctx: TransformContext, value: FileRef): Promise<void>;
 }
 
-export declare type FileRef = {
+declare type FileRef = {
     name: string;
     url?: string;
     data?: Blob | null;
 };
 
-export declare class FilterCollector<TProps extends GenericProperties = any> {
-    protected _filters: string[];
-    private _proxy;
-    constructor(table: DataverseTable<TProps>);
-    private _buildProxy;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
-}
-
-export declare class FilterExpr {
-    private node;
-    constructor(node: FilterNode);
-    toString(): string;
-    toOdata(): string;
-    toFetchXml(): string;
-}
-
-declare type FilterNode = {
-    type: "comparison";
-    field: FieldRef<any>;
-    operator: string;
-    value: FilterValue;
-} | {
-    type: "null";
-    field: FieldRef<any>;
-    positive: boolean;
-} | {
-    type: "contains";
-    field: FieldRef<any>;
-    value: string;
-} | {
-    type: "startsWith";
-    field: FieldRef<any>;
-    value: string;
-} | {
-    type: "endsWith";
-    field: FieldRef<any>;
-    value: string;
-} | {
-    type: "compare";
-    field: FieldRef<any>;
-    operator: string;
-    otherField: FieldRef<any>;
-} | {
-    type: "lambda";
-    field: string;
-    operator: "any" | "all";
-    alias: string;
-    condition: string;
-} | {
-    type: "fn";
-    field: FieldRef<any>;
-    fnName: string;
-    operator: string;
-    values: FilterValue[];
-} | {
-    type: "raw";
-    value: string;
-} | {
-    type: "and";
-    conditions: FilterExpr[];
-} | {
-    type: "or";
-    conditions: FilterExpr[];
-} | {
-    type: "not";
-    condition: FilterExpr;
-};
-
-declare type FilterOnlyLinkType = 'any' | 'not any' | 'all' | 'not all' | 'exists' | 'in';
-
-declare type FilterValue = string | number | boolean | Date | null;
-
-/**
- * Creates a formatted-value column definition for retrieving user-localized display values
- * (e.g. for option-set labels). These are read-only.
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   statusLabel: formatted("statuscode"),
- * });
- */
-export declare function formatted(name: string, options?: FieldOptions<string | null>): FormattedField;
-
-export declare class FormattedField extends FieldBase<string | null> {
-    kind: "value";
-    type: "formatted";
-    constructor(name: string, options?: FieldOptions<string | null>);
-}
-
-export declare function ge<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-
 /**
  * Represents a generic navigation property in a Dataverse entity.  Navigation
  * properties are used to define relationships between entities.
  */
-export declare type GenericNavigationProperty = CollectionProperty<GenericProperties> | LookupProperty<GenericProperties> | LookupIdProperty | CollectionIdsProperty;
+declare type GenericNavigationProperty = CollectionProperty<GenericProperties> | LookupProperty<GenericProperties> | LookupIdProperty | CollectionIdsProperty;
 
 /**
  * Represents a generic object of properties, where the keys are property names
  * and the values are GenericProperty definitions.  This is used to define the
  * structure of a Dataverse entity.
  */
-export declare type GenericProperties = Record<string, GenericProperty>;
+declare type GenericProperties = Record<string, GenericProperty>;
 
 /**
  * Represents a generic property in a Dataverse entity.  A property can be
  * either a navigation property or a value property.
  */
-export declare type GenericProperty = GenericNavigationProperty | GenericValueProperty;
+declare type GenericProperty = GenericNavigationProperty | GenericValueProperty;
 
 /**
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-export declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField | ChoiceField<Record<number, string>> | NullableChoiceField<Record<number, string>>;
+declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField | ChoiceField<Record<number, string>> | NullableChoiceField<Record<number, string>>;
 
-export declare function getEtag(v: any): string | undefined;
-
-/**
- * Constructs a URL to retrieve an image from Dataverse.
- *
- * @param entity The logical name of the entity the image belongs to.
- * @param name The name of the image attribute.
- * @param id The ID of the entity record.
- * @returns A URL string to download the image.
- *
- * @example
- * // Get the URL for a contact's profile image:
- * const imageUrl = getImageUrl("contact", "entityimage", "12345");
- * // returns "/Image/download.aspx?Entity=contact&Attribute=entityimage&Id=12345&Full=true"
- */
-export declare function getImageUrl(entity: string, name: string, id: string): string;
-
-/** Extracts the string name from a FieldName type. */
-export declare function getName(name: Name): string;
-
-export declare type GetTable<T = any> = () => T;
-
-export declare function groupby<V>(field: FieldRef<V> | string): GroupByExpr<V>;
-
-export declare class GroupByExpr<V = any> {
-    field: string;
-    constructor(field: string);
-}
-
-export declare function gt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
+declare type GetTable<T = any> = () => T;
 
 /**
  * Represents a GUID (Globally Unique Identifier) string, a standard identifier
  * used extensively in Dataverse (and Microsoft technologies in general).
  * The format is a string with five sections separated by hyphens.
  */
-export declare type GUID = `${string}-${string}-${string}-${string}-${string}`;
+declare type GUID = `${string}-${string}-${string}-${string}-${string}`;
 
-/**
- * Creates an image column definition.
- *
- * @param name The Dataverse logical name of the image column.
- */
-export declare function image(name: string, options?: FieldOptions<ImageRef | null>): ImageField;
-
-export declare class ImageField extends FieldBase<ImageRef | null> {
+declare class ImageField extends FieldBase<ImageRef | null> {
     kind: "image";
     type: "image";
     constructor(name: string, options?: FieldOptions<ImageRef | null>);
@@ -1484,13 +930,11 @@ export declare class ImageField extends FieldBase<ImageRef | null> {
     transformValueToDataverse(value: ImageRef | null): Promise<string | null>;
 }
 
-export declare type ImageRef = {
+declare type ImageRef = {
     readonly url: string;
     readonly fullSizeUrl: string;
     data?: Blob | null;
 };
-
-export declare function In<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
 
 /**
  * Infers the TypeScript type from a Dataverse schema definition.  This is a recursive
@@ -1499,157 +943,18 @@ export declare function In<T extends string | number>(field: FieldRef<T>, values
  *
  * @template T The Dataverse schema definition.
  */
-export declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends FieldBase<infer U> ? U : {
+declare type Infer<T> = T extends null | undefined ? T : T extends DataverseTable<infer U> ? Infer<U> : T extends CollectionProperty<infer U> ? Infer<U>[] : T extends LookupProperty<infer U> ? Infer<U> | null : T extends FieldBase<infer U> ? U : {
     [K in keyof T]: Infer<T[K]>;
 };
 
-export declare function InFiscalPeriod(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function InFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
-
-export declare function InFiscalYear(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare interface InitialQuery<TAll extends GenericProperties> {
-    select(): SelectQuery<TAll, TAll>;
-    select<K extends ValueKeys<TAll>>(...keys: K[]): SelectQuery<TAll, {
-        [P in K]: TAll[P];
-    }, {
-        [P in K]: Infer<TAll[P]>;
-    }>;
-    apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: ODataFieldProxy<TAll>) => R): ApplyQuery<TAll, ApplyResultType<R>>;
-}
-
-export declare function InOrAfterFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
-
-export declare function InOrBeforeFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
-
-export declare function isActive(): FilterExpr;
-
-export declare function isInactive(): FilterExpr;
-
-export declare function isNonEmptyString(value: unknown): value is string;
-
-export declare function isNotNull(field: FieldRef<any> | {
-    toString(): string;
-}): FilterExpr;
-
-export declare function isNull(field: FieldRef<any> | {
-    toString(): string;
-}): FilterExpr;
-
-/**
- * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
- * in Dataverse and parses/validates it using the provided valibot schema.
- *
- * @param name The Dataverse logical name of the column.
- * @param schema A valibot schema that validates the parsed JSON structure.
- * @param options Optional field options (default, readonly).
- *
- * @example
- * const Address = v.object({ street: v.string(), city: v.string() });
- * const table = new DataverseTable({
- *   address: json("address_data", Address),
- * });
- * // Infer<typeof table>["address"] → { street: string; city: string }
- */
-export declare function json<T>(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>): JsonField<T>;
-
-export declare class JsonField<T> extends FieldBase<T> {
-    kind: "value";
-    type: "json";
-    constructor(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>);
-    transformValueFromDataverse(value: any): T;
-    transformValueToDataverse(value: any): string | null;
-}
-
-export declare function keys(keyValues: {
-    [key: string]: string | number;
-}): string;
-
-export declare function Last7Days(field: FieldRef<any>): FilterExpr;
-
-export declare function LastFiscalPeriod(field: FieldRef<any>): FilterExpr;
-
-export declare function LastFiscalYear(field: FieldRef<any>): FilterExpr;
-
-export declare function LastMonth(field: FieldRef<any>): FilterExpr;
-
-export declare function LastWeek(field: FieldRef<any>): FilterExpr;
-
-export declare function LastXDays(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastXFiscalYears(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastXHours(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastXMonths(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastXWeeks(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastXYears(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function LastYear(field: FieldRef<any>): FilterExpr;
-
-export declare function le<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-
-/**
- * Creates a choice/option-set column definition with a fixed set of allowed values.
- *
- * @param name The Dataverse logical name of the column.
- * @param list The array of allowed string or numeric values.
- *
- * @example
- * const table = new DataverseTable({
- *   gender: list("gendercode", [1, 2]),
- * });
- * // Infer<typeof table>["gender"] → 1 | 2 | null
- */
-export declare function list<T extends string | number>(name: string, list: Array<T>, options?: FieldOptions<T | null>): ListField<T>;
-
-export declare class ListField<T extends string | number> extends FieldBase<T | null> {
+declare class ListField<T extends string | number> extends FieldBase<T | null> {
     kind: "value";
     type: "list";
     list: Array<T>;
     constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>);
 }
 
-/**
- * Creates a many-to-one (lookup) navigation property definition. The related record
- * can be expanded via OData `$expand` or fetched through the table API.
- *
- * @param name The Dataverse logical name of the lookup column.
- * @param getTable A thunk that returns the related table definition.
- *
- * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   primaryAddress: lookup("primaryaddressid", () => Address),
- * });
- * // Infer<typeof Person>["primaryAddress"] → { id: GUID; ... } | null
- */
-export declare function lookup<TProperties extends GenericProperties>(name: string, getTable: GetTable<DataverseTable<TProperties>>): LookupProperty<TProperties>;
-
-/**
- * Creates a lookup-ID navigation property definition. This stores only the foreign-key
- * GUID of the related record (not the full expanded record).
- *
- * @param name The Dataverse logical name of the lookup column.
- * @param getTable A thunk that returns the related table definition.
- *
- * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   primaryAddressId: lookupId("primaryaddressid", () => Address),
- * });
- * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
- */
-export declare function lookupId(name: string, getTable: GetTable): LookupIdProperty;
-
-export declare class LookupIdProperty extends FieldBase<GUID | null> {
+declare class LookupIdProperty extends FieldBase<GUID | null> {
     #private;
     kind: "navigation";
     type: "lookupId";
@@ -1661,11 +966,7 @@ export declare class LookupIdProperty extends FieldBase<GUID | null> {
     transformValueToDataverse(value: any): string | null;
 }
 
-declare type LookupKeys<T extends GenericProperties> = {
-    [K in keyof T]: T[K] extends LookupProperty<any> ? K : never;
-}[keyof T];
-
-export declare class LookupProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties> | null> {
+declare class LookupProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties> | null> {
     #private;
     kind: "navigation";
     type: "lookup";
@@ -1676,44 +977,11 @@ export declare class LookupProperty<TProperties extends GenericProperties> exten
     afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
 
-export declare interface LookupSubQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
-    select<K extends ValueKeys<TAll>>(...keys: K[]): LookupSubQuery<TAll, {
-        [P in K]: TAll[P];
-    }, {
-        [P in K]: Infer<TAll[P]>;
-    }>;
-    expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>): LookupSubQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>;
-    expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>): LookupSubQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>;
-}
-
-export declare function lt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-
-export declare function mapChoices(data: any): {
-    value: number;
-    color: string;
-    label: string;
-    description: string;
-}[];
-
-export declare function max<V>(field: FieldRef<V>): Aggregation<V>;
-
-declare type MergeExpand<T, K extends string, V> = {
-    [P in keyof T | K]: P extends K ? V : P extends keyof T ? T[P] : never;
-};
-
-/**
- * Retains references to previous recrods if ETag value is unchanged
- *
- * @param prevRecords
- * @param newRecords
- * @returns
- */
-export declare function mergeRecords<T>(prevRecords: T[], newRecords: T[]): T[];
-
-export declare function min<V>(field: FieldRef<V>): Aggregation<V>;
+/** After this many consecutive failures, a mutation starts backing off. */
+export declare const MAX_RETRIES = 6;
 
 /** A field name can be a string or an object with a name or toString method. */
-export declare type Name = string | {
+declare type Name = string | {
     name: string;
 } | {
     toString(): string;
@@ -1736,75 +1004,13 @@ export declare type Name = string | {
  *
  * type StringKeys = NarrowKeysByValue<MyObject, string>;  // "name" | "email"
  */
-export declare type NarrowKeysByValue<T extends object, V> = {
+declare type NarrowKeysByValue<T extends object, V> = {
     [K in keyof T]: T[K] extends V ? K : never;
 }[keyof T];
 
-declare type NavKeys<T extends GenericProperties> = CollectionKeys<T> | LookupKeys<T>;
-
-export declare function ne<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
-
 declare type NestedStringArray = Array<string | NestedStringArray>;
 
-export declare function Next7Days(field: FieldRef<any>): FilterExpr;
-
-export declare function NextFiscalPeriod(field: FieldRef<any>): FilterExpr;
-
-export declare function NextFiscalYear(field: FieldRef<any>): FilterExpr;
-
-export declare function NextMonth(field: FieldRef<any>): FilterExpr;
-
-export declare function NextWeek(field: FieldRef<any>): FilterExpr;
-
-export declare function NextXDays(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextXFiscalYears(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextXHours(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextXMonths(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextXWeeks(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextXYears(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function NextYear(field: FieldRef<any>): FilterExpr;
-
-declare type NonNullType<T> = T extends Date | null ? Date : Exclude<T, null>;
-
-declare type NoOverlap<T extends Record<string, any>, U extends Record<string, any>> = Extract<keyof T, keyof U> extends never ? Simplify<T & U> : never;
-
-declare type NormalLinkType = Exclude<FetchLinkType, FilterOnlyLinkType>;
-
-export declare function not(condition: FilterExpr | string): FilterExpr;
-
-export declare function NotBetween(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr;
-
-export declare function NotEqualBusinessId(field: FieldRef<any>): FilterExpr;
-
-export declare function NotEqualUserId(field: FieldRef<any>): FilterExpr;
-
-export declare function NotIn<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
-
-export declare function NotUnder(field: FieldRef<any>, value: string): FilterExpr;
-
-/**
- * Creates a nullable choice/option-set column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- * @param options An object mapping numeric option values to string labels.
- *
- * @example
- * const table = new DataverseTable({
- *   priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" }),
- * });
- * // Infer<typeof table>["priority"] → "Low" | "High" | null
- */
-export declare function nullableChoice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
-
-export declare class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
+declare class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
     #private;
     kind: "value";
     type: "choice";
@@ -1813,14 +1019,7 @@ export declare class NullableChoiceField<T extends Record<number, string>> exten
     transformValueToDataverse(value: any): number | null;
 }
 
-/**
- * Creates a nullable date-only column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- */
-export declare function nullableDate(name: string, options?: FieldOptions<Date | null>): NullableDateField;
-
-export declare class NullableDateField extends FieldBase<Date | null> {
+declare class NullableDateField extends FieldBase<Date | null> {
     kind: "value";
     type: "dateOnly";
     constructor(name: string, options?: FieldOptions<Date | null>);
@@ -1828,158 +1027,31 @@ export declare class NullableDateField extends FieldBase<Date | null> {
     transformValueToDataverse(value: any): string | null;
 }
 
-/**
- * Creates a nullable date-time column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- */
-export declare function nullableDateTime(name: string, options?: FieldOptions<Date | null>): NullableDateTimeField;
-
-export declare class NullableDateTimeField extends FieldBase<Date | null> {
+declare class NullableDateTimeField extends FieldBase<Date | null> {
     kind: "value";
     type: "date";
     constructor(name: string, options?: FieldOptions<Date | null>);
     transformValueFromDataverse(value: any): Date | null;
 }
 
-/**
- * Creates a nullable number column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   age: nullableNumber("person_age"),
- * });
- * // Infer<typeof table>["age"] → number | null
- */
-export declare function nullableNumber(name: string, options?: FieldOptions<number | null>): NullableNumberField;
-
-export declare class NullableNumberField extends FieldBase<number | null> {
+declare class NullableNumberField extends FieldBase<number | null> {
     kind: "value";
     type: "number";
     constructor(name: string, options?: FieldOptions<number | null>);
 }
 
-/**
- * Creates a nullable string column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   middleName: nullableString("middlename"),
- * });
- * // Infer<typeof table>["middleName"] → string | null
- */
-export declare function nullableString(name: string, options?: FieldOptions<string | null>): NullableStringField;
-
-export declare class NullableStringField extends FieldBase<string | null> {
+declare class NullableStringField extends FieldBase<string | null> {
     kind: "value";
     type: "string";
     constructor(name: string, options?: FieldOptions<string | null>);
 }
 
-/**
- * Creates a number-typed Dataverse column definition.
- *
- * @param name The Dataverse logical name of the column (e.g. `"person_age"`).
- *
- * @example
- * const table = new DataverseTable({
- *   age: number("person_age"),
- * });
- * // Infer<typeof table>["age"] → number
- */
-export declare function number(name: string, options?: FieldOptions<number>): NumberField;
-
-export declare class NumberField extends FieldBase<number> {
+declare class NumberField extends FieldBase<number> {
     kind: "value";
     type: "number";
     constructor(name: string, options?: FieldOptions<number>);
     transformValueFromDataverse(value: any): number;
 }
-
-export declare class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
-    private _table;
-    private _filters;
-    private _apply;
-    private _orderby;
-    private _top?;
-    private _aliasProxy;
-    constructor(table: DataverseTable<T>, apply: string, aliasProxy: Record<string, string>, initialFilters?: string[]);
-    filter(filter: string): this;
-    filter(filter: FilterExpr): this;
-    filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
-    orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): this;
-    orderby(alias: string, direction?: "asc" | "desc"): this;
-    top(n: number): this;
-    private _build;
-    toString(): string;
-    private _transformRow;
-    execute(): Promise<TResult[]>;
-    iterate(options?: {
-        pageSize?: number;
-    }): AsyncGenerator<TResult>;
-    iteratePages(options?: {
-        pageSize?: number;
-    }): AsyncGenerator<TResult[]>;
-}
-
-declare type ODataCollectionNavProxy<P extends GenericProperties> = {
-    toString(): string;
-} & ODataFieldProxy<P>;
-
-declare type ODataFieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P> : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P> : FieldRef<Infer<T[K]>, K extends string ? K : never>;
-};
-
-declare type ODataLambdaProxy<P extends GenericProperties> = {
-    [K in keyof P]: FieldRef<any>;
-};
-
-declare type ODataLookupNavProxy<P extends GenericProperties> = {
-    toString(): string;
-} & ODataFieldProxy<P>;
-
-export declare function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function OlderThanXHours(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function OlderThanXMinutes(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function OlderThanXMonths(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function OlderThanXWeeks(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function OlderThanXYears(field: FieldRef<any>, value: number): FilterExpr;
-
-export declare function On(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare function OnOrAfter(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare function OnOrBefore(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare function or(...conditions: (FilterExpr | string)[]): FilterExpr;
-
-export declare function orderby(values: {
-    [key: string]: "asc" | "desc";
-} | string[]): string;
-
-declare type OrderDef = {
-    attribute: string;
-    entityname?: string;
-    descending?: boolean;
-};
-
-export declare class OrderSpec {
-    readonly fields: string[];
-    readonly direction: "asc" | "desc";
-    constructor(fields: string[], direction: "asc" | "desc");
-    toString(): string;
-}
-
-export declare function parseDateOnly(dateString: string): Date;
 
 /**
  * A single Prefer value — either a raw string or a structured object
@@ -1997,234 +1069,102 @@ export declare function parseDateOnly(dateString: string): Date;
  * // Object form for page size
  * const options: PreferOption[] = [{ maxPageSize: 500 }];
  */
-export declare type PreferOption = "return=representation" | "respond-async" | "odata.track-changes" | {
+declare type PreferOption = "return=representation" | "respond-async" | "odata.track-changes" | {
     annotations: "*" | string[];
 } | {
     maxPageSize: number;
 };
 
-/**
- * Creates a primary key (GUID) column definition for a Dataverse table.
- *
- * @param name The Dataverse logical name of the primary key column (e.g. `"contactid"`).
- *
- * @example
- * const table = new DataverseTable({
- *   id: primaryKey("contactid"),
- * });
- * // Infer<typeof table>["id"] → `${string}-${string}-${string}-${string}-${string}`
- */
-export declare function primaryKey(name: string, options?: FieldOptions<GUID>): PrimaryKeyField;
-
-export declare class PrimaryKeyField extends FieldBase<GUID> {
+declare class PrimaryKeyField extends FieldBase<GUID> {
     kind: "value";
     type: "primaryKey";
     constructor(name: string, options?: FieldOptions<GUID>);
     getDefault(): GUID;
 }
 
-export declare type Primitive = string | number | boolean | null;
+declare type Primitive = string | number | boolean | null;
 
-export declare type QueryForTable<T> = {
+declare type QueryForTable<T> = {
     orderby?: Partial<Record<keyof T, "asc" | "desc">> | string;
     filter?: string;
     top?: number;
 };
 
-declare type RelatedProps<T extends GenericProperties, K extends keyof T> = T[K] extends CollectionProperty<infer P> ? P : T[K] extends LookupProperty<infer P> ? P : never;
+export declare type QueuedMutation = {
+    id: string;
+    type: "insert" | "update" | "delete";
+    key: string | number;
+    value?: any;
+    collectionId: string;
+    sequence: number;
+    timestamp: number;
+    /**
+     * Number of failed replay attempts. Used for exponential backoff; persists
+     * across reloads so interrupted replays don't retry in a tight loop.
+     */
+    attempts?: number;
+    /** Timestamp of the last failed replay attempt (ms since epoch). */
+    lastAttemptAt?: number;
+};
 
 /**
- * Retrieves the roles assigned to a user in Azure Active Directory (AAD).
- *
- * @param aadId - The AAD Directory Object ID of the user whose roles need to be fetched.
- * @returns  A promise that resolves to a Set of role names associated with the user.
+ * Replays all queued mutations across every collection, processing each
+ * collection under its own lock so concurrent tabs don't replay the same
+ * mutations twice. Collections whose lock is held by another tab are left for
+ * the lock holder (their mutations count toward `remaining`).
  */
-export declare function RetrieveAadUserRoles(client: DataverseClient, aadId: string): Promise<Set<string>>;
+export declare function replayAllQueues(options: ReplayAllQueuesOptions): Promise<ReplayResult>;
 
-export declare function RetrieveChoices(client: DataverseClient, name: string): Promise<{
-    value: number;
-    color: string;
-    label: string;
-    description: string;
-}[]>;
+export declare type ReplayAllQueuesOptions = {
+    dbName?: string;
+    queueStoreName?: string;
+    tables: Record<string, DataverseTable<GenericProperties>>;
+};
 
 /**
- * Retrieves the total record count for a specific entity in the system.
+ * Replays queued mutations for one or all collections. Callers are expected to
+ * hold the collection's replay lock (see `withLock` / `replayLockName`).
  *
- * @param  logicalName - The logical name of the entity whose total record count is to be fetched.
- * @returns  A promise that resolves to the total record count for the specified entity.
+ * Insert replay is an idempotent upsert: when a record with the same key
+ * already exists, the insert becomes an update instead of failing with a
+ * duplicate-key error (which could otherwise stick a crashed-tab queue forever).
+ *
+ * Failed mutations record `attempts`/`lastAttemptAt` and, once they exceed
+ * `MAX_RETRIES`, are skipped while inside their backoff window — so an
+ * interrupted or persistently failing item doesn't hammer the server every
+ * cycle. The counters persist in IDB, so the backoff survives reloads.
  */
-export declare function RetrieveTotalRecordCount(client: DataverseClient, logicalName: string): Promise<number>;
+export declare function replayMutations(options: ReplayMutationsOptions): Promise<ReplayResult>;
 
-export declare function select(...values: (Name)[]): string;
+export declare type ReplayMutationsOptions = {
+    dbName?: string;
+    queueStoreName?: string;
+    tables: Record<string, DataverseTable<GenericProperties>>;
+    /** Restrict the replay to one collection's mutations. */
+    collectionId?: string;
+};
 
-export declare interface SelectQuery<TAll extends GenericProperties, TChosen extends Record<string, any>, TResult = Infer<TChosen>> {
-    expand<K extends NavKeys<TAll>>(key: K): SelectQuery<TAll, MergeExpand<TChosen, K & string, TAll[K]>, MergeExpand<TResult, K & string, Infer<TAll[K]>>>;
-    expand<K extends CollectionKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: CollectionSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => CollectionSubQuery<RelatedProps<TAll, K>, R>): SelectQuery<TAll, MergeExpand<TChosen, K & string, R[]>, MergeExpand<TResult, K & string, Infer<R>[]>>;
-    expand<K extends LookupKeys<TAll>, R extends Record<string, any>>(key: K, sub: (q: LookupSubQuery<RelatedProps<TAll, K>, RelatedProps<TAll, K>>) => LookupSubQuery<RelatedProps<TAll, K>, R>): SelectQuery<TAll, MergeExpand<TChosen, K & string, R | null>, MergeExpand<TResult, K & string, Infer<R> | null>>;
-    filter(filter: string): SelectQuery<TAll, TChosen, TResult>;
-    filter(filter: FilterExpr): SelectQuery<TAll, TChosen, TResult>;
-    filter(filter: (f: ODataFieldProxy<TAll>) => string | FilterExpr): SelectQuery<TAll, TChosen, TResult>;
-    orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>;
-    orderby(alias: string, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>;
-    top(n: number): SelectQuery<TAll, TChosen, TResult>;
-    toString(): string;
-    execute(): Promise<TResult[]>;
-    iterate(options?: {
-        pageSize?: number;
-    }): AsyncGenerator<TResult>;
-    iteratePages(options?: {
-        pageSize?: number;
-    }): AsyncGenerator<TResult[]>;
-}
+export declare type ReplayResult = {
+    succeeded: number;
+    failed: number;
+    remaining: number;
+};
 
-declare type Simplify<T> = {
-    [Key in keyof T]: T[Key];
-} & {};
+declare const SKIP: unique symbol;
 
-export declare const SKIP: unique symbol;
-
-export declare function startsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
-
-/**
- * Creates a string-typed Dataverse column definition.
- *
- * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
- *
- * @example
- * const table = new DataverseTable({
- *   name: string("fullname"),
- * });
- * // Infer<typeof table>["name"] → string
- */
-export declare function string(name: string, options?: FieldOptions<string>): StringField;
-
-export declare class StringField extends FieldBase<string> {
+declare class StringField extends FieldBase<string> {
     kind: "value";
     type: "string";
     constructor(name: string, options?: FieldOptions<string>);
     transformValueFromDataverse(value: any): string;
 }
 
-declare type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}, TApplied extends boolean = false> = {
-    apply: TApplied extends true ? never : <R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R) => SubAggregateJoinBuilder<TProps, ApplyResultType_2<R>, true>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>;
-    toXml(): string;
-    toString(): string;
-};
-
-declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<string, any>, TSelected extends boolean = false> = {
-    select: TSelected extends true ? never : <R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R) => SubJoinBuilder<TProps, {
-        [K in keyof R]: Infer<TProps[R[K]]>;
-    }, true>;
-    filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): SubJoinBuilder<TProps, TResult, TSelected>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): SubJoinBuilder<TProps, TResult, TSelected>;
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>, intersect?: boolean): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: FilterCollector<T2>) => void): SubJoinBuilder<TProps, TResult, TSelected>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<TProps, T2>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
-    join<T2 extends GenericProperties>(linkType: FilterOnlyLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: FilterCollector<T2>) => void): SubJoinBuilder<TProps, TResult, TSelected>;
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(linkType: NormalLinkType, intersectTable: DataverseIntersectTable<T2, TProps>, subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>;
-    orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>;
-    orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>;
-    toXml(): string;
-    toString(): string;
-};
-
-export declare function sum<V>(field: FieldRef<V> | string): Aggregation<V>;
-
-export declare function ThisFiscalPeriod(field: FieldRef<any>): FilterExpr;
-
-export declare function ThisFiscalYear(field: FieldRef<any>): FilterExpr;
-
-export declare function ThisMonth(field: FieldRef<any>): FilterExpr;
-
-export declare function ThisWeek(field: FieldRef<any>): FilterExpr;
-
-export declare function ThisYear(field: FieldRef<any>): FilterExpr;
-
-/**
- * Converts a File object to a base64 encoded string.
- *
- * @param file The File object to convert.
- * @returns A promise that resolves to the base64 encoded string, or rejects with an error.
- *
- * @example
- * // Convert a file to base64:
- * const myFile = document.getElementById('myFile').files[0];
- * toBase64(myFile)
- * .then(base64String => console.log(base64String))
- * .catch(error => console.error(error));
- */
-export declare function toBase64(file: File): Promise<string>;
-
-export declare function toDateOnly(date: Date): string | null;
-
-export declare function Today(field: FieldRef<any>): FilterExpr;
-
-export declare function Tomorrow(field: FieldRef<any>): FilterExpr;
-
-export declare type TransformContext = {
+declare type TransformContext = {
     table: DataverseTable<any>;
     client: DataverseClient;
     recordId: string;
 };
 
-export declare function Under(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare function UnderOrEqual(field: FieldRef<any>, value: string): FilterExpr;
-
-export declare type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>;
-
-declare type ValueKeys<T extends GenericProperties> = {
-    [K in keyof T]: T[K] extends {
-        kind: 'value';
-    } | {
-        type: 'lookupId';
-    } | {
-        type: 'file';
-    } ? K : never;
-}[keyof T];
-
-/**
- * Retrieves the identity information of the currently authenticated user.
- *
- * @returns A promise that resolves to an object containing the BusinessUnitId, UserId, and OrganizationId
- * of the currently authenticated user.
- */
-export declare function WhoAmI(client: DataverseClient): Promise<{
-    BusinessUnitId: GUID;
-    UserId: GUID;
-    OrganizationId: GUID;
-}>;
-
-export declare function wrapString(value: unknown): string;
-
-/**
- * Creates an XML string from a template string array, removing unnecessary whitespace.
- *
- * @param raw The template string array.
- * @param values The values to interpolate into the template string.
- * @returns A compact XML string.
- *
- * @example
- * // Create a simple XML string:
- * const myXml = xml`
- * <root>
- * <element>Hello</element>
- * </root>
- * `;
- * // returns "<root><element>Hello</element></root>"
- */
-export declare function xml(raw: TemplateStringsArray, ...values: unknown[]): string;
-
-export declare function Yesterday(field: FieldRef<any>): FilterExpr;
+declare type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>;
 
 export { }

@@ -1,5 +1,5 @@
 import type { CollectionConfig, InsertMutationFn, UpdateMutationFn, DeleteMutationFn, SyncConfig, UtilsRecord } from "@tanstack/db";
-import type { DataverseTable, GenericProperties, Infer } from "../index";
+import type { DataverseTable, GenericProperties, Infer } from "dataverse-schema";
 import type { DataverseCollectionConfig, DataverseCollectionUtils } from "./types";
 
 const DEFAULT_POLL_INTERVAL = 30000;

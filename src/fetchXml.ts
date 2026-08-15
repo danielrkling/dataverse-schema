@@ -1,7 +1,7 @@
 import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
 import { FilterExpr, FieldRef } from "./filter";
-import { Aggregation, GroupByExpr } from "./odata";
+import { Aggregation, GroupByExpr } from "./fetchOdata";
 import { Etag } from "./util";
 
 type AliasInfo = {

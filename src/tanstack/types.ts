@@ -1,5 +1,5 @@
 import type { CollectionConfig, InsertMutationFn, UpdateMutationFn, DeleteMutationFn, UtilsRecord } from "@tanstack/db";
-import type { DataverseTable, GenericProperties, Infer, QueryForTable } from "../index";
+import type { DataverseTable, GenericProperties, Infer, QueryForTable } from "dataverse-schema";
 
 export const DEFAULT_QUEUE_STORE = "__mutations";
 
@@ -40,4 +40,11 @@ export type QueuedMutation = {
   collectionId: string;
   sequence: number;
   timestamp: number;
+  /**
+   * Number of failed replay attempts. Used for exponential backoff; persists
+   * across reloads so interrupted replays don't retry in a tight loop.
+   */
+  attempts?: number;
+  /** Timestamp of the last failed replay attempt (ms since epoch). */
+  lastAttemptAt?: number;
 };

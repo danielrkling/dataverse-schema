@@ -16,7 +16,28 @@ type Mutable<T> = { -readonly [P in keyof T]: T[P] };
  *   - double insert            → keeps the last insert
  *   - double delete            → keeps single delete
  */
+export type CompactionGroup = {
+  result: QueuedMutation | null;
+  ids: string[];
+};
+
+export type CompactResult = {
+  mutations: QueuedMutation[];
+  groups: CompactionGroup[];
+};
+
 export function compactMutations(mutations: QueuedMutation[]): QueuedMutation[] {
+  return compactMutationsWithConsumed(mutations).mutations;
+}
+
+/**
+ * Same compaction logic as {@link compactMutations}, but also reports how the
+ * input mutations were grouped. Each group's `ids` are the original mutations
+ * folded into (or cancelled by) `result`. This lets replay callers delete every
+ * consumed mutation, including ones merged away or cancelled out, so the queue
+ * fully drains instead of leaking superseded entries.
+ */
+export function compactMutationsWithConsumed(mutations: QueuedMutation[]): CompactResult {
   const groups = new Map<string, QueuedMutation[]>();
 
   for (const m of mutations) {
@@ -30,6 +51,7 @@ export function compactMutations(mutations: QueuedMutation[]): QueuedMutation[] 
   }
 
   const compacted: QueuedMutation[] = [];
+  const resultGroups: CompactionGroup[] = [];
 
   for (const group of groups.values()) {
     group.sort((a, b) => a.sequence - b.sequence);
@@ -70,8 +92,12 @@ export function compactMutations(mutations: QueuedMutation[]): QueuedMutation[] 
     if (result) {
       compacted.push(result as QueuedMutation);
     }
+    resultGroups.push({
+      result: result as QueuedMutation | null,
+      ids: group.map((m) => m.id),
+    });
   }
 
   compacted.sort((a, b) => a.sequence - b.sequence);
-  return compacted;
+  return { mutations: compacted, groups: resultGroups };
 }
