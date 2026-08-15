@@ -7,6 +7,7 @@ import { parseDateOnly, toDateOnly } from "./util";
 export type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>
 
 const DATE_SCHEMA = v.date();
+const NON_EMPTY_STRING_SCHEMA = v.pipe(v.string(), v.minLength(1));
 
 function isValidDate(value: Date): boolean {
   return v.safeParse(DATE_SCHEMA, value).success;
@@ -65,11 +66,11 @@ export abstract class FieldBase<T> {
     return this.#readOnly
   }
 
-  transformValueFromDataverse(value: any, ctx?: TransformContext): T {
-    return value
+  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T {
+    return value as T
   }
 
-  transformValueToDataverse(value: any, ctx?: TransformContext): any {
+  transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown {
     return value
   }
 
@@ -89,6 +90,25 @@ export class BooleanField extends FieldBase<boolean> {
   type = "boolean" as const;
   constructor(name: string, options?: FieldOptions<boolean>) {
     super(name, { defaultValue: false, schema: v.boolean() as ValidationSchema<boolean> }, options);
+  }
+
+  transformValueFromDataverse(value: any): boolean {
+    return value ?? false;
+  }
+}
+
+export class NullableBooleanField extends FieldBase<boolean | null> {
+  kind = "value" as const;
+  type = "boolean" as const;
+  constructor(name: string, options?: FieldOptions<boolean | null>) {
+    super(name, {
+      defaultValue: null,
+      schema: v.nullable(v.boolean()) as ValidationSchema<boolean | null>,
+    }, options);
+  }
+
+  transformValueFromDataverse(value: any): boolean | null {
+    return value ?? null;
   }
 }
 
@@ -311,7 +331,7 @@ export class FormattedField extends FieldBase<string | null> {
     super(name, {
       defaultValue: null,
       schema: v.nullable(v.string()) as ValidationSchema<string | null>,
-    }, { readonly: true, ...options });
+    }, { ...options, readonly: true });
     this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
   }
 }
@@ -345,7 +365,7 @@ export class ImageField extends FieldBase<ImageRef | null> {
 
   async transformValueToDataverse(value: ImageRef | null): Promise<string | null | typeof SKIP> {
     if (value == null) return null;
-    if (value.data == null) return SKIP;
+    if (!value.data) return SKIP;
     if (value.data instanceof Blob) {
       return blobToBase64(value.data);
     }
@@ -382,7 +402,11 @@ export class FileField extends FieldBase<FileRef | null> {
   constructor(name: string, options?: FieldOptions<FileRef | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.object({ name: v.string() })) as ValidationSchema<FileRef | null>,
+      schema: v.nullable(v.object({
+        name: v.string(),
+        url: v.optional(v.string()),
+        data: v.optional(v.nullable(v.instance(Blob))),
+      })) as ValidationSchema<FileRef | null>,
     }, { ...options, readonly: true });
     this.fromDataverseName = `${name}_name`;
   }
@@ -446,6 +470,10 @@ export class JsonField<T> extends FieldBase<T> {
  */
 export function boolean(name: string, options?: FieldOptions<boolean>) {
   return new BooleanField(name, options);
+}
+
+export function nullableBoolean(name: string, options?: FieldOptions<boolean | null>) {
+  return new NullableBooleanField(name, options);
 }
 
 /**
@@ -681,7 +709,7 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.string()) as ValidationSchema<GUID | null>,
+      schema: v.nullable(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID | null>,
     }, options);
     this.navigationName = name;
     this.#getTable = getTable;
@@ -701,11 +729,11 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
 
 
   transformValueToDataverse(value: any): string | null {
-    if (value) {
-      return `${this.table.name}(${value})`;
-    } else {
-      return null;
+    if (value === null) return null;
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("Lookup IDs must be non-empty strings");
     }
+    return `${this.table.name}(${value})`;
   }
 }
 
@@ -785,7 +813,7 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>) {
     super(name, {
       defaultValue: [],
-      schema: v.array(v.string()) as ValidationSchema<GUID[]>,
+      schema: v.array(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID[]>,
     }, options);
     this.#getTable = getTable;
   }

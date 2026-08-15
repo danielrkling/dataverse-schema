@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 import * as v from "valibot"
 import {
-  string, nullableString, number, nullableNumber, boolean, primaryKey,
+  string, nullableString, number, nullableNumber, boolean, nullableBoolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted,
   collection, collectionIds, lookupId, lookup, DataverseTable,
   choice, nullableChoice,
@@ -38,6 +38,17 @@ test("nullableNumber field defaults to null", () => {
 test("boolean field defaults to false", () => {
   const f = boolean("active")
   expect(f.getDefault()).toBe(false)
+})
+
+test("boolean field normalizes null to false", () => {
+  expect(boolean("active").transformValueFromDataverse(null)).toBe(false)
+})
+
+test("nullableBoolean field defaults to null and preserves null", () => {
+  const f = nullableBoolean("active")
+  expect(f.getDefault()).toBeNull()
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+  expect(f.transformValueFromDataverse(true)).toBe(true)
 })
 
 test("primaryKey field generates UUID on getDefault", () => {
@@ -205,6 +216,13 @@ test("file field uses _name suffix and returns FileRef", () => {
   expect(f.getDefault()).toBeNull()
   expect(f.transformValueFromDataverse("report.pdf")).toEqual({ name: "report.pdf" })
   expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("file field schema preserves upload data and URL", () => {
+  const f = file("document")
+  const data = new Blob(["contents"], { type: "text/plain" })
+  const result = v.parse(f.schema, { name: "report.txt", url: "/download", data })
+  expect(result).toEqual({ name: "report.txt", url: "/download", data })
 })
 
 test("formatted field uses Display.V1.FormattedValue suffix", () => {

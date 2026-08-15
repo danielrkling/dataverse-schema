@@ -7,6 +7,7 @@ import {
   StringField,
   NumberField,
   BooleanField,
+  NullableBooleanField,
   DateTimeField,
   ImageField,
   ListField,
@@ -122,6 +123,7 @@ export type GenericValueProperty =
   | NumberField // Represents a numeric value.
   | NullableNumberField
   | BooleanField // Represents a boolean value.
+  | NullableBooleanField
   | DateTimeField // Represents a date and/or time value.
   | NullableDateTimeField
   | DateField  
