@@ -6,8 +6,9 @@ export declare function AboveOrEqual(field: FieldRef<any>, value: string): Filte
 
 export declare class Aggregation<V = any> {
     field?: string;
+    fieldRef?: FieldRef<V>;
     operation: string;
-    constructor(operation: string, field?: string);
+    constructor(operation: string, field?: string, fieldRef?: FieldRef<V>);
     toOdata(alias: string): string;
 }
 
@@ -71,7 +72,7 @@ declare type AttrDef = {
     rowaggregate?: string;
 };
 
-export declare function average<V>(field: FieldRef<V>): Aggregation<V>;
+export declare function average(field: NumericRef): Aggregation<number>;
 
 /**
  * Creates a data URL from a base64 encoded image string.
@@ -106,6 +107,7 @@ export declare class BooleanField extends FieldBase<boolean> {
     kind: "value";
     type: "boolean";
     constructor(name: string, options?: FieldOptions<boolean>);
+    transformValueFromDataverse(value: any): boolean;
 }
 
 export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
@@ -216,7 +218,7 @@ export declare function contains<T extends string | null>(field: FieldRef<T>, va
 
 export declare function ContainsValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
 
-export declare function count<V>(field?: FieldRef<V> | string): Aggregation<number>;
+export declare function count(field?: FieldRef<any>): Aggregation<number>;
 
 /**
  * Low-level HTTP client for the Dataverse Web API (v9.2).
@@ -258,6 +260,7 @@ export declare class DataverseClient {
     }): Promise<any>;
     private _resolvePrefer;
     private _iteratePages;
+    private _resource;
     /**
      * Retrieves a single record by ID.
      *
@@ -265,9 +268,7 @@ export declare class DataverseClient {
      * const account = await client.getRecord("accounts", "00000000-0000-0000-0000-000000000001",
      *   "$select=name,revenue")
      */
-    getRecord(entitySetName: Name, id: DataverseKey, query?: string, etag?: string, options?: {
-        signal?: AbortSignal;
-    }): Promise<any>;
+    getRecord(entitySetName: Name, id: DataverseKey, options?: GetRecordOptions): Promise<any>;
     /**
      * Retrieves multiple records, automatically following `@odata.nextLink` pagination.
      *
@@ -275,9 +276,8 @@ export declare class DataverseClient {
      * const accounts = await client.getRecords("accounts",
      *   "$select=name,revenue&$filter=revenue gt 10000")
      */
-    getRecords(entitySetName: Name, query?: string, options?: {
+    getRecords(entitySetName: Name, options?: QueryRequestOptions & {
         pageSize?: number;
-        signal?: AbortSignal;
     }): Promise<any[]>;
     /**
      * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
@@ -293,7 +293,7 @@ export declare class DataverseClient {
      *   console.log(account.name);
      * }
      */
-    iterateRecords(entitySetName: Name, query?: string, options?: {
+    iterateRecords(entitySetName: Name, options?: QueryRequestOptions & {
         pageSize?: number;
     }): AsyncGenerator<any>;
     /**
@@ -311,7 +311,7 @@ export declare class DataverseClient {
      *   for (const account of page) console.log(account.name);
      * }
      */
-    iteratePages(entitySetName: Name, query?: string, options?: {
+    iteratePages(entitySetName: Name, options?: QueryRequestOptions & {
         pageSize?: number;
     }): AsyncGenerator<any[]>;
     /**
@@ -321,7 +321,7 @@ export declare class DataverseClient {
      * const newAccount = await client.postRecord("accounts",
      *   { name: "New Account", revenue: 50000 })
      */
-    postRecord(entitySetName: Name, value: object, query?: string): Promise<any>;
+    postRecord(entitySetName: Name, value: object, options?: PostRecordOptions): Promise<any>;
     /**
      * Creates a record and returns only its GUID (no Prefer header).
      *
@@ -330,7 +330,7 @@ export declare class DataverseClient {
      *   { name: "New Account" })
      * // id: "00000000-0000-0000-0000-000000000001"
      */
-    postRecordGetId(entitySetName: Name, value: object): Promise<GUID>;
+    postRecordGetId(entitySetName: Name, value: object, options?: RequestOptions): Promise<GUID>;
     /**
      * Updates an existing record (partial update via PATCH).
      *
@@ -338,7 +338,7 @@ export declare class DataverseClient {
      * await client.patchRecord("accounts", "00000000-0000-0000-0000-000000000001",
      *   { name: "Updated Name", revenue: 75000 })
      */
-    patchRecord(entitySetName: Name, id: string, value: object, query?: string, etag?: string): Promise<any>;
+    patchRecord(entitySetName: Name, id: string, value: object, options?: PatchRecordOptions): Promise<any>;
     /**
      * Deletes a record by ID.
      *
@@ -346,7 +346,7 @@ export declare class DataverseClient {
      * const deletedId = await client.deleteRecord("accounts",
      *   "00000000-0000-0000-0000-000000000001")
      */
-    deleteRecord(entitySetName: Name, id: string, etag?: string): Promise<GUID>;
+    deleteRecord(entitySetName: Name, id: string, options?: DeleteRecordOptions): Promise<GUID>;
     /**
      * Updates a single property value via PUT.
      *
@@ -354,7 +354,9 @@ export declare class DataverseClient {
      * await client.updatePropertyValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "name", "New Name")
      */
-    updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, etag?: string): Promise<GUID>;
+    updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, options?: RequestOptions & {
+        etag?: string;
+    }): Promise<GUID>;
     /**
      * Deletes (nulls out) a single property value.
      *
@@ -362,7 +364,7 @@ export declare class DataverseClient {
      * await client.deletePropertyValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "emailaddress1")
      */
-    deletePropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<GUID>;
+    deletePropertyValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<GUID>;
     /**
      * Retrieves a single property value.
      *
@@ -370,7 +372,7 @@ export declare class DataverseClient {
      * const name = await client.getPropertyValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "name")
      */
-    getPropertyValue(entitySetName: Name, id: string, propertyName: Name): Promise<any>;
+    getPropertyValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<any>;
     /**
      * Retrieves a property's raw value (e.g. file content) via `/$value`.
      *
@@ -378,7 +380,7 @@ export declare class DataverseClient {
      * const imageData = await client.getPropertyRawValue("accounts",
      *   "00000000-0000-0000-0000-000000000001", "entityimage")
      */
-    getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name): Promise<any>;
+    getPropertyRawValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<any>;
     /**
      * Returns the URL for a property's raw value.
      *
@@ -411,7 +413,7 @@ export declare class DataverseClient {
      *   "00000000-0000-0000-0000-000000000001",
      *   "myfile", "report.pdf", fileBlob)
      */
-    updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource): Promise<any>;
+    updateFileProperty(entitySetName: Name, id: string, propertyName: Name, filename: string, body: string | Blob | BufferSource, options?: RequestOptions): Promise<any>;
     /**
      * Activates a record (sets statecode to 0).
      *
@@ -438,7 +440,7 @@ export declare class DataverseClient {
      *   "contacts",
      *   "00000000-0000-0000-0000-000000000002")
      */
-    associateRecord(entitySetName: Name, parentId: string, propertyName: Name, childEntitySetName: Name, childId: string): Promise<GUID>;
+    associateRecord(entitySetName: Name, parentId: string, propertyName: Name, childEntitySetName: Name, childId: string, options?: RequestOptions): Promise<GUID>;
     /**
      * Dissociates two records. If childId is omitted, all references are removed.
      *
@@ -448,7 +450,7 @@ export declare class DataverseClient {
      *   "primarycontactid",
      *   "00000000-0000-0000-0000-000000000002")
      */
-    dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string): Promise<GUID>;
+    dissociateRecord(entitySetName: Name, parentId: string, propertyName: Name, childId?: string, options?: RequestOptions): Promise<GUID>;
     /**
      * Retrieves associated records via a collection navigation property.
      *
@@ -458,7 +460,9 @@ export declare class DataverseClient {
      *   "contact_customer_accounts",
      *   "$select=fullname,email")
      */
-    getAssociatedRecords(entitySetName: Name, id: string, navigationPropertyName: Name, query?: string): Promise<any[]>;
+    getAssociatedRecords(entitySetName: Name, id: string, navigationPropertyName: Name, options?: QueryRequestOptions & {
+        pageSize?: number;
+    }): Promise<any[]>;
     /**
      * Retrieves a single associated record via a single-valued navigation property.
      *
@@ -468,7 +472,7 @@ export declare class DataverseClient {
      *   "primarycontactid",
      *   "$select=fullname,email")
      */
-    getAssociatedRecord(entitySetName: Name, id: string, navigationPropertyName: Name, query?: string): Promise<any>;
+    getAssociatedRecord(entitySetName: Name, id: string, navigationPropertyName: Name, options?: QueryRequestOptions): Promise<any>;
     /**
      * Synchronizes a list of associated records: adds new ones and removes ones
      * no longer in the list.
@@ -617,6 +621,14 @@ export declare type DataverseClientOptions = {
     /** Additional headers to include on every request. */
     headers?: Record<string, string>;
 };
+
+export declare class DataverseHttpError extends Error {
+    readonly status: number;
+    readonly statusText: string;
+    readonly body: unknown;
+    readonly response?: Response | undefined;
+    constructor(message: string, status: number, statusText: string, body: unknown, response?: Response | undefined);
+}
 
 /**
  * Represents a Dataverse many-to-many intersect (association) table.
@@ -1039,6 +1051,10 @@ export declare class DateTimeField extends FieldBase<Date> {
     transformValueFromDataverse(value: any): Date;
 }
 
+export declare type DeleteRecordOptions = RequestOptions & {
+    etag?: string;
+};
+
 export declare function desc(...fields: Name[]): OrderSpec;
 
 export declare function DoesNotContainValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
@@ -1267,8 +1283,8 @@ export declare abstract class FieldBase<T> {
     }, options?: FieldOptions<T>);
     getDefault(): T;
     getReadOnly(): boolean;
-    transformValueFromDataverse(value: any, ctx?: TransformContext): T;
-    transformValueToDataverse(value: any, ctx?: TransformContext): any;
+    transformValueFromDataverse(value: unknown, ctx?: TransformContext): T;
+    transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown;
     afterSave?(ctx: TransformContext, value: any): Promise<void>;
 }
 
@@ -1279,14 +1295,17 @@ export declare type FieldOptions<T> = {
 };
 
 export declare type FieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>;
+    [K in keyof T]: T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never;
 };
 
-export declare class FieldRef<T = any, K extends string = string> {
-    private readonly _dataverseName;
-    readonly fieldDef?: any;
-    constructor(_dataverseName: string, fieldDef?: any);
+export declare class FieldRef<T = any, K extends string = string, F extends FieldBase<T> = FieldBase<T>> {
+    readonly field: F;
+    private readonly _path;
+    constructor(field: F, path?: string);
+    static fromPath<T, F extends FieldBase<T>>(field: F, path: string): FieldRef<T, string, F>;
     get dataverseName(): string;
+    transformFromDataverse(value: unknown, ctx?: TransformContext): T;
+    transformToDataverse(value: T, ctx?: TransformContext): unknown;
     toString(): string;
 }
 
@@ -1299,12 +1318,12 @@ declare type FieldSelector<TProps extends GenericProperties> = {
  *
  * @param name The Dataverse logical name of the file column.
  */
-export declare function file(name: string): FileField;
+export declare function file(name: string, options?: FieldOptions<FileRef | null>): FileField;
 
 export declare class FileField extends FieldBase<FileRef | null> {
     type: "file";
     kind: "file";
-    constructor(name: string);
+    constructor(name: string, options?: FieldOptions<FileRef | null>);
     transformValueFromDataverse(value: any, ctx?: TransformContext): FileRef | null;
     transformValueToDataverse(): typeof SKIP;
     afterSave(ctx: TransformContext, value: FileRef): Promise<void>;
@@ -1330,6 +1349,7 @@ export declare class FilterExpr {
     toString(): string;
     toOdata(): string;
     toFetchXml(): string;
+    getNode(): FilterNode;
 }
 
 declare type FilterNode = {
@@ -1375,13 +1395,13 @@ declare type FilterNode = {
     value: string;
 } | {
     type: "and";
-    conditions: FilterExpr[];
+    conditions: FilterNode[];
 } | {
     type: "or";
-    conditions: FilterExpr[];
+    conditions: FilterNode[];
 } | {
     type: "not";
-    condition: FilterExpr;
+    condition: FilterNode;
 };
 
 declare type FilterOnlyLinkType = 'any' | 'not any' | 'all' | 'not all' | 'exists' | 'in';
@@ -1432,7 +1452,7 @@ export declare type GenericProperty = GenericNavigationProperty | GenericValuePr
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-export declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField | ChoiceField<Record<number, string>> | NullableChoiceField<Record<number, string>>;
+export declare type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | NullableBooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField | ChoiceField<Record<number, string>> | NullableChoiceField<Record<number, string>> | JsonField<any>;
 
 export declare function getEtag(v: any): string | undefined;
 
@@ -1454,13 +1474,18 @@ export declare function getImageUrl(entity: string, name: string, id: string): s
 /** Extracts the string name from a FieldName type. */
 export declare function getName(name: Name): string;
 
+export declare type GetRecordOptions = QueryRequestOptions & {
+    etag?: string;
+};
+
 export declare type GetTable<T = any> = () => T;
 
-export declare function groupby<V>(field: FieldRef<V> | string): GroupByExpr<V>;
+export declare function groupby<V>(field: FieldRef<V>): GroupByExpr<V>;
 
 export declare class GroupByExpr<V = any> {
     field: string;
-    constructor(field: string);
+    fieldRef?: FieldRef<V>;
+    constructor(field: string, fieldRef?: FieldRef<V>);
 }
 
 export declare function gt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
@@ -1483,13 +1508,13 @@ export declare class ImageField extends FieldBase<ImageRef | null> {
     kind: "image";
     type: "image";
     constructor(name: string, options?: FieldOptions<ImageRef | null>);
-    transformValueFromDataverse(value: any, ctx: TransformContext): ImageRef | null;
-    transformValueToDataverse(value: ImageRef | null): Promise<string | null>;
+    transformValueFromDataverse(value: any, ctx?: TransformContext): ImageRef | null;
+    transformValueToDataverse(value: ImageRef | null): Promise<string | null | typeof SKIP>;
 }
 
 export declare type ImageRef = {
-    readonly url: string;
-    readonly fullSizeUrl: string;
+    readonly url?: string;
+    readonly fullSizeUrl?: string;
     data?: Blob | null;
 };
 
@@ -1614,7 +1639,7 @@ export declare function list<T extends string | number>(name: string, list: Arra
 export declare class ListField<T extends string | number> extends FieldBase<T | null> {
     kind: "value";
     type: "list";
-    list: Array<T>;
+    readonly list: readonly T[];
     constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>);
 }
 
@@ -1698,7 +1723,7 @@ export declare function mapChoices(data: any): {
     description: string;
 }[];
 
-export declare function max<V>(field: FieldRef<V>): Aggregation<V>;
+export declare function max(field: MinMaxRef): Aggregation<number | Date>;
 
 declare type MergeExpand<T, K extends string, V> = {
     [P in keyof T | K]: P extends K ? V : P extends keyof T ? T[P] : never;
@@ -1713,7 +1738,9 @@ declare type MergeExpand<T, K extends string, V> = {
  */
 export declare function mergeRecords<T>(prevRecords: T[], newRecords: T[]): T[];
 
-export declare function min<V>(field: FieldRef<V>): Aggregation<V>;
+export declare function min(field: MinMaxRef): Aggregation<number | Date>;
+
+declare type MinMaxRef = NumericRef | FieldRef<Date> | FieldRef<Date | null>;
 
 /** A field name can be a string or an object with a name or toString method. */
 export declare type Name = string | {
@@ -1793,6 +1820,15 @@ export declare function NotIn<T extends string | number>(field: FieldRef<T>, val
 
 export declare function NotUnder(field: FieldRef<any>, value: string): FilterExpr;
 
+export declare function nullableBoolean(name: string, options?: FieldOptions<boolean | null>): NullableBooleanField;
+
+export declare class NullableBooleanField extends FieldBase<boolean | null> {
+    kind: "value";
+    type: "boolean";
+    constructor(name: string, options?: FieldOptions<boolean | null>);
+    transformValueFromDataverse(value: any): boolean | null;
+}
+
 /**
  * Creates a nullable choice/option-set column definition (allows `null`).
  *
@@ -1862,6 +1898,7 @@ export declare class NullableNumberField extends FieldBase<number | null> {
     kind: "value";
     type: "number";
     constructor(name: string, options?: FieldOptions<number | null>);
+    transformValueFromDataverse(value: any): number | null;
 }
 
 /**
@@ -1881,6 +1918,7 @@ export declare class NullableStringField extends FieldBase<string | null> {
     kind: "value";
     type: "string";
     constructor(name: string, options?: FieldOptions<string | null>);
+    transformValueFromDataverse(value: any): string | null;
 }
 
 /**
@@ -1903,6 +1941,16 @@ export declare class NumberField extends FieldBase<number> {
     transformValueFromDataverse(value: any): number;
 }
 
+declare type NumericRef = FieldRef<number> | FieldRef<number | null>;
+
+declare type ODataAggregateAst = {
+    kind: "odata-aggregate";
+    filters: string[];
+    apply: string;
+    orderby: ODataOrderAst[];
+    top?: number;
+};
+
 export declare class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
     private _table;
     private _filters;
@@ -1910,7 +1958,8 @@ export declare class ODataApplyQuery<T extends GenericProperties, TResult extend
     private _orderby;
     private _top?;
     private _aliasProxy;
-    constructor(table: DataverseTable<T>, apply: string, aliasProxy: Record<string, string>, initialFilters?: string[]);
+    private _aliasFields;
+    constructor(table: DataverseTable<T>, apply: string, aliasProxy: Record<string, string>, initialFilters?: string[], aliasFields?: Record<string, FieldRef<any> | undefined>);
     filter(filter: string): this;
     filter(filter: FilterExpr): this;
     filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
@@ -1918,6 +1967,7 @@ export declare class ODataApplyQuery<T extends GenericProperties, TResult extend
     orderby(alias: string, direction?: "asc" | "desc"): this;
     top(n: number): this;
     private _build;
+    toAst(): ODataAggregateAst;
     toString(): string;
     private _transformRow;
     execute(): Promise<TResult[]>;
@@ -1934,7 +1984,7 @@ declare type ODataCollectionNavProxy<P extends GenericProperties> = {
 } & ODataFieldProxy<P>;
 
 declare type ODataFieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P> : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P> : FieldRef<Infer<T[K]>, K extends string ? K : never>;
+    [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P> : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P> : T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never;
 };
 
 declare type ODataLambdaProxy<P extends GenericProperties> = {
@@ -1944,6 +1994,11 @@ declare type ODataLambdaProxy<P extends GenericProperties> = {
 declare type ODataLookupNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
+
+declare type ODataOrderAst = {
+    field: string;
+    direction: "asc" | "desc";
+};
 
 export declare function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr;
 
@@ -1983,6 +2038,12 @@ export declare class OrderSpec {
 }
 
 export declare function parseDateOnly(dateString: string): Date;
+
+export declare type PatchRecordOptions = QueryRequestOptions & {
+    etag?: string;
+};
+
+export declare type PostRecordOptions = QueryRequestOptions;
 
 /**
  * A single Prefer value — either a raw string or a structured object
@@ -2034,7 +2095,15 @@ export declare type QueryForTable<T> = {
     top?: number;
 };
 
+export declare type QueryRequestOptions = RequestOptions & {
+    query?: string;
+};
+
 declare type RelatedProps<T extends GenericProperties, K extends keyof T> = T[K] extends CollectionProperty<infer P> ? P : T[K] extends LookupProperty<infer P> ? P : never;
+
+export declare type RequestOptions = {
+    signal?: AbortSignal;
+};
 
 /**
  * Retrieves the roles assigned to a user in Azure Active Directory (AAD).
@@ -2141,7 +2210,7 @@ declare type SubJoinBuilder<TProps extends GenericProperties, TResult extends Re
     toString(): string;
 };
 
-export declare function sum<V>(field: FieldRef<V> | string): Aggregation<V>;
+export declare function sum(field: NumericRef): Aggregation<number>;
 
 export declare type TableRequestOptions = {
     pageSize?: number;

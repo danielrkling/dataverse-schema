@@ -5,6 +5,27 @@ import path from "path";
 const src = path.resolve(__dirname, "src");
 
 export default defineConfig(({ mode }) => {
+  if (mode === "browser-test") {
+    return {
+      build: {
+        emptyOutDir: false,
+        lib: {
+          entry: path.resolve(__dirname, "test/browser-smoke.ts"),
+          formats: ["iife"],
+          name: "DataverseSchemaBrowserTest",
+          fileName: () => "browser-smoke.js",
+        },
+        rollupOptions: {
+          output: {
+            inlineDynamicImports: true,
+          },
+        },
+        minify: false,
+        target: "esnext",
+      },
+    };
+  }
+
   if (mode === "tanstack") {
     return {
       build: {

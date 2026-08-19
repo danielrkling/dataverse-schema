@@ -51,7 +51,7 @@ function dataverseCollectionOptions(config) {
         try {
           const queryString = buildQueryForTable$1(table, query);
           begin();
-          for await (const record of table.client.iterateRecords(table.entitySetName, queryString)) {
+          for await (const record of table.client.iterateRecords(table.entitySetName, { query: queryString })) {
             write({ type: "insert", value: table.transformValueFromDataverse(record) });
           }
           commit();
@@ -592,7 +592,7 @@ function dataverseOfflineCollectionOptions(config) {
             const queryString = buildQueryForTable(table, query);
             begin();
             try {
-              for await (const page of table.client.iteratePages(table.entitySetName, queryString)) {
+              for await (const page of table.client.iteratePages(table.entitySetName, { query: queryString })) {
                 const records = page.map((v) => table.transformValueFromDataverse(v));
                 for (const record of records) {
                   write({ type: "insert", value: record });

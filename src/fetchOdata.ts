@@ -2,11 +2,19 @@ import { DataverseTable } from "./table"
 import { GenericProperties, Infer } from "./types"
 import { LookupProperty, CollectionProperty } from "./fields"
 import { Etag } from "./util"
-import { FilterExpr, FieldRef } from "./filter"
+import { FilterExpr, FieldRef } from "./query"
+import { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "./query/shared/aggregation"
+import { filterInputNode } from "./query/filter/input"
+import type { FilterNode } from "./query/filter/ast"
+import { ODataAggregateAst, ODataApplyAst, ODataSelectAst, FieldPath, serializeODataAggregate, serializeODataSelect } from "./query/odata/ast"
+import type { FieldBase } from "./fields"
+
+export { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "./query/shared/aggregation"
 
 // --- Internal proxy & key types ---
 
 const proxyTableMap = new WeakMap<object, DataverseTable<any>>()
+const proxyPathMap = new WeakMap<object, FieldPath>()
 
 type ODataLambdaProxy<P extends GenericProperties> = {
   [K in keyof P]: FieldRef<any>;
@@ -23,7 +31,7 @@ type ODataLookupNavProxy<P extends GenericProperties> = {
 type ODataFieldProxy<T extends GenericProperties> = {
   [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P>
     : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P>
-    : FieldRef<Infer<T[K]>, K extends string ? K : never>
+    : T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never
 }
 
 type ValueKeys<T extends GenericProperties> = { [K in keyof T]: T[K] extends { kind: 'value' } | { type: 'lookupId' } | { type: 'file' } ? K : never }[keyof T]
@@ -41,25 +49,6 @@ type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any
 
 type MergeExpand<T, K extends string, V> = {
   [P in keyof T | K]: P extends K ? V : P extends keyof T ? T[P] : never
-}
-
-// --- Aggregation classes ---
-
-export class GroupByExpr<V = any> {
-  field: string
-  constructor(field: string) { this.field = field }
-}
-
-export class Aggregation<V = any> {
-  field?: string
-  operation: string
-  constructor(operation: string, field?: string) {
-    this.operation = operation
-    this.field = field
-  }
-  toOdata(alias: string): string {
-    return this.field ? `${this.field} with ${this.operation} as ${alias}` : `$count as ${alias}`
-  }
 }
 
 // --- Alias proxy for apply orderby ---
@@ -149,21 +138,24 @@ export interface LookupSubQuery<TAll extends GenericProperties, TChosen extends 
 
 export class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
   private _table: DataverseTable<T>
-  private _filters: string[] = []
-  private _apply: string
+  private _filters: FilterNode[] = []
+  private _apply?: ODataApplyAst
   private _orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
   private _top?: number
   private _aliasProxy: Record<string, string> = {}
+  private _aliasFields: Record<string, FieldRef<any> | undefined> = {}
 
   constructor(
     table: DataverseTable<T>,
-    apply: string,
+    apply: ODataApplyAst | undefined,
     aliasProxy: Record<string, string>,
-    initialFilters?: string[],
+    initialFilters?: FilterNode[],
+    aliasFields?: Record<string, FieldRef<any> | undefined>,
   ) {
     this._table = table
     this._apply = apply
     this._aliasProxy = aliasProxy
+    this._aliasFields = aliasFields ?? {}
     if (initialFilters) this._filters = [...initialFilters]
   }
 
@@ -171,16 +163,7 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
   filter(filter: FilterExpr): this
   filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this
   filter(filter: string | FilterExpr | ((f: ODataFieldProxy<T>) => string | FilterExpr)): this {
-    let str: string
-    if (filter instanceof FilterExpr) {
-      str = filter.toOdata()
-    } else if (typeof filter === "function") {
-      const result = filter(_buildProxyForTable(this._table))
-      str = result instanceof FilterExpr ? result.toOdata() : result
-    } else {
-      str = filter
-    }
-    this._filters.push(str)
+    this._filters.push(filterInputNode(filter, _buildProxyForTable(this._table)))
     return this
   }
 
@@ -202,18 +185,17 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
   }
 
   private _build(): string {
-    const parts: string[] = []
-    if (this._filters.length === 1) {
-      parts.push(`$filter=${this._filters[0]}`)
-    } else if (this._filters.length > 1) {
-      parts.push(`$filter=${this._filters.join(" and ")}`)
+    return serializeODataAggregate(this.toAst())
+  }
+
+  toAst(): ODataAggregateAst {
+    return {
+      kind: "odata-aggregate",
+      filters: [...this._filters],
+      apply: this._apply,
+      orderby: this._orderby.map((order) => ({ field: { kind: "alias", name: order.name }, direction: order.dir })),
+      top: this._top,
     }
-    if (this._apply) parts.push(`$apply=${this._apply}`)
-    if (this._orderby.length) {
-      parts.push(`$orderby=${this._orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
-    }
-    if (this._top !== undefined) parts.push(`$top=${this._top}`)
-    return parts.join("&")
   }
 
   toString(): string {
@@ -222,6 +204,9 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
 
   private _transformRow(v: any): TResult {
     const r = { ...v }
+    for (const [alias, field] of Object.entries(this._aliasFields)) {
+      if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias])
+    }
     r[Etag] = v["@odata.etag"]
     delete r["@odata.etag"]
     return r as TResult
@@ -270,8 +255,8 @@ class ODataQuery<T extends GenericProperties> {
   #table: DataverseTable<T>
   #fields: string[] = []
   #selectedKeys: string[] = []
-  #filters: string[] = []
-  #expands: Array<{ name: string; key: string; query: string }> = []
+  #filters: FilterNode[] = []
+  #expands: Array<{ navigation: LookupProperty<any> | CollectionProperty<any>; key: string; query: ODataSelectAst }> = []
   #expandMeta: ExpandMeta[] = []
   #orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
   #top?: number
@@ -318,7 +303,7 @@ class ODataQuery<T extends GenericProperties> {
     const result = sub?.(child)
     const q = result ?? child
 
-    this.#expands.push({ name: prop.name, key, query: q._buildForExpand() })
+    this.#expands.push({ navigation: prop, key, query: q.toAst() })
 
     // Track expand metadata for partial transforms
     const childSelectedKeys = q._getSelectedKeys()
@@ -341,16 +326,7 @@ class ODataQuery<T extends GenericProperties> {
   filter(filter: FilterExpr): this
   filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this
   filter(filter: string | FilterExpr | ((f: ODataFieldProxy<T>) => string | FilterExpr)): this {
-    let str: string
-    if (filter instanceof FilterExpr) {
-      str = filter.toOdata()
-    } else if (typeof filter === "function") {
-      const result = filter(this.#proxy)
-      str = result instanceof FilterExpr ? result.toOdata() : result
-    } else {
-      str = filter
-    }
-    this.#filters.push(str)
+    this.#filters.push(filterInputNode(filter, this.#proxy))
     return this
   }
 
@@ -377,74 +353,55 @@ class ODataQuery<T extends GenericProperties> {
     expr: (f: ODataFieldProxy<T>) => R,
   ): ODataApplyQuery<T, ApplyResultType<R>> {
     const result = expr(this.#proxy as any)
-    const groupByFields: string[] = []
-    const aggParts: string[] = []
+    const groupByFields: FieldPath[] = []
+    const aggregateExpressions: { field?: FieldPath; operation: string; alias: string }[] = []
     const aliasProxy: Record<string, string> = {}
+    const aliasFields: Record<string, FieldRef<any> | undefined> = {}
 
     for (const [alias, value] of Object.entries(result)) {
       aliasProxy[alias] = alias
       if (value instanceof GroupByExpr) {
-        groupByFields.push(value.field)
+        if (value.path) groupByFields.push(value.path)
+        aliasFields[alias] = value.fieldRef
       } else if (value instanceof Aggregation) {
-        aggParts.push(value.toOdata(alias))
+        aggregateExpressions.push({ field: value.path, operation: value.operation, alias })
+        aliasFields[alias] = value.fieldRef
       }
     }
 
-    let applyStr = ""
-    if (groupByFields.length > 0 && aggParts.length > 0) {
-      applyStr = `groupby((${groupByFields.join(",")}),aggregate(${aggParts.join(",")}))`
-    } else if (groupByFields.length > 0) {
-      applyStr = `groupby((${groupByFields.join(",")}))`
-    } else if (aggParts.length > 0) {
-      applyStr = `aggregate(${aggParts.join(",")})`
-    }
+    const aggregate = aggregateExpressions.length > 0
+      ? { kind: "aggregate" as const, expressions: aggregateExpressions }
+      : undefined
+    const apply: ODataApplyAst | undefined = groupByFields.length > 0
+      ? { kind: "groupby", fields: groupByFields, next: aggregate }
+      : aggregate
 
     return new ODataApplyQuery<T, ApplyResultType<R>>(
       this.#table,
-      applyStr,
+      apply,
       aliasProxy,
       this.#filters.length > 0 ? this.#filters : undefined,
+      aliasFields,
     )
   }
 
   _buildForExpand(): string {
-    const parts: string[] = []
-    if (this.#fields.length) parts.push(`$select=${this.#fields.join(",")}`)
-    if (this.#filters.length === 1) {
-      parts.push(`$filter=${this.#filters[0]}`)
-    } else if (this.#filters.length > 1) {
-      parts.push(`$filter=${this.#filters.join(" and ")}`)
+    return serializeODataSelect(this.toAst(), ";")
+  }
+
+  toAst(): ODataSelectAst {
+    return {
+      kind: "odata-select",
+      select: this.#fields.map((field) => pathForName(this.#table, field)),
+      filters: this.#filters,
+      orderby: this.#orderby.map((order) => ({ field: pathForName(this.#table, order.name), direction: order.dir })),
+      expands: this.#expands.map((expand) => ({ navigation: expand.navigation, query: expand.query })),
+      top: this.#top,
     }
-    if (this.#orderby.length) {
-      parts.push(`$orderby=${this.#orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
-    }
-    if (this.#expands.length) {
-      parts.push(`$expand=${this.#expands.map(e =>
-        e.query ? `${e.name}(${e.query})` : e.name
-      ).join(",")}`)
-    }
-    if (this.#top !== undefined) parts.push(`$top=${this.#top}`)
-    return parts.join(";")
   }
 
   toString(): string {
-    const parts: string[] = []
-    if (this.#fields.length) parts.push(`$select=${this.#fields.join(",")}`)
-    if (this.#filters.length === 1) {
-      parts.push(`$filter=${this.#filters[0]}`)
-    } else if (this.#filters.length > 1) {
-      parts.push(`$filter=${this.#filters.join(" and ")}`)
-    }
-    if (this.#orderby.length) {
-      parts.push(`$orderby=${this.#orderby.map(o => `${o.name} ${o.dir}`).join(",")}`)
-    }
-    if (this.#expands.length) {
-      parts.push(`$expand=${this.#expands.map(e =>
-        e.query ? `${e.name}(${e.query})` : e.name
-      ).join(",")}`)
-    }
-    if (this.#top !== undefined) parts.push(`$top=${this.#top}`)
-    return parts.join("&")
+    return serializeODataSelect(this.toAst())
   }
 
   _getSelectedKeys(): string[] {
@@ -453,9 +410,11 @@ class ODataQuery<T extends GenericProperties> {
 
   private _partialTransform(value: any): Record<string, any> {
     const result: Record<string | symbol, any> = {}
+    const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.name]
+    const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" }
     for (const key of this.#selectedKeys) {
       const prop = this.#table.fields[key]
-      result[key] = prop.transformValueFromDataverse(value[prop.fromDataverseName])
+      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(value[prop.fromDataverseName], ctx)
     }
     for (const expand of this.#expandMeta) {
       if (value[expand.dvName] !== undefined) {
@@ -540,6 +499,18 @@ class InitialQueryImpl<T extends GenericProperties> {
 
 // --- Helpers ---
 
+function pathForName(table: DataverseTable<any>, path: string): FieldPath {
+  const segments: any[] = []
+  let current = table
+  for (const name of path.split("/")) {
+    const entry = Object.values(current.fields).find((field: any) => (field.fromDataverseName ?? field.name) === name) as any
+    if (!entry) throw new Error(`Unknown query field: ${path}`)
+    segments.push(entry)
+    if (entry.kind === "navigation") current = entry.table
+  }
+  return segments
+}
+
 function _processExpand(raw: any, expand: ExpandMeta, table: DataverseTable<any>): any {
   if (raw === null || raw === undefined) return null
   const navProp = table.fields[expand.key] as any
@@ -562,10 +533,12 @@ function _processExpand(raw: any, expand: ExpandMeta, table: DataverseTable<any>
 
 function _partialTransformItem(table: DataverseTable<any>, selectedKeys: string[], raw: any, subExpands?: ExpandMeta[] | null): Record<string, any> {
   const result: Record<string, any> = {}
+  const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.name]
+  const ctx = { table, client: table.client, recordId: recordId ?? "" }
   for (const key of selectedKeys) {
     const prop = table.fields[key]
     if (prop) {
-      result[key] = prop.transformValueFromDataverse(raw[prop.fromDataverseName])
+      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(raw[prop.fromDataverseName], ctx)
     }
   }
   if (subExpands) {
@@ -581,6 +554,7 @@ function _partialTransformItem(table: DataverseTable<any>, selectedKeys: string[
 function _buildProxyForTable<T extends GenericProperties>(
   table: DataverseTable<T>,
   prefix?: string,
+  prefixPath: FieldPath = [],
 ): ODataFieldProxy<T> {
   const proxy: Record<string, any> = {}
   const fields = table.fields as Record<string, any>
@@ -595,9 +569,11 @@ function _buildProxyForTable<T extends GenericProperties>(
       Object.defineProperty(proxy, key, {
         get: () => {
           if (!cached) {
-            const sub = _buildProxyForTable(navProp.table, currentPrefix) as Record<string, any>
+            const sub = _buildProxyForTable(navProp.table, currentPrefix, [...prefixPath, navProp]) as Record<string, any>
             sub.toString = () => currentPrefix
+            Object.defineProperty(sub, "path", { value: [...prefixPath, navProp], enumerable: false })
             if (isCollection) proxyTableMap.set(sub, navProp.table)
+            proxyPathMap.set(sub, [...prefixPath, navProp])
             cached = sub
           }
           return cached
@@ -606,31 +582,10 @@ function _buildProxyForTable<T extends GenericProperties>(
         configurable: true,
       })
     } else {
-      proxy[key] = new FieldRef(prefix ? `${prefix}/${dataverseName}` : dataverseName, prop)
+      proxy[key] = FieldRef.fromPath(prop, prefix ? `${prefix}/${dataverseName}` : dataverseName, [...prefixPath, prop])
     }
   }
   return proxy as ODataFieldProxy<T>
-}
-
-// --- Aggregation helpers ---
-
-export function sum<V>(field: FieldRef<V> | string): Aggregation<V> {
-  return new Aggregation("sum", field instanceof FieldRef ? field.toString() : field)
-}
-export function min<V>(field: FieldRef<V>): Aggregation<V> {
-  return new Aggregation("min", field.toString())
-}
-export function max<V>(field: FieldRef<V>): Aggregation<V> {
-  return new Aggregation("max", field.toString())
-}
-export function average<V>(field: FieldRef<V>): Aggregation<V> {
-  return new Aggregation("average", field.toString())
-}
-export function count<V>(field?: FieldRef<V> | string): Aggregation<number> {
-  return new Aggregation("count", field ? (field instanceof FieldRef ? field.toString() : field) : undefined)
-}
-export function groupby<V>(field: FieldRef<V> | string): GroupByExpr<V> {
-  return new GroupByExpr(field instanceof FieldRef ? field.toString() : field)
 }
 
 // --- Lambda helpers ---
@@ -642,7 +597,7 @@ export function buildLambdaProxy<P extends GenericProperties>(
   const fields = table.fields as Record<string, any>
   const proxy = {} as Record<string, any>
   for (const [key, prop] of Object.entries(fields)) {
-    proxy[key] = new FieldRef(`${alias}/${prop.fromDataverseName ?? prop.name}`)
+    proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.name}`)
   }
   return proxy as ODataLambdaProxy<P>
 }
@@ -655,7 +610,13 @@ export function any<P extends GenericProperties>(
   const table = proxyTableMap.get(proxy as object)
   if (!table) throw new Error("any() requires a collection navigation proxy")
   const result = condition(buildLambdaProxy(alias, table as DataverseTable<P>))
-  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "any", alias, condition: result instanceof FilterExpr ? result.toOdata() : result })
+  return new FilterExpr({
+    type: "lambda",
+    field: proxyPathMap.get(proxy as object) ?? [],
+    operator: "any",
+    alias,
+    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result },
+  })
 }
 
 export function all<P extends GenericProperties>(
@@ -666,7 +627,13 @@ export function all<P extends GenericProperties>(
   const table = proxyTableMap.get(proxy as object)
   if (!table) throw new Error("all() requires a collection navigation proxy")
   const result = condition(buildLambdaProxy(alias, table as DataverseTable<P>))
-  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "all", alias, condition: result instanceof FilterExpr ? result.toOdata() : result })
+  return new FilterExpr({
+    type: "lambda",
+    field: proxyPathMap.get(proxy as object) ?? [],
+    operator: "all",
+    alias,
+    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result },
+  })
 }
 
 // --- Entry point ---

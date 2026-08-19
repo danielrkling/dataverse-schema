@@ -66,6 +66,7 @@
   },
   "scripts": {
     "build": "vite build && vite build --mode tanstack && vite build --mode tanstack-db",
+    "build:browser-test": "vite build --mode browser-test",
     "dev": "vite"
   }
 }

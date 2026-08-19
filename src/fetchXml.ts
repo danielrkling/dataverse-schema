@@ -1,11 +1,14 @@
 import { DataverseTable, DataverseIntersectTable } from "./table";
 import { GenericProperties, Infer } from "./types";
-import { FilterExpr, FieldRef } from "./filter";
-import { Aggregation, GroupByExpr } from "./fetchOdata";
+import { FilterExpr, FieldRef } from "./query";
+import { Aggregation, GroupByExpr } from "./query/shared/aggregation";
+import { renderFilterInput } from "./query/filter/input";
+import { buildFlatFieldProxy } from "./query/shared/proxy";
+import type { FieldBase } from "./fields";
 import { Etag } from "./util";
 
 type AliasInfo = {
-    transform: (val: any) => any;
+    field?: FieldRef<any>;
     getDefault: () => any;
     name: string;
 };
@@ -25,7 +28,7 @@ type FieldSelector<TProps extends GenericProperties> = {
 };
 
 export type FieldProxy<T extends GenericProperties> = {
-    [K in keyof T]: FieldRef<Infer<T[K]>, K extends string ? K : never>
+    [K in keyof T]: T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never
 };
 
 export type FetchLinkType = "inner" | "outer" | "any" | "not any" | "all" | "not all" | "exists" | "in" | "matchfirstrowusingcrossapply";
@@ -278,24 +281,11 @@ export class FilterCollector<TProps extends GenericProperties = any> {
     }
 
     private _buildProxy(table: DataverseTable<TProps>): FieldProxy<TProps> {
-        const proxy = {} as FieldProxy<TProps>;
-        for (const [key, prop] of Object.entries(table.fields)) {
-            (proxy as any)[key] = new FieldRef(prop.name, prop);
-        }
-        return proxy;
+        return buildFlatFieldProxy(table) as FieldProxy<TProps>;
     }
 
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this {
-        let str: string
-        if (filter instanceof FilterExpr) {
-            str = filter.toFetchXml()
-        } else if (typeof filter === "function") {
-            const result = filter(this._proxy)
-            str = result instanceof FilterExpr ? result.toFetchXml() : result
-        } else {
-            str = filter
-        }
-        this._filters.push(str);
+        this._filters.push(renderFilterInput(filter, this._proxy, "fetchXml"));
         return this;
     }
 }
@@ -339,11 +329,7 @@ export class FetchXmlAggregateQuery<
     }
 
     private _buildProxy(): FieldProxy<TProps> {
-        const proxy = {} as FieldProxy<TProps>;
-        for (const [key, prop] of Object.entries(this._table.fields)) {
-            (proxy as any)[key] = new FieldRef(prop.name, prop);
-        }
-        return proxy;
+        return buildFlatFieldProxy(this._table) as FieldProxy<TProps>;
     }
 
     private _getEffectiveAttributes(): AttrDef[] {
@@ -351,16 +337,7 @@ export class FetchXmlAggregateQuery<
     }
 
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this {
-        let str: string
-        if (filter instanceof FilterExpr) {
-            str = filter.toFetchXml()
-        } else if (typeof filter === "function") {
-            const result = filter(this._proxy)
-            str = result instanceof FilterExpr ? result.toFetchXml() : result
-        } else {
-            str = filter
-        }
-        this._filters.push(str);
+        this._filters.push(renderFilterInput(filter, this._proxy, "fetchXml"));
         return this;
     }
 
@@ -555,9 +532,11 @@ export class FetchXmlAggregateQuery<
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
             const result: Record<string | symbol, any> = {};
+            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.name] ?? "";
+            const ctx = { table: this._table, client: this._table.client, recordId };
             for (const [alias, info] of aliasInfo) {
                 if (info.name in v) {
-                    result[alias] = info.transform(v[info.name]);
+                    result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
                 } else {
                     result[alias] = info.getDefault();
                 }
@@ -605,7 +584,7 @@ export class FetchXmlAggregateQuery<
         map: Map<string, AliasInfo>,
     ): void {
         for (const attr of builder._getEffectiveAttributes()) {
-            const fields = builder._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any; getDefault?: () => any }>;
+            const fields = builder._table.fields as Record<string, any>;
             const entry = Object.entries(fields).find(
                 ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
             );
@@ -613,13 +592,13 @@ export class FetchXmlAggregateQuery<
                 const fieldDef = entry[1];
                 const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
                 map.set(attr.alias, {
-                    transform: (val: any) => fieldDef.transformValueFromDataverse(val),
+                    field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
                     name: dataverseName,
                 });
             } else {
                 map.set(attr.alias, {
-                    transform: (val: any) => val,
+                    field: undefined,
                     getDefault: () => undefined,
                     name: attr.name,
                 });
@@ -710,7 +689,7 @@ export class FetchXmlAggregateQuery<
         map: Map<string, AliasInfo>,
     ): void {
         for (const attr of (builder as any)._getEffectiveAttributes()) {
-            const fields = (builder as any)._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any; getDefault?: () => any }>;
+            const fields = (builder as any)._table.fields as Record<string, any>;
             const entry = Object.entries(fields).find(
                 ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
             );
@@ -718,13 +697,13 @@ export class FetchXmlAggregateQuery<
                 const fieldDef = entry[1];
                 const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
                 map.set(attr.alias, {
-                    transform: (val: any) => fieldDef.transformValueFromDataverse(val),
+                    field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
                     name: dataverseName,
                 });
             } else {
                 map.set(attr.alias, {
-                    transform: (val: any) => val,
+                    field: undefined,
                     getDefault: () => undefined,
                     name: attr.name,
                 });
@@ -785,11 +764,7 @@ export class EntityQueryBuilder<
     }
 
     private _buildProxy(): FieldProxy<TProps> {
-        const proxy = {} as FieldProxy<TProps>;
-        for (const [key, prop] of Object.entries(this._table.fields)) {
-            (proxy as any)[key] = new FieldRef(prop.name, prop);
-        }
-        return proxy;
+        return buildFlatFieldProxy(this._table) as FieldProxy<TProps>;
     }
 
     public select<R extends Record<string, keyof TProps>>(
@@ -843,16 +818,7 @@ export class EntityQueryBuilder<
     public filter(
         filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr),
     ): this {
-        let str: string
-        if (filter instanceof FilterExpr) {
-            str = filter.toFetchXml()
-        } else if (typeof filter === "function") {
-            const result = filter(this._proxy)
-            str = result instanceof FilterExpr ? result.toFetchXml() : result
-        } else {
-            str = filter
-        }
-        this._filters.push(str);
+        this._filters.push(renderFilterInput(filter, this._proxy, "fetchXml"));
         return this;
     }
 
@@ -1149,9 +1115,11 @@ export class EntityQueryBuilder<
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
             const result: Record<string | symbol, any> = {};
+            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.name] ?? "";
+            const ctx = { table: this._table, client: this._table.client, recordId };
             for (const [alias, info] of aliasInfo) {
                 if (info.name in v) {
-                    result[alias] = info.transform(v[info.name]);
+                    result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
                 } else {
                     result[alias] = info.getDefault();
                 }
@@ -1199,7 +1167,7 @@ export class EntityQueryBuilder<
         map: Map<string, AliasInfo>,
     ): void {
         for (const attr of builder._getEffectiveAttributes()) {
-            const fields = builder._table.fields as Record<string, { fromDataverseName?: string; name: string; transformValueFromDataverse: (val: any) => any; getDefault?: () => any }>;
+            const fields = builder._table.fields as Record<string, any>;
             const entry = Object.entries(fields).find(
                 ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
             );
@@ -1207,13 +1175,13 @@ export class EntityQueryBuilder<
                 const fieldDef = entry[1];
                 const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
                 map.set(attr.alias, {
-                    transform: (val: any) => fieldDef.transformValueFromDataverse(val),
+                    field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
                     name: dataverseName,
                 });
             } else {
                 map.set(attr.alias, {
-                    transform: (val: any) => val,
+                    field: undefined,
                     getDefault: () => undefined,
                     name: attr.name,
                 });
