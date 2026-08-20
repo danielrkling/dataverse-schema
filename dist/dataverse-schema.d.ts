@@ -113,6 +113,8 @@ export declare class BooleanField extends FieldBase<boolean> {
 
 export declare function buildLambdaProxy<P extends GenericProperties>(alias: string, table: DataverseTable<P>): ODataLambdaProxy<P>;
 
+export declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions): ODataSelectAst;
+
 /**
  * Creates a choice/option-set column definition. Maps Dataverse numeric option values
  * to human-readable string labels.
@@ -753,7 +755,7 @@ export declare class DataverseTable<TProperties extends GenericProperties> {
      *   top: 10,
      * });
      */
-    getRecords(queryOptions?: QueryForTable<TProperties>, options?: TableRequestOptions): Promise<Infer<TProperties>[]>;
+    getRecords(queryOptions?: ODataTableQueryOptions, options?: TableRequestOptions): Promise<Infer<TProperties>[]>;
     /**
      * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
      * Each record is transformed like {@link getRecords}. Records within a page are
@@ -768,7 +770,7 @@ export declare class DataverseTable<TProperties extends GenericProperties> {
      *   console.log(account.name);
      * }
      */
-    iterateRecords(queryOptions?: QueryForTable<TProperties>, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>>;
+    iterateRecords(queryOptions?: ODataTableQueryOptions, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>>;
     /**
      * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
      * Each yielded page is transformed like {@link getRecords}. The next page is
@@ -784,7 +786,7 @@ export declare class DataverseTable<TProperties extends GenericProperties> {
      *   for (const account of page) console.log(account.name);
      * }
      */
-    iteratePages(queryOptions?: QueryForTable<TProperties>, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>[]>;
+    iteratePages(queryOptions?: ODataTableQueryOptions, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>[]>;
     /**
      * Retrieves the value of a single property for a record by ID.
      * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
@@ -793,7 +795,7 @@ export declare class DataverseTable<TProperties extends GenericProperties> {
      * const age = await Person.getPropertyValue("age", "some-guid");
      * const address = await Person.getPropertyValue("primaryAddress", "some-guid");
      */
-    getPropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, queryOptions?: QueryForTable<TProperties>): Promise<Infer<TProperties[TKey]>>;
+    getPropertyValue<TKey extends keyof TProperties>(key: TKey, id: DataverseKey, queryOptions?: ODataTableQueryOptions): Promise<Infer<TProperties[TKey]>>;
     /**
      * Updates the value of a single property for a record by ID.
      * For navigation properties, this associates/dissociates related records.
@@ -1109,6 +1111,7 @@ export declare class EntityQueryBuilder<TProps extends GenericProperties, TResul
     top(n: number): this;
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
+    toAst(): FetchXmlSelectAst;
     toXml(): string;
     static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean;
     private _renderLinkEntity;
@@ -1171,6 +1174,10 @@ export declare function fetchOdata<T extends GenericProperties>(table: Dataverse
 
 export declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 
+export declare type FetchXmlAggregateAst = FetchXmlBaseAst & {
+    kind: "xml-aggregate";
+};
+
 export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
     private _linkAlias;
     private _table;
@@ -1198,6 +1205,7 @@ export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TR
     top(n: number): this;
     orderby(fieldSelector: (f: ApplyAliasProxy_2<TResult>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): this;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): this;
+    toAst(): FetchXmlAggregateAst;
     toXml(): string;
     toString(): string;
     protected _applyExecuteOptions(options?: ExecuteOptions): void;
@@ -1215,6 +1223,33 @@ export declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TR
     private _renderLinkEntity;
     private _collectAliasesFromBuilder;
 }
+
+export declare type FetchXmlAttributeAst = {
+    name: string;
+    alias?: string;
+    aggregate?: string;
+    groupby?: boolean;
+    dategrouping?: string;
+    distinct?: boolean;
+    rowaggregate?: string;
+};
+
+declare type FetchXmlBaseAst = {
+    entity: string;
+    attributes: FetchXmlAttributeAst[];
+    filters: Array<FilterNode | string>;
+    orders: FetchXmlOrderAst[];
+    links: FetchXmlLinkAst[];
+    distinct?: boolean;
+    top?: number;
+    datasource?: string;
+    options?: string;
+    lateMaterialize?: boolean;
+    aggregateLimit?: number;
+    useRawOrderBy?: boolean;
+    version?: string;
+    mapping?: string;
+};
 
 export declare interface FetchXmlInitial<TProps extends GenericProperties> {
     select(): FetchXmlSelectQuery<TProps, TProps>;
@@ -1234,6 +1269,7 @@ export declare interface FetchXmlInitial<TProps extends GenericProperties> {
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>;
     toXml(): string;
+    toAst(): FetchXmlSelectAst;
     toString(): string;
     execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>;
     iterate(options?: ExecuteOptions & {
@@ -1243,6 +1279,29 @@ export declare interface FetchXmlInitial<TProps extends GenericProperties> {
         pageSize?: number;
     }): AsyncGenerator<Infer<TProps>[]>;
 }
+
+export declare type FetchXmlLinkAst = {
+    name: string;
+    from?: string;
+    to?: string;
+    linkType: string;
+    alias?: string;
+    intersect?: boolean;
+    attributes: FetchXmlAttributeAst[];
+    filters: Array<FilterNode | string>;
+    orders: FetchXmlOrderAst[];
+    links: FetchXmlLinkAst[];
+};
+
+export declare type FetchXmlOrderAst = {
+    attribute: string;
+    entityname?: string;
+    descending?: boolean;
+};
+
+export declare type FetchXmlSelectAst = FetchXmlBaseAst & {
+    kind: "xml-select";
+};
 
 export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
     select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, {
@@ -1260,6 +1319,7 @@ export declare interface FetchXmlSelectQuery<TProps extends GenericProperties, T
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>;
     toXml(): string;
+    toAst(): FetchXmlSelectAst;
     toString(): string;
     execute(options?: ExecuteOptions): Promise<TResult[]>;
     iterate(options?: ExecuteOptions & {
@@ -1295,7 +1355,7 @@ export declare type FieldOptions<T> = {
     schema?: ValidationSchema<T>;
 };
 
-declare type FieldPath = readonly QueryProperty[];
+export declare type FieldPath = readonly QueryProperty[];
 
 export declare type FieldProxy<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never;
@@ -1948,30 +2008,30 @@ export declare class NumberField extends FieldBase<number> {
 
 declare type NumericRef = FieldRef<number> | FieldRef<number | null>;
 
-declare type ODataAggregateAst = {
+export declare type ODataAggregateAst = {
     kind: "aggregate";
-    filters: FilterNode[];
+    filters?: ODataFilterNode[];
     apply?: ODataApplyAst;
-    orderby: ODataAggregateOrderAst[];
+    orderby?: ODataAggregateOrderAst[];
     top?: number;
 };
 
-declare type ODataAggregateExpressionAst = {
-    field?: FieldPath;
+export declare type ODataAggregateExpressionAst = {
+    field?: ODataPath;
     operation: string;
     alias: string;
 };
 
-declare type ODataAggregateOrderAst = {
+export declare type ODataAggregateOrderAst = {
     field: ODataAlias;
     direction: "asc" | "desc";
 };
 
-declare type ODataAlias = string;
+export declare type ODataAlias = string;
 
-declare type ODataApplyAst = {
+export declare type ODataApplyAst = {
     kind: "groupby";
-    fields: FieldPath[];
+    fields: ODataPath[];
     next?: ODataApplyAst;
 } | {
     kind: "aggregate";
@@ -2010,14 +2070,57 @@ declare type ODataCollectionNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
 
-declare type ODataExpandAst = {
-    navigation: LookupProperty<any> | CollectionProperty<any>;
+export declare type ODataExpandAst = {
+    navigation: ODataPath;
     query?: ODataSelectAst;
 };
 
 declare type ODataFieldProxy<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P> : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P> : T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never;
 };
+
+export declare type ODataFilterNode = {
+    readonly type: "comparison";
+    readonly field: ODataPath;
+    readonly operator: string;
+    readonly value: ODataFilterValue;
+} | {
+    readonly type: "null";
+    readonly field: ODataPath;
+    readonly positive: boolean;
+} | {
+    readonly type: "contains" | "startsWith" | "endsWith";
+    readonly field: ODataPath;
+    readonly value: string;
+} | {
+    readonly type: "compare";
+    readonly field: ODataPath;
+    readonly operator: string;
+    readonly otherField: ODataPath;
+} | {
+    readonly type: "lambda";
+    readonly field: ODataPath;
+    readonly operator: "any" | "all";
+    readonly alias: string;
+    readonly condition: ODataFilterNode;
+} | {
+    readonly type: "fn";
+    readonly field: ODataPath;
+    readonly fnName: string;
+    readonly operator: string;
+    readonly values: readonly ODataFilterValue[];
+} | {
+    readonly type: "raw";
+    readonly value: string;
+} | {
+    readonly type: "and" | "or";
+    readonly conditions: readonly ODataFilterNode[];
+} | {
+    readonly type: "not";
+    readonly condition: ODataFilterNode;
+};
+
+export declare type ODataFilterValue = string | number | boolean | Date | null;
 
 declare type ODataLambdaProxy<P extends GenericProperties> = {
     [K in keyof P]: FieldRef<any>;
@@ -2027,17 +2130,25 @@ declare type ODataLookupNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
 
-declare type ODataOrderAst = {
-    field: FieldPath;
+export declare type ODataOrderAst = {
+    field: ODataPath;
     direction: "asc" | "desc";
 };
 
-declare type ODataSelectAst = {
+export declare type ODataPath = string;
+
+export declare type ODataSelectAst = {
     kind: "select";
-    select: FieldPath[];
-    filters: FilterNode[];
-    orderby: ODataOrderAst[];
-    expands: ODataExpandAst[];
+    select?: ODataPath[];
+    filters?: ODataFilterNode[];
+    orderby?: ODataOrderAst[];
+    expands?: ODataExpandAst[];
+    top?: number;
+};
+
+export declare type ODataTableQueryOptions = {
+    filter?: string;
+    orderby?: Partial<Record<string, "asc" | "desc">> | string;
     top?: number;
 };
 
@@ -2130,13 +2241,7 @@ export declare class PrimaryKeyField extends FieldBase<GUID> {
 
 export declare type Primitive = string | number | boolean | null;
 
-export declare type QueryForTable<T> = {
-    orderby?: Partial<Record<keyof T, "asc" | "desc">> | string;
-    filter?: string;
-    top?: number;
-};
-
-declare type QueryProperty = FieldBase<any> | LookupProperty<any> | CollectionProperty<any>;
+export declare type QueryProperty = FieldBase<any> | LookupProperty<any> | CollectionProperty<any>;
 
 export declare type QueryRequestOptions = RequestOptions & {
     query?: string;
@@ -2193,6 +2298,12 @@ export declare interface SelectQuery<TAll extends GenericProperties, TChosen ext
         pageSize?: number;
     }): AsyncGenerator<TResult[]>;
 }
+
+export declare function serializeFetchXml(ast: FetchXmlSelectAst | FetchXmlAggregateAst): string;
+
+export declare function serializeODataAggregate(ast: ODataAggregateAst): string;
+
+export declare function serializeODataSelect(ast: ODataSelectAst, separator?: "&" | ";"): string;
 
 declare type Simplify<T> = {
     [Key in keyof T]: T[Key];
@@ -2291,6 +2402,10 @@ export declare function toDateOnly(date: Date): string | null;
 export declare function Today(field: FieldRef<any>): FilterExpr;
 
 export declare function Tomorrow(field: FieldRef<any>): FilterExpr;
+
+export declare function toODataFilterNode(node: FilterNode): ODataFilterNode;
+
+export declare function toODataPath(path: FieldPath): ODataPath;
 
 export declare type TransformContext = {
     table: DataverseTable<any>;

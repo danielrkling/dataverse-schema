@@ -26,43 +26,6 @@ export default defineConfig(({ mode }) => {
     };
   }
 
-  if (mode === "tanstack") {
-    return {
-      build: {
-        emptyOutDir: false,
-        lib: {
-          entry: path.resolve(src, "tanstack/index.ts"),
-          formats: ["es"],
-          fileName: () => "tanstack.mjs",
-        },
-        rollupOptions: {
-          external: ["@tanstack/db", "dataverse-schema"],
-        },
-        minify: false,
-        target: "esnext",
-      },
-
-      plugins: [
-        dts({
-          rollupTypes: true,
-          outDir: "dist",
-          entryRoot: src,
-          compilerOptions: {
-            target: "esnext",
-          },
-          beforeWriteFile(filePath, content) {
-            if (path.basename(filePath) === "dataverse-schema.d.ts") {
-              return {
-                filePath: path.resolve("dist", "tanstack.d.ts"),
-                content,
-              };
-            }
-          },
-        }),
-      ],
-    };
-  }
-
   if (mode === "tanstack-db") {
     return {
       build: {
@@ -81,9 +44,11 @@ export default defineConfig(({ mode }) => {
 
       plugins: [
         dts({
-          rollupTypes: true,
+          rollupTypes: false,
+          insertTypesEntry: true,
           outDir: "dist",
           entryRoot: src,
+          tsconfigPath: path.resolve(__dirname, "tsconfig.tanstack-db.json"),
           compilerOptions: {
             target: "esnext",
           },

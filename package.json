@@ -14,13 +14,9 @@
       "import": "./dist/dataverse-schema.mjs",
       "types": "./dist/dataverse-schema.d.ts"
     },
-    "./tanstack": {
-      "import": "./dist/tanstack.mjs",
-      "types": "./dist/tanstack.d.ts"
-    },
     "./tanstack-db": {
       "import": "./dist/tanstack-db.mjs",
-      "types": "./dist/tanstack-db.d.ts"
+      "types": "./dist/tanstack-db/index.d.ts"
     }
   },
   "keywords": [
@@ -65,7 +61,7 @@
     }
   },
   "scripts": {
-    "build": "vite build && vite build --mode tanstack && vite build --mode tanstack-db",
+    "build": "vite build && vite build --mode tanstack-db",
     "build:browser-test": "vite build --mode browser-test",
     "dev": "vite"
   }

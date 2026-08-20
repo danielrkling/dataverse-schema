@@ -1556,15 +1556,1012 @@ function safeParse(schema, input, config$1) {
 	};
 }
 
-function queryString(opts) {
-  const params = new URLSearchParams();
-  if (opts.select) params.set("$select", opts.select);
-  if (opts.top !== void 0) params.set("$top", opts.top.toFixed(0));
-  if (opts.filter) params.set("$filter", opts.filter);
-  if (opts.orderby) params.set("$orderby", opts.orderby);
-  if (opts.expand) params.set("$expand", opts.expand);
-  return params.toString();
+class FieldRef {
+  field;
+  path;
+  _path;
+  constructor(field, path, pathSegments) {
+    if (typeof field === "string") {
+      const name = field;
+      this.field = {
+        name,
+        fromDataverseName: name,
+        toDataverseName: name,
+        transformValueFromDataverse: (value) => value,
+        transformValueToDataverse: (value) => value
+      };
+      this._path = path ?? name;
+      this.path = pathSegments ?? [this.field];
+    } else {
+      this.field = field;
+      this._path = path ?? field.fromDataverseName;
+      this.path = pathSegments ?? [field];
+    }
+  }
+  static fromPath(field, path, pathSegments) {
+    return new FieldRef(field, path, pathSegments);
+  }
+  get dataverseName() {
+    return this._path;
+  }
+  transformFromDataverse(value, ctx) {
+    return this.field.transformValueFromDataverse(value, ctx);
+  }
+  transformToDataverse(value, ctx) {
+    return this.field.transformValueToDataverse(value, ctx);
+  }
+  toString() {
+    return this._path;
+  }
 }
+
+function propertyName(property) {
+  return property.fromDataverseName ?? property.name;
+}
+function fieldPathName(path) {
+  return path.map(propertyName).join("/");
+}
+
+function renderFilterOdata(node, scope) {
+  const fieldName = (path) => `${scope ? `${scope}/` : ""}${fieldPathName(path)}`;
+  switch (node.type) {
+    case "comparison":
+      return `(${fieldName(node.field)} ${node.operator} ${wrapString(node.value)})`;
+    case "null":
+      return `${fieldName(node.field)} ${node.positive ? "eq" : "ne"} null`;
+    case "contains":
+      return `contains(${fieldName(node.field)},${wrapString(node.value)})`;
+    case "startsWith":
+      return `startswith(${fieldName(node.field)},${wrapString(node.value)})`;
+    case "endsWith":
+      return `endswith(${fieldName(node.field)},${wrapString(node.value)})`;
+    case "compare":
+      return `(${fieldName(node.field)} ${node.operator} ${fieldName(node.otherField)})`;
+    case "lambda":
+      return `${fieldPathName(node.field)}/${node.operator}(${node.alias}: ${renderFilterOdata(node.condition, node.alias)})`;
+    case "fn": {
+      const field = wrapString(fieldName(node.field));
+      const vals = node.values.map(wrapString);
+      if (vals.length === 0) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field})`;
+      if (vals.length === 1) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue=${vals[0]})`;
+      if (node.fnName === "Between" || node.fnName === "NotBetween") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+      if (node.fnName === "InFiscalPeriodAndYear" || node.fnName === "InOrAfterFiscalPeriodAndYear" || node.fnName === "InOrBeforeFiscalPeriodAndYear") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue1=${vals[0]},PropertyValue2=${vals[1]})`;
+      return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+    }
+    case "raw":
+      return node.value;
+    case "and":
+      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" and ")})`;
+    case "or":
+      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" or ")})`;
+    case "not":
+      return `not(${renderFilterOdata(node.condition, scope)})`;
+  }
+}
+
+function escapeXml$1(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function renderFilterFetchXml(node) {
+  const fieldName = (path) => fieldPathName(path);
+  switch (node.type) {
+    case "comparison":
+      return `<condition attribute="${escapeXml$1(fieldName(node.field))}" operator="${escapeXml$1(node.operator)}" value="${node.value === null ? "" : escapeXml$1(String(node.value))}" />`;
+    case "null":
+      return `<condition attribute="${escapeXml$1(fieldName(node.field))}" operator="${node.positive ? "null" : "not-null"}" />`;
+    case "contains":
+      return `<condition attribute="${escapeXml$1(fieldName(node.field))}" operator="like" value="%${escapeXml$1(node.value)}%" />`;
+    case "startsWith":
+      return `<condition attribute="${escapeXml$1(fieldName(node.field))}" operator="begins-with" value="${escapeXml$1(node.value)}" />`;
+    case "endsWith":
+      return `<condition attribute="${escapeXml$1(fieldName(node.field))}" operator="ends-with" value="${escapeXml$1(node.value)}" />`;
+    case "compare":
+      return `<condition attribute="${escapeXml$1(fieldName(node.field))}" operator="${escapeXml$1(node.operator)}" valueof="${escapeXml$1(fieldName(node.otherField))}" />`;
+    case "lambda":
+      return `<condition entityname="${escapeXml$1(fieldName(node.field))}" operator="${escapeXml$1(node.operator)}" value="${escapeXml$1(`${node.alias}: ${renderFilterFetchXml(node.condition)}`)}" />`;
+    case "fn": {
+      const attr = escapeXml$1(fieldName(node.field));
+      const op = escapeXml$1(node.operator);
+      if (node.values.length === 0) return `<condition attribute="${attr}" operator="${op}" />`;
+      if (node.values.length === 1) return `<condition attribute="${attr}" operator="${op}" value="${escapeXml$1(String(node.values[0]))}" />`;
+      return `<condition attribute="${attr}" operator="${op}">${node.values.map((value) => `<value>${escapeXml$1(String(value))}</value>`).join("")}</condition>`;
+    }
+    case "raw":
+      return node.value;
+    case "and":
+      return node.conditions.length === 0 ? "" : `<filter type="and">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
+    case "or":
+      return node.conditions.length === 0 ? "" : `<filter type="or">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
+    case "not":
+      return `<filter type="and"><filter type="or">${renderFilterFetchXml(node.condition)}</filter></filter>`;
+  }
+}
+
+function pathOf(field) {
+  return field.path;
+}
+class FilterExpr {
+  constructor(node) {
+    this.node = node;
+  }
+  toString() {
+    return this.toOdata();
+  }
+  toOdata() {
+    return renderFilterOdata(this.node);
+  }
+  toFetchXml() {
+    return renderFilterFetchXml(this.node);
+  }
+  getNode() {
+    return this.node;
+  }
+}
+function fn(field, fnName, operator, values) {
+  return new FilterExpr({ type: "fn", field: pathOf(field), fnName, operator, values });
+}
+function eq(field, value) {
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) });
+  }
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value });
+}
+function ne(field, value) {
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ne", otherField: pathOf(value) });
+  }
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ne", value });
+}
+function gt(field, value) {
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) });
+  }
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value });
+}
+function ge(field, value) {
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ge", otherField: pathOf(value) });
+  }
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ge", value });
+}
+function lt(field, value) {
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) });
+  }
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value });
+}
+function le(field, value) {
+  if (value instanceof FieldRef) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "le", otherField: pathOf(value) });
+  }
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "le", value });
+}
+function isNull(field) {
+  return new FilterExpr({ type: "null", field: pathOf(field), positive: true });
+}
+function isNotNull(field) {
+  return new FilterExpr({ type: "null", field: pathOf(field), positive: false });
+}
+function contains(field, value) {
+  return new FilterExpr({ type: "contains", field: pathOf(field), value });
+}
+function startsWith(field, value) {
+  return new FilterExpr({ type: "startsWith", field: pathOf(field), value });
+}
+function endsWith(field, value) {
+  return new FilterExpr({ type: "endsWith", field: pathOf(field), value });
+}
+function and(...conditions) {
+  const valid = conditions.filter((c) => c != null && c !== "");
+  const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
+  return new FilterExpr({ type: "and", conditions: exprs.map((expr) => expr.getNode()) });
+}
+function or(...conditions) {
+  const valid = conditions.filter((c) => c != null && c !== "");
+  const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
+  return new FilterExpr({ type: "or", conditions: exprs.map((expr) => expr.getNode()) });
+}
+function not(condition) {
+  const c = typeof condition === "string" ? new FilterExpr({ type: "raw", value: condition }) : condition;
+  return new FilterExpr({ type: "not", condition: c.getNode() });
+}
+function isActive() {
+  return eq(FieldRef.fromPath(new NumberField("statecode"), "statecode"), 0);
+}
+function isInactive() {
+  return eq(FieldRef.fromPath(new NumberField("statecode"), "statecode"), 1);
+}
+function Above(field, value) {
+  return fn(field, "Above", "above", [value]);
+}
+function AboveOrEqual(field, value) {
+  return fn(field, "AboveOrEqual", "above-or-equal", [value]);
+}
+function Between(field, value1, value2) {
+  return fn(field, "Between", "between", [value1, value2]);
+}
+function ContainsValues(field, values) {
+  return fn(field, "ContainsValues", "in", values);
+}
+function DoesNotContainValues(field, values) {
+  return fn(field, "DoesNotContainValues", "not-in", values);
+}
+function EqualBusinessId(field) {
+  return fn(field, "EqualBusinessId", "eq-businessid", []);
+}
+function EqualUserId(field) {
+  return fn(field, "EqualUserId", "eq-userid", []);
+}
+function EqualUserLanguage(field) {
+  return fn(field, "EqualUserLanguage", "eq-userlanguage", []);
+}
+function EqualUserOrUserHierarchy(field) {
+  return fn(field, "EqualUserOrUserHierarchy", "eq-useroruserhierarchy", []);
+}
+function EqualUserOrUserHierarchyAndTeams(field) {
+  return fn(field, "EqualUserOrUserHierarchyAndTeams", "eq-useroruserhierarchyandteams", []);
+}
+function EqualUserOrUserTeams(field) {
+  return fn(field, "EqualUserOrUserTeams", "eq-useroruserteams", []);
+}
+function In(field, values) {
+  return fn(field, "In", "in", values);
+}
+function InFiscalPeriod(field, value) {
+  return fn(field, "InFiscalPeriod", "in-fiscal-period", [value]);
+}
+function InFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
+  return fn(field, "InFiscalPeriodAndYear", "in-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
+}
+function InFiscalYear(field, value) {
+  return fn(field, "InFiscalYear", "in-fiscal-year", [value]);
+}
+function InOrAfterFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
+  return fn(field, "InOrAfterFiscalPeriodAndYear", "in-or-after-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
+}
+function InOrBeforeFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
+  return fn(field, "InOrBeforeFiscalPeriodAndYear", "in-or-before-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
+}
+function Last7Days(field) {
+  return fn(field, "Last7Days", "last-seven-days", []);
+}
+function LastFiscalPeriod(field) {
+  return fn(field, "LastFiscalPeriod", "last-fiscal-period", []);
+}
+function LastFiscalYear(field) {
+  return fn(field, "LastFiscalYear", "last-fiscal-year", []);
+}
+function LastMonth(field) {
+  return fn(field, "LastMonth", "last-month", []);
+}
+function LastWeek(field) {
+  return fn(field, "LastWeek", "last-week", []);
+}
+function LastXDays(field, value) {
+  return fn(field, "LastXDays", "last-x-days", [value]);
+}
+function LastXFiscalPeriods(field, value) {
+  return fn(field, "LastXFiscalPeriods", "last-x-fiscal-periods", [value]);
+}
+function LastXFiscalYears(field, value) {
+  return fn(field, "LastXFiscalYears", "last-x-fiscal-years", [value]);
+}
+function LastXHours(field, value) {
+  return fn(field, "LastXHours", "last-x-hours", [value]);
+}
+function LastXMonths(field, value) {
+  return fn(field, "LastXMonths", "last-x-months", [value]);
+}
+function LastXWeeks(field, value) {
+  return fn(field, "LastXWeeks", "last-x-weeks", [value]);
+}
+function LastXYears(field, value) {
+  return fn(field, "LastXYears", "last-x-years", [value]);
+}
+function LastYear(field) {
+  return fn(field, "LastYear", "last-year", []);
+}
+function Next7Days(field) {
+  return fn(field, "Next7Days", "next-seven-days", []);
+}
+function NextFiscalPeriod(field) {
+  return fn(field, "NextFiscalPeriod", "next-fiscal-period", []);
+}
+function NextFiscalYear(field) {
+  return fn(field, "NextFiscalYear", "next-fiscal-year", []);
+}
+function NextMonth(field) {
+  return fn(field, "NextMonth", "next-month", []);
+}
+function NextWeek(field) {
+  return fn(field, "NextWeek", "next-week", []);
+}
+function NextXDays(field, value) {
+  return fn(field, "NextXDays", "next-x-days", [value]);
+}
+function NextXFiscalPeriods(field, value) {
+  return fn(field, "NextXFiscalPeriods", "next-x-fiscal-periods", [value]);
+}
+function NextXFiscalYears(field, value) {
+  return fn(field, "NextXFiscalYears", "next-x-fiscal-years", [value]);
+}
+function NextXHours(field, value) {
+  return fn(field, "NextXHours", "next-x-hours", [value]);
+}
+function NextXMonths(field, value) {
+  return fn(field, "NextXMonths", "next-x-months", [value]);
+}
+function NextXWeeks(field, value) {
+  return fn(field, "NextXWeeks", "next-x-weeks", [value]);
+}
+function NextXYears(field, value) {
+  return fn(field, "NextXYears", "next-x-years", [value]);
+}
+function NextYear(field) {
+  return fn(field, "NextYear", "next-year", []);
+}
+function NotBetween(field, value1, value2) {
+  return fn(field, "NotBetween", "not-between", [value1, value2]);
+}
+function NotEqualBusinessId(field) {
+  return fn(field, "NotEqualBusinessId", "neq-businessid", []);
+}
+function NotEqualUserId(field) {
+  return fn(field, "NotEqualUserId", "neq-userid", []);
+}
+function NotIn(field, values) {
+  return fn(field, "NotIn", "not-in", values);
+}
+function NotUnder(field, value) {
+  return fn(field, "NotUnder", "not-under", [value]);
+}
+function OlderThanXDays(field, value) {
+  return fn(field, "OlderThanXDays", "olderthan-x-days", [value]);
+}
+function OlderThanXHours(field, value) {
+  return fn(field, "OlderThanXHours", "olderthan-x-hours", [value]);
+}
+function OlderThanXMinutes(field, value) {
+  return fn(field, "OlderThanXMinutes", "olderthan-x-minutes", [value]);
+}
+function OlderThanXMonths(field, value) {
+  return fn(field, "OlderThanXMonths", "olderthan-x-months", [value]);
+}
+function OlderThanXWeeks(field, value) {
+  return fn(field, "OlderThanXWeeks", "olderthan-x-weeks", [value]);
+}
+function OlderThanXYears(field, value) {
+  return fn(field, "OlderThanXYears", "olderthan-x-years", [value]);
+}
+function On(field, value) {
+  return fn(field, "On", "on", [value]);
+}
+function OnOrAfter(field, value) {
+  return fn(field, "OnOrAfter", "on-or-after", [value]);
+}
+function OnOrBefore(field, value) {
+  return fn(field, "OnOrBefore", "on-or-before", [value]);
+}
+function ThisFiscalPeriod(field) {
+  return fn(field, "ThisFiscalPeriod", "this-fiscal-period", []);
+}
+function ThisFiscalYear(field) {
+  return fn(field, "ThisFiscalYear", "this-fiscal-year", []);
+}
+function ThisMonth(field) {
+  return fn(field, "ThisMonth", "this-month", []);
+}
+function ThisWeek(field) {
+  return fn(field, "ThisWeek", "this-week", []);
+}
+function ThisYear(field) {
+  return fn(field, "ThisYear", "this-year", []);
+}
+function Today(field) {
+  return fn(field, "Today", "today", []);
+}
+function Tomorrow(field) {
+  return fn(field, "Tomorrow", "tomorrow", []);
+}
+function Under(field, value) {
+  return fn(field, "Under", "under", [value]);
+}
+function UnderOrEqual(field, value) {
+  return fn(field, "UnderOrEqual", "under-or-equal", [value]);
+}
+function Yesterday(field) {
+  return fn(field, "Yesterday", "yesterday", []);
+}
+
+function fieldName(field) {
+  return typeof field === "string" ? field : field.toString();
+}
+class GroupByExpr {
+  field;
+  fieldRef;
+  path;
+  constructor(field, fieldRef) {
+    this.field = field;
+    this.fieldRef = fieldRef;
+    this.path = fieldRef?.path;
+  }
+}
+class Aggregation {
+  field;
+  fieldRef;
+  path;
+  operation;
+  constructor(operation, field, fieldRef) {
+    this.operation = operation;
+    this.field = field;
+    this.fieldRef = fieldRef;
+    this.path = fieldRef?.path;
+  }
+}
+function sum(field) {
+  return new Aggregation("sum", fieldName(field), field);
+}
+function min(field) {
+  return new Aggregation("min", fieldName(field), field);
+}
+function max(field) {
+  return new Aggregation("max", fieldName(field), field);
+}
+function average(field) {
+  return new Aggregation("average", fieldName(field), field);
+}
+function count(field) {
+  return new Aggregation("count", field ? fieldName(field) : void 0, field);
+}
+function groupby(field) {
+  return new GroupByExpr(fieldName(field), field);
+}
+
+function filterInputNode(filter, proxy) {
+  const value = typeof filter === "function" ? filter(proxy) : filter;
+  return typeof value === "string" ? { type: "raw", value } : value.getNode();
+}
+function renderFilterInput(filter, proxy, dialect) {
+  const value = typeof filter === "function" ? filter(proxy) : filter;
+  if (typeof value === "string") return value;
+  return dialect === "odata" ? value.toOdata() : value.toFetchXml();
+}
+
+function toODataPath(path) {
+  return fieldPathName(path);
+}
+function toODataFilterNode(node) {
+  switch (node.type) {
+    case "comparison":
+      return { ...node, field: toODataPath(node.field) };
+    case "null":
+      return { ...node, field: toODataPath(node.field) };
+    case "contains":
+    case "startsWith":
+    case "endsWith":
+      return { ...node, field: toODataPath(node.field) };
+    case "compare":
+      return { ...node, field: toODataPath(node.field), otherField: toODataPath(node.otherField) };
+    case "lambda":
+      return { ...node, field: toODataPath(node.field), condition: toODataFilterNode(node.condition) };
+    case "fn":
+      return { ...node, field: toODataPath(node.field) };
+    case "raw":
+      return node;
+    case "and":
+    case "or":
+      return { ...node, conditions: node.conditions.map(toODataFilterNode) };
+    case "not":
+      return { ...node, condition: toODataFilterNode(node.condition) };
+  }
+}
+function renderFilter(node, scope) {
+  const field = (path) => `${scope ? `${scope}/` : ""}${path}`;
+  switch (node.type) {
+    case "comparison":
+      return `(${field(node.field)} ${node.operator} ${wrapString(node.value)})`;
+    case "null":
+      return `${field(node.field)} ${node.positive ? "eq" : "ne"} null`;
+    case "contains":
+      return `contains(${field(node.field)},${wrapString(node.value)})`;
+    case "startsWith":
+      return `startswith(${field(node.field)},${wrapString(node.value)})`;
+    case "endsWith":
+      return `endswith(${field(node.field)},${wrapString(node.value)})`;
+    case "compare":
+      return `(${field(node.field)} ${node.operator} ${field(node.otherField)})`;
+    case "lambda":
+      return `${node.field}/${node.operator}(${node.alias}: ${renderFilter(node.condition, node.alias)})`;
+    case "fn": {
+      const propertyName = wrapString(field(node.field));
+      const values = node.values.map(wrapString);
+      if (values.length === 0) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${propertyName})`;
+      if (values.length === 1) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${propertyName},PropertyValue=${values[0]})`;
+      if (node.fnName === "Between" || node.fnName === "NotBetween") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${propertyName},PropertyValues=[${values.join(",")}])`;
+      if (["InFiscalPeriodAndYear", "InOrAfterFiscalPeriodAndYear", "InOrBeforeFiscalPeriodAndYear"].includes(node.fnName)) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${propertyName},PropertyValue1=${values[0]},PropertyValue2=${values[1]})`;
+      return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${propertyName},PropertyValues=[${values.join(",")}])`;
+    }
+    case "raw":
+      return node.value;
+    case "and":
+      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilter(child, scope)).join(" and ")})`;
+    case "or":
+      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilter(child, scope)).join(" or ")})`;
+    case "not":
+      return `not(${renderFilter(node.condition, scope)})`;
+  }
+}
+function renderFilters(filters) {
+  if (filters.length === 0) return void 0;
+  return `$filter=${filters.map((filter) => renderFilter(filter)).join(" and ")}`;
+}
+function renderOrderby(orderby) {
+  if (orderby.length === 0) return void 0;
+  return `$orderby=${orderby.map((order) => `${order.field} ${order.direction}`).join(",")}`;
+}
+function renderAggregateOrderby(orderby) {
+  if (orderby.length === 0) return void 0;
+  return `$orderby=${orderby.map((order) => `${order.field} ${order.direction}`).join(",")}`;
+}
+function serializeApply(ast) {
+  if (ast.kind === "aggregate") {
+    return `aggregate(${ast.expressions.map((expression) => expression.field ? `${expression.field} with ${expression.operation} as ${expression.alias}` : `$count as ${expression.alias}`).join(",")})`;
+  }
+  return `groupby((${ast.fields.join(",")})${ast.next ? `,${serializeApply(ast.next)}` : ""})`;
+}
+function renderExpands(expands) {
+  if (expands.length === 0) return void 0;
+  return `$expand=${expands.map((expand) => expand.query ? `${expand.navigation}(${serializeODataSelect(expand.query, ";")})` : expand.navigation).join(",")}`;
+}
+function serializeODataSelect(ast, separator = "&") {
+  return [
+    ast.select && ast.select.length > 0 ? `$select=${ast.select.join(",")}` : void 0,
+    renderFilters(ast.filters ?? []),
+    renderOrderby(ast.orderby ?? []),
+    renderExpands(ast.expands ?? []),
+    ast.top === void 0 ? void 0 : `$top=${ast.top}`
+  ].filter((part) => part !== void 0).join(separator);
+}
+function serializeODataAggregate(ast) {
+  return [
+    renderFilters(ast.filters ?? []),
+    ast.apply ? `$apply=${serializeApply(ast.apply)}` : void 0,
+    renderAggregateOrderby(ast.orderby ?? []),
+    ast.top === void 0 ? void 0 : `$top=${ast.top}`
+  ].filter((part) => part !== void 0).join("&");
+}
+
+const proxyTableMap = /* @__PURE__ */ new WeakMap();
+const proxyPathMap = /* @__PURE__ */ new WeakMap();
+class ODataApplyQuery {
+  _table;
+  _filters = [];
+  _apply;
+  _orderby = [];
+  _top;
+  _aliasProxy = {};
+  _aliasFields = {};
+  constructor(table, apply, aliasProxy, initialFilters, aliasFields) {
+    this._table = table;
+    this._apply = apply;
+    this._aliasProxy = aliasProxy;
+    this._aliasFields = aliasFields ?? {};
+    if (initialFilters) this._filters = [...initialFilters];
+  }
+  filter(filter) {
+    this._filters.push(filterInputNode(filter, _buildProxyForTable(this._table)));
+    return this;
+  }
+  orderby(nameOrSelector, direction = "asc") {
+    if (typeof nameOrSelector === "function") {
+      const result = nameOrSelector(this._aliasProxy);
+      this._orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
+    } else {
+      this._orderby.push({ name: nameOrSelector, dir: direction });
+    }
+    return this;
+  }
+  top(n) {
+    this._top = n;
+    return this;
+  }
+  _build() {
+    return serializeODataAggregate(this.toAst());
+  }
+  toAst() {
+    return {
+      kind: "aggregate",
+      filters: this._filters.map(toODataFilterNode),
+      apply: this._apply,
+      orderby: this._orderby.map((order) => ({ field: order.name, direction: order.dir })),
+      top: this._top
+    };
+  }
+  toString() {
+    return this._build();
+  }
+  _transformRow(v) {
+    const r = { ...v };
+    for (const [alias, field] of Object.entries(this._aliasFields)) {
+      if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
+    }
+    r[Etag] = v["@odata.etag"];
+    delete r["@odata.etag"];
+    return r;
+  }
+  async execute() {
+    const results = [];
+    for await (const page of this.iteratePages()) {
+      results.push(...page);
+    }
+    return results;
+  }
+  async *iterate(options) {
+    for await (const page of this.iteratePages(options)) {
+      yield* page;
+    }
+  }
+  async *iteratePages(options) {
+    const qs = this.toString();
+    const raw = this._table.client.iteratePages(this._table.entitySetName, { ...options, query: qs });
+    for await (const page of raw) {
+      yield page.map((v) => this._transformRow(v));
+    }
+  }
+}
+class ODataQuery {
+  #table;
+  #fields = [];
+  #selectedKeys = [];
+  #filters = [];
+  #expands = [];
+  #expandMeta = [];
+  #orderby = [];
+  #top;
+  #proxy;
+  #subQueryMode;
+  constructor(table, subQueryMode) {
+    this.#table = table;
+    this.#proxy = _buildProxyForTable(table);
+    this.#subQueryMode = subQueryMode;
+  }
+  get _table() {
+    return this.#table;
+  }
+  get _proxy() {
+    return this.#proxy;
+  }
+  get _expandMeta() {
+    return this.#expandMeta;
+  }
+  select(...keys) {
+    if (keys.length === 0) {
+      this.#fields = [];
+      this.#selectedKeys = [];
+      for (const [key, prop] of Object.entries(this.#table.fields)) {
+        if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
+          this.#fields.push([prop]);
+          this.#selectedKeys.push(key);
+        }
+      }
+    } else {
+      this.#fields = keys.map((k) => this.#proxy[k].path);
+      this.#selectedKeys = keys;
+    }
+    return this;
+  }
+  expand(key, sub) {
+    const prop = this.#table.fields[key];
+    const isCollection = prop.type === "collection";
+    if (this.#subQueryMode === "collection" && isCollection) {
+      throw new Error("expand() within a collection expand only supports lookup navigation properties");
+    }
+    const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
+    const result = sub?.(child);
+    const q = result ?? child;
+    this.#expands.push({ navigation: prop, key, query: q.toAst() });
+    const childSelectedKeys = q._getSelectedKeys();
+    const childExpandMeta = q._expandMeta;
+    const subQueryProvided = !!sub;
+    this.#expandMeta.push({
+      key,
+      dvName: prop.name,
+      isCollection,
+      selectedKeys: subQueryProvided ? childSelectedKeys.length > 0 ? childSelectedKeys : null : null,
+      subExpands: subQueryProvided && childExpandMeta.length > 0 ? childExpandMeta : null
+    });
+    return this;
+  }
+  filter(filter) {
+    this.#filters.push(filterInputNode(filter, this.#proxy));
+    return this;
+  }
+  orderby(nameOrSelector, direction = "asc") {
+    if (this.#subQueryMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
+    if (typeof nameOrSelector === "function") {
+      const result = nameOrSelector(this.#proxy);
+      this.#orderby.push({
+        field: typeof result === "string" ? pathForName(this.#table, result) : result.path,
+        direction
+      });
+    } else {
+      this.#orderby.push({ field: pathForName(this.#table, nameOrSelector), direction });
+    }
+    return this;
+  }
+  top(n) {
+    if (this.#subQueryMode === "lookup") throw new Error("top() is not supported in lookup expands");
+    this.#top = n;
+    return this;
+  }
+  apply(expr) {
+    const result = expr(this.#proxy);
+    const groupByFields = [];
+    const aggregateExpressions = [];
+    const aliasProxy = {};
+    const aliasFields = {};
+    for (const [alias, value] of Object.entries(result)) {
+      aliasProxy[alias] = alias;
+      if (value instanceof GroupByExpr) {
+        if (value.path) groupByFields.push(toODataPath(value.path));
+        aliasFields[alias] = value.fieldRef;
+      } else if (value instanceof Aggregation) {
+        aggregateExpressions.push({ field: value.path ? toODataPath(value.path) : void 0, operation: value.operation, alias });
+        aliasFields[alias] = value.fieldRef;
+      }
+    }
+    const aggregate = aggregateExpressions.length > 0 ? { kind: "aggregate", expressions: aggregateExpressions } : void 0;
+    const apply = groupByFields.length > 0 ? { kind: "groupby", fields: groupByFields, next: aggregate } : aggregate;
+    return new ODataApplyQuery(
+      this.#table,
+      apply,
+      aliasProxy,
+      this.#filters.length > 0 ? this.#filters : void 0,
+      aliasFields
+    );
+  }
+  _buildForExpand() {
+    return serializeODataSelect(this.toAst(), ";");
+  }
+  toAst() {
+    return {
+      kind: "select",
+      select: this.#fields.map(toODataPath),
+      filters: this.#filters.map(toODataFilterNode),
+      orderby: this.#orderby.map((order) => ({ field: toODataPath(order.field), direction: order.direction })),
+      expands: this.#expands.map((expand) => ({ navigation: expand.navigation.name, query: expand.query })),
+      top: this.#top
+    };
+  }
+  toString() {
+    return serializeODataSelect(this.toAst());
+  }
+  _getSelectedKeys() {
+    return this.#selectedKeys;
+  }
+  _partialTransform(value) {
+    const result = {};
+    const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.name];
+    const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" };
+    for (const key of this.#selectedKeys) {
+      const prop = this.#table.fields[key];
+      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(value[prop.fromDataverseName], ctx);
+    }
+    for (const expand of this.#expandMeta) {
+      if (value[expand.dvName] !== void 0) {
+        result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
+      }
+    }
+    result[Etag] = value["@odata.etag"];
+    return result;
+  }
+  _transformRow(value) {
+    if (this.#selectedKeys.length > 0) {
+      return this._partialTransform(value);
+    }
+    if (this.#expandMeta.some((e) => e.selectedKeys)) {
+      return this._partialTransform(value);
+    }
+    return this.#table.transformValueFromDataverse(value);
+  }
+  async execute() {
+    const results = [];
+    for await (const page of this.iteratePages()) {
+      results.push(...page);
+    }
+    return results;
+  }
+  async *iterate(options) {
+    const qs = this.toString();
+    if (!qs) {
+      yield* this.#table.iterateRecords(void 0, options);
+      return;
+    }
+    for await (const page of this.iteratePages(options)) {
+      yield* page;
+    }
+  }
+  async *iteratePages(options) {
+    const qs = this.toString();
+    if (!qs) {
+      yield* this.#table.iteratePages(void 0, options);
+      return;
+    }
+    for await (const page of this.#table.client.iteratePages(
+      this.#table.entitySetName,
+      { ...options, query: qs }
+    )) {
+      yield page.map((v) => this._transformRow(v));
+    }
+  }
+}
+class InitialQueryImpl {
+  #table;
+  constructor(table) {
+    this.#table = table;
+  }
+  select(...keys) {
+    const q = new ODataQuery(this.#table);
+    if (keys.length === 0) {
+      q.select();
+    } else {
+      q.select(...keys);
+    }
+    return q;
+  }
+  apply(expr) {
+    return new ODataQuery(this.#table).apply(expr);
+  }
+}
+function pathForName(table, path) {
+  const segments = [];
+  let current = table;
+  for (const name of path.split("/")) {
+    const entry = Object.values(current.fields).find((field) => (field.fromDataverseName ?? field.name) === name);
+    if (!entry) throw new Error(`Unknown query field: ${path}`);
+    segments.push(entry);
+    if (entry.kind === "navigation") current = entry.table;
+  }
+  return segments;
+}
+function _processExpand(raw, expand, table) {
+  if (raw === null || raw === void 0) return null;
+  const navProp = table.fields[expand.key];
+  const relatedTable = navProp.table;
+  if (expand.isCollection) {
+    const items = Array.from(raw ?? []);
+    if (expand.selectedKeys) {
+      return items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands));
+    } else {
+      return navProp.transformValueFromDataverse(raw);
+    }
+  } else {
+    if (expand.selectedKeys) {
+      return _partialTransformItem(relatedTable, expand.selectedKeys, raw, expand.subExpands);
+    } else {
+      return navProp.transformValueFromDataverse(raw);
+    }
+  }
+}
+function _partialTransformItem(table, selectedKeys, raw, subExpands) {
+  const result = {};
+  const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.name];
+  const ctx = { table, client: table.client, recordId: recordId ?? "" };
+  for (const key of selectedKeys) {
+    const prop = table.fields[key];
+    if (prop) {
+      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(raw[prop.fromDataverseName], ctx);
+    }
+  }
+  if (subExpands) {
+    for (const expand of subExpands) {
+      if (raw[expand.dvName] !== void 0) {
+        result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
+      }
+    }
+  }
+  return result;
+}
+function _buildProxyForTable(table, prefix, prefixPath = []) {
+  const proxy = {};
+  const fields = table.fields;
+  for (const [key, prop] of Object.entries(fields)) {
+    const dataverseName = prop.fromDataverseName ?? prop.name;
+    const isCollection = prop.kind === "navigation" && prop.type === "collection";
+    const isLookup = prop.kind === "navigation" && prop.type === "lookup";
+    if (isCollection || isLookup) {
+      const navProp = prop;
+      const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName;
+      let cached;
+      Object.defineProperty(proxy, key, {
+        get: () => {
+          if (!cached) {
+            const sub = _buildProxyForTable(navProp.table, currentPrefix, [...prefixPath, navProp]);
+            sub.toString = () => currentPrefix;
+            Object.defineProperty(sub, "path", { value: [...prefixPath, navProp], enumerable: false });
+            if (isCollection) proxyTableMap.set(sub, navProp.table);
+            proxyPathMap.set(sub, [...prefixPath, navProp]);
+            cached = sub;
+          }
+          return cached;
+        },
+        enumerable: true,
+        configurable: true
+      });
+    } else {
+      proxy[key] = FieldRef.fromPath(prop, prefix ? `${prefix}/${dataverseName}` : dataverseName, [...prefixPath, prop]);
+    }
+  }
+  return proxy;
+}
+function buildLambdaProxy(alias, table) {
+  const fields = table.fields;
+  const proxy = {};
+  for (const [key, prop] of Object.entries(fields)) {
+    proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.name}`);
+  }
+  return proxy;
+}
+function any(proxy, condition) {
+  const alias = "x";
+  const table = proxyTableMap.get(proxy);
+  if (!table) throw new Error("any() requires a collection navigation proxy");
+  const result = condition(buildLambdaProxy(alias, table));
+  return new FilterExpr({
+    type: "lambda",
+    field: proxyPathMap.get(proxy) ?? [],
+    operator: "any",
+    alias,
+    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
+  });
+}
+function all(proxy, condition) {
+  const alias = "x";
+  const table = proxyTableMap.get(proxy);
+  if (!table) throw new Error("all() requires a collection navigation proxy");
+  const result = condition(buildLambdaProxy(alias, table));
+  return new FilterExpr({
+    type: "lambda",
+    field: proxyPathMap.get(proxy) ?? [],
+    operator: "all",
+    alias,
+    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
+  });
+}
+function fetchOdata(table) {
+  return new InitialQueryImpl(table);
+}
+function expandAll(query, table, depth) {
+  if (depth > 3) return;
+  for (const [key, prop] of Object.entries(table.fields)) {
+    if (prop.kind !== "navigation" || prop.type === "lookupId" || prop.type === "collectionIds") continue;
+    query.expand(key, (sub) => {
+      sub.select();
+      expandAll(sub, prop.table, depth + 1);
+      return sub;
+    });
+  }
+}
+function buildTableQueryAst(table, options) {
+  const query = new ODataQuery(table);
+  query.select();
+  expandAll(query, table, 0);
+  if (options?.filter) query.filter(options.filter);
+  if (options?.top !== void 0) query.top(options.top);
+  if (typeof options?.orderby === "string") {
+    for (const value of options.orderby.split(",")) {
+      const [field, direction = "asc"] = value.trim().split(/\s+/);
+      if (field) query.orderby(field, direction);
+    }
+  } else {
+    for (const [field, direction] of Object.entries(options?.orderby ?? {})) {
+      const property = table.fields[field]?.fromDataverseName ?? table.fields[field]?.name ?? field;
+      query.orderby(property, direction);
+    }
+  }
+  return query.toAst();
+}
+
 class DataverseTable {
   client;
   fields;
@@ -1625,7 +2622,7 @@ class DataverseTable {
   async getRecord(id, options) {
     return this.client.getRecord(this.entitySetName, id, {
       ...options,
-      query: buildQuery(this)
+      query: tableQuery(this)
     }).then((v2) => this.transformValueFromDataverse(v2));
   }
   getAlternateKeys(value) {
@@ -1646,7 +2643,7 @@ class DataverseTable {
   async getRecords(queryOptions, options) {
     return this.client.getRecords(this.entitySetName, {
       ...options,
-      query: buildQuery(this, queryOptions)
+      query: tableQuery(this, queryOptions)
     }).then((values) => values.map((v2) => this.transformValueFromDataverse(v2)));
   }
   /**
@@ -1668,7 +2665,7 @@ class DataverseTable {
       this.entitySetName,
       {
         ...options,
-        query: buildQuery(this, queryOptions)
+        query: tableQuery(this, queryOptions)
       }
     )) {
       yield this.transformValueFromDataverse(record);
@@ -1694,7 +2691,7 @@ class DataverseTable {
       this.entitySetName,
       {
         ...options,
-        query: buildQuery(this, queryOptions)
+        query: tableQuery(this, queryOptions)
       }
     )) {
       yield page.map((v2) => this.transformValueFromDataverse(v2));
@@ -1718,8 +2715,7 @@ class DataverseTable {
         this.entitySetName,
         id,
         prop.name,
-        { query: buildQuery(prop.table, queryOptions) }
-        // Note: buildQuery needs to handle related table schema
+        { query: tableQuery(prop.table, queryOptions) }
       ).then(
         (v2) => prop.transformValueFromDataverse(v2)
       );
@@ -1729,7 +2725,7 @@ class DataverseTable {
         this.entitySetName,
         id,
         prop.name,
-        { query: buildQuery(prop.table, queryOptions) }
+        { query: tableQuery(prop.table, queryOptions) }
       ).then(
         (v2) => prop.transformValueFromDataverse(v2)
       );
@@ -1816,7 +2812,7 @@ class DataverseTable {
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
-      { query: queryString({ select: pkName }) }
+      { query: selectQuery(pkName) }
     );
     const guid = record?.[pkName];
     const ctx = { table: this, client: this.client, recordId: guid };
@@ -1872,13 +2868,13 @@ class DataverseTable {
         this.entitySetName,
         id,
         transformed,
-        { query: queryString({ select: pkName }), etag }
+        { query: selectQuery(pkName), etag }
       );
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        { query: queryString({ select: pkName }) }
+        { query: selectQuery(pkName) }
       );
       id = record[pkName];
       ctx.recordId = id;
@@ -2125,32 +3121,13 @@ class DataverseTable {
   /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
   T;
 }
-function buildQuery(table, q) {
-  return queryString({
-    top: q?.top,
-    filter: q?.filter,
-    orderby: q?.orderby ? Object.entries(q?.orderby ?? {}).map(([key, value]) => `${table.fields[key].name} ${value}`).join(",") : void 0,
-    select: buildSelect(table),
-    expand: buildExpand(table)
+function tableQuery(table, options) {
+  return serializeODataSelect(buildTableQueryAst(table, options));
+}
+function selectQuery(field) {
+  return serializeODataSelect({
+    select: [field]
   });
-}
-function buildSelect(table) {
-  return Object.values(table.fields).filter((v2) => v2.kind === "value" || v2.type === "lookupId" || v2.type === "file" || v2.type === "image").map((v2) => v2.fromDataverseName).join(",");
-}
-function buildExpand(table, depth = 0) {
-  if (depth > 3) return "";
-  return Object.values(table.fields).filter(
-    (v2) => v2.kind === "navigation" && v2.type !== "lookupId" && v2.type !== "collectionIds"
-  ).map((v2) => {
-    const navProp = v2;
-    const innerSelect = buildSelect(navProp.table);
-    const innerExpand = buildExpand(navProp.table, depth + 1);
-    let expandQuery = `$select=${innerSelect}`;
-    if (innerExpand) {
-      expandQuery += `;$expand=${innerExpand}`;
-    }
-    return `${navProp.name}(${expandQuery})`;
-  }).join(",");
 }
 class DataverseIntersectTable {
   /** Marks this table as an intersect table for FetchXML joins. */
@@ -2755,925 +3732,6 @@ function lookup(name, getTable) {
   return new LookupProperty(name, getTable);
 }
 
-class FieldRef {
-  field;
-  path;
-  _path;
-  constructor(field, path, pathSegments) {
-    if (typeof field === "string") {
-      const name = field;
-      this.field = {
-        name,
-        fromDataverseName: name,
-        toDataverseName: name,
-        transformValueFromDataverse: (value) => value,
-        transformValueToDataverse: (value) => value
-      };
-      this._path = path ?? name;
-      this.path = pathSegments ?? [this.field];
-    } else {
-      this.field = field;
-      this._path = path ?? field.fromDataverseName;
-      this.path = pathSegments ?? [field];
-    }
-  }
-  static fromPath(field, path, pathSegments) {
-    return new FieldRef(field, path, pathSegments);
-  }
-  get dataverseName() {
-    return this._path;
-  }
-  transformFromDataverse(value, ctx) {
-    return this.field.transformValueFromDataverse(value, ctx);
-  }
-  transformToDataverse(value, ctx) {
-    return this.field.transformValueToDataverse(value, ctx);
-  }
-  toString() {
-    return this._path;
-  }
-}
-
-function propertyName$1(property) {
-  return property.fromDataverseName ?? property.name;
-}
-function fieldPathName(path) {
-  return path.map(propertyName$1).join("/");
-}
-
-function renderFilterOdata(node, scope) {
-  const fieldName = (path) => `${scope ? `${scope}/` : ""}${fieldPathName(path)}`;
-  switch (node.type) {
-    case "comparison":
-      return `(${fieldName(node.field)} ${node.operator} ${wrapString(node.value)})`;
-    case "null":
-      return `${fieldName(node.field)} ${node.positive ? "eq" : "ne"} null`;
-    case "contains":
-      return `contains(${fieldName(node.field)},${wrapString(node.value)})`;
-    case "startsWith":
-      return `startswith(${fieldName(node.field)},${wrapString(node.value)})`;
-    case "endsWith":
-      return `endswith(${fieldName(node.field)},${wrapString(node.value)})`;
-    case "compare":
-      return `(${fieldName(node.field)} ${node.operator} ${fieldName(node.otherField)})`;
-    case "lambda":
-      return `${fieldPathName(node.field)}/${node.operator}(${node.alias}: ${renderFilterOdata(node.condition, node.alias)})`;
-    case "fn": {
-      const field = wrapString(fieldName(node.field));
-      const vals = node.values.map(wrapString);
-      if (vals.length === 0) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field})`;
-      if (vals.length === 1) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue=${vals[0]})`;
-      if (node.fnName === "Between" || node.fnName === "NotBetween") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
-      if (node.fnName === "InFiscalPeriodAndYear" || node.fnName === "InOrAfterFiscalPeriodAndYear" || node.fnName === "InOrBeforeFiscalPeriodAndYear") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue1=${vals[0]},PropertyValue2=${vals[1]})`;
-      return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
-    }
-    case "raw":
-      return node.value;
-    case "and":
-      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" and ")})`;
-    case "or":
-      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" or ")})`;
-    case "not":
-      return `not(${renderFilterOdata(node.condition, scope)})`;
-  }
-}
-
-function escapeXml(value) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-}
-function renderFilterFetchXml(node) {
-  const fieldName = (path) => fieldPathName(path);
-  switch (node.type) {
-    case "comparison":
-      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${node.value === null ? "" : escapeXml(String(node.value))}" />`;
-    case "null":
-      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${node.positive ? "null" : "not-null"}" />`;
-    case "contains":
-      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="like" value="%${escapeXml(node.value)}%" />`;
-    case "startsWith":
-      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="begins-with" value="${escapeXml(node.value)}" />`;
-    case "endsWith":
-      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="ends-with" value="${escapeXml(node.value)}" />`;
-    case "compare":
-      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(fieldName(node.otherField))}" />`;
-    case "lambda":
-      return `<condition entityname="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${escapeXml(`${node.alias}: ${renderFilterFetchXml(node.condition)}`)}" />`;
-    case "fn": {
-      const attr = escapeXml(fieldName(node.field));
-      const op = escapeXml(node.operator);
-      if (node.values.length === 0) return `<condition attribute="${attr}" operator="${op}" />`;
-      if (node.values.length === 1) return `<condition attribute="${attr}" operator="${op}" value="${escapeXml(String(node.values[0]))}" />`;
-      return `<condition attribute="${attr}" operator="${op}">${node.values.map((value) => `<value>${escapeXml(String(value))}</value>`).join("")}</condition>`;
-    }
-    case "raw":
-      return node.value;
-    case "and":
-      return node.conditions.length === 0 ? "" : `<filter type="and">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
-    case "or":
-      return node.conditions.length === 0 ? "" : `<filter type="or">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
-    case "not":
-      return `<filter type="and"><filter type="or">${renderFilterFetchXml(node.condition)}</filter></filter>`;
-  }
-}
-
-function pathOf(field) {
-  return field.path;
-}
-class FilterExpr {
-  constructor(node) {
-    this.node = node;
-  }
-  toString() {
-    return this.toOdata();
-  }
-  toOdata() {
-    return renderFilterOdata(this.node);
-  }
-  toFetchXml() {
-    return renderFilterFetchXml(this.node);
-  }
-  getNode() {
-    return this.node;
-  }
-}
-function fn(field, fnName, operator, values) {
-  return new FilterExpr({ type: "fn", field: pathOf(field), fnName, operator, values });
-}
-function eq(field, value) {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) });
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value });
-}
-function ne(field, value) {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ne", otherField: pathOf(value) });
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ne", value });
-}
-function gt(field, value) {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) });
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value });
-}
-function ge(field, value) {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ge", otherField: pathOf(value) });
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ge", value });
-}
-function lt(field, value) {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) });
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value });
-}
-function le(field, value) {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "le", otherField: pathOf(value) });
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "le", value });
-}
-function isNull(field) {
-  return new FilterExpr({ type: "null", field: pathOf(field), positive: true });
-}
-function isNotNull(field) {
-  return new FilterExpr({ type: "null", field: pathOf(field), positive: false });
-}
-function contains(field, value) {
-  return new FilterExpr({ type: "contains", field: pathOf(field), value });
-}
-function startsWith(field, value) {
-  return new FilterExpr({ type: "startsWith", field: pathOf(field), value });
-}
-function endsWith(field, value) {
-  return new FilterExpr({ type: "endsWith", field: pathOf(field), value });
-}
-function and(...conditions) {
-  const valid = conditions.filter((c) => c != null && c !== "");
-  const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
-  return new FilterExpr({ type: "and", conditions: exprs.map((expr) => expr.getNode()) });
-}
-function or(...conditions) {
-  const valid = conditions.filter((c) => c != null && c !== "");
-  const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
-  return new FilterExpr({ type: "or", conditions: exprs.map((expr) => expr.getNode()) });
-}
-function not(condition) {
-  const c = typeof condition === "string" ? new FilterExpr({ type: "raw", value: condition }) : condition;
-  return new FilterExpr({ type: "not", condition: c.getNode() });
-}
-function isActive() {
-  return eq(FieldRef.fromPath(new NumberField("statecode"), "statecode"), 0);
-}
-function isInactive() {
-  return eq(FieldRef.fromPath(new NumberField("statecode"), "statecode"), 1);
-}
-function Above(field, value) {
-  return fn(field, "Above", "above", [value]);
-}
-function AboveOrEqual(field, value) {
-  return fn(field, "AboveOrEqual", "above-or-equal", [value]);
-}
-function Between(field, value1, value2) {
-  return fn(field, "Between", "between", [value1, value2]);
-}
-function ContainsValues(field, values) {
-  return fn(field, "ContainsValues", "in", values);
-}
-function DoesNotContainValues(field, values) {
-  return fn(field, "DoesNotContainValues", "not-in", values);
-}
-function EqualBusinessId(field) {
-  return fn(field, "EqualBusinessId", "eq-businessid", []);
-}
-function EqualUserId(field) {
-  return fn(field, "EqualUserId", "eq-userid", []);
-}
-function EqualUserLanguage(field) {
-  return fn(field, "EqualUserLanguage", "eq-userlanguage", []);
-}
-function EqualUserOrUserHierarchy(field) {
-  return fn(field, "EqualUserOrUserHierarchy", "eq-useroruserhierarchy", []);
-}
-function EqualUserOrUserHierarchyAndTeams(field) {
-  return fn(field, "EqualUserOrUserHierarchyAndTeams", "eq-useroruserhierarchyandteams", []);
-}
-function EqualUserOrUserTeams(field) {
-  return fn(field, "EqualUserOrUserTeams", "eq-useroruserteams", []);
-}
-function In(field, values) {
-  return fn(field, "In", "in", values);
-}
-function InFiscalPeriod(field, value) {
-  return fn(field, "InFiscalPeriod", "in-fiscal-period", [value]);
-}
-function InFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
-  return fn(field, "InFiscalPeriodAndYear", "in-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
-}
-function InFiscalYear(field, value) {
-  return fn(field, "InFiscalYear", "in-fiscal-year", [value]);
-}
-function InOrAfterFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
-  return fn(field, "InOrAfterFiscalPeriodAndYear", "in-or-after-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
-}
-function InOrBeforeFiscalPeriodAndYear(field, fiscalPeriod, fiscalYear) {
-  return fn(field, "InOrBeforeFiscalPeriodAndYear", "in-or-before-fiscal-period-and-year", [fiscalPeriod, fiscalYear]);
-}
-function Last7Days(field) {
-  return fn(field, "Last7Days", "last-seven-days", []);
-}
-function LastFiscalPeriod(field) {
-  return fn(field, "LastFiscalPeriod", "last-fiscal-period", []);
-}
-function LastFiscalYear(field) {
-  return fn(field, "LastFiscalYear", "last-fiscal-year", []);
-}
-function LastMonth(field) {
-  return fn(field, "LastMonth", "last-month", []);
-}
-function LastWeek(field) {
-  return fn(field, "LastWeek", "last-week", []);
-}
-function LastXDays(field, value) {
-  return fn(field, "LastXDays", "last-x-days", [value]);
-}
-function LastXFiscalPeriods(field, value) {
-  return fn(field, "LastXFiscalPeriods", "last-x-fiscal-periods", [value]);
-}
-function LastXFiscalYears(field, value) {
-  return fn(field, "LastXFiscalYears", "last-x-fiscal-years", [value]);
-}
-function LastXHours(field, value) {
-  return fn(field, "LastXHours", "last-x-hours", [value]);
-}
-function LastXMonths(field, value) {
-  return fn(field, "LastXMonths", "last-x-months", [value]);
-}
-function LastXWeeks(field, value) {
-  return fn(field, "LastXWeeks", "last-x-weeks", [value]);
-}
-function LastXYears(field, value) {
-  return fn(field, "LastXYears", "last-x-years", [value]);
-}
-function LastYear(field) {
-  return fn(field, "LastYear", "last-year", []);
-}
-function Next7Days(field) {
-  return fn(field, "Next7Days", "next-seven-days", []);
-}
-function NextFiscalPeriod(field) {
-  return fn(field, "NextFiscalPeriod", "next-fiscal-period", []);
-}
-function NextFiscalYear(field) {
-  return fn(field, "NextFiscalYear", "next-fiscal-year", []);
-}
-function NextMonth(field) {
-  return fn(field, "NextMonth", "next-month", []);
-}
-function NextWeek(field) {
-  return fn(field, "NextWeek", "next-week", []);
-}
-function NextXDays(field, value) {
-  return fn(field, "NextXDays", "next-x-days", [value]);
-}
-function NextXFiscalPeriods(field, value) {
-  return fn(field, "NextXFiscalPeriods", "next-x-fiscal-periods", [value]);
-}
-function NextXFiscalYears(field, value) {
-  return fn(field, "NextXFiscalYears", "next-x-fiscal-years", [value]);
-}
-function NextXHours(field, value) {
-  return fn(field, "NextXHours", "next-x-hours", [value]);
-}
-function NextXMonths(field, value) {
-  return fn(field, "NextXMonths", "next-x-months", [value]);
-}
-function NextXWeeks(field, value) {
-  return fn(field, "NextXWeeks", "next-x-weeks", [value]);
-}
-function NextXYears(field, value) {
-  return fn(field, "NextXYears", "next-x-years", [value]);
-}
-function NextYear(field) {
-  return fn(field, "NextYear", "next-year", []);
-}
-function NotBetween(field, value1, value2) {
-  return fn(field, "NotBetween", "not-between", [value1, value2]);
-}
-function NotEqualBusinessId(field) {
-  return fn(field, "NotEqualBusinessId", "neq-businessid", []);
-}
-function NotEqualUserId(field) {
-  return fn(field, "NotEqualUserId", "neq-userid", []);
-}
-function NotIn(field, values) {
-  return fn(field, "NotIn", "not-in", values);
-}
-function NotUnder(field, value) {
-  return fn(field, "NotUnder", "not-under", [value]);
-}
-function OlderThanXDays(field, value) {
-  return fn(field, "OlderThanXDays", "olderthan-x-days", [value]);
-}
-function OlderThanXHours(field, value) {
-  return fn(field, "OlderThanXHours", "olderthan-x-hours", [value]);
-}
-function OlderThanXMinutes(field, value) {
-  return fn(field, "OlderThanXMinutes", "olderthan-x-minutes", [value]);
-}
-function OlderThanXMonths(field, value) {
-  return fn(field, "OlderThanXMonths", "olderthan-x-months", [value]);
-}
-function OlderThanXWeeks(field, value) {
-  return fn(field, "OlderThanXWeeks", "olderthan-x-weeks", [value]);
-}
-function OlderThanXYears(field, value) {
-  return fn(field, "OlderThanXYears", "olderthan-x-years", [value]);
-}
-function On(field, value) {
-  return fn(field, "On", "on", [value]);
-}
-function OnOrAfter(field, value) {
-  return fn(field, "OnOrAfter", "on-or-after", [value]);
-}
-function OnOrBefore(field, value) {
-  return fn(field, "OnOrBefore", "on-or-before", [value]);
-}
-function ThisFiscalPeriod(field) {
-  return fn(field, "ThisFiscalPeriod", "this-fiscal-period", []);
-}
-function ThisFiscalYear(field) {
-  return fn(field, "ThisFiscalYear", "this-fiscal-year", []);
-}
-function ThisMonth(field) {
-  return fn(field, "ThisMonth", "this-month", []);
-}
-function ThisWeek(field) {
-  return fn(field, "ThisWeek", "this-week", []);
-}
-function ThisYear(field) {
-  return fn(field, "ThisYear", "this-year", []);
-}
-function Today(field) {
-  return fn(field, "Today", "today", []);
-}
-function Tomorrow(field) {
-  return fn(field, "Tomorrow", "tomorrow", []);
-}
-function Under(field, value) {
-  return fn(field, "Under", "under", [value]);
-}
-function UnderOrEqual(field, value) {
-  return fn(field, "UnderOrEqual", "under-or-equal", [value]);
-}
-function Yesterday(field) {
-  return fn(field, "Yesterday", "yesterday", []);
-}
-
-function fieldName(field) {
-  return typeof field === "string" ? field : field.toString();
-}
-class GroupByExpr {
-  field;
-  fieldRef;
-  path;
-  constructor(field, fieldRef) {
-    this.field = field;
-    this.fieldRef = fieldRef;
-    this.path = fieldRef?.path;
-  }
-}
-class Aggregation {
-  field;
-  fieldRef;
-  path;
-  operation;
-  constructor(operation, field, fieldRef) {
-    this.operation = operation;
-    this.field = field;
-    this.fieldRef = fieldRef;
-    this.path = fieldRef?.path;
-  }
-}
-function sum(field) {
-  return new Aggregation("sum", fieldName(field), field);
-}
-function min(field) {
-  return new Aggregation("min", fieldName(field), field);
-}
-function max(field) {
-  return new Aggregation("max", fieldName(field), field);
-}
-function average(field) {
-  return new Aggregation("average", fieldName(field), field);
-}
-function count(field) {
-  return new Aggregation("count", field ? fieldName(field) : void 0, field);
-}
-function groupby(field) {
-  return new GroupByExpr(fieldName(field), field);
-}
-
-function filterInputNode(filter, proxy) {
-  const value = typeof filter === "function" ? filter(proxy) : filter;
-  return typeof value === "string" ? { type: "raw", value } : value.getNode();
-}
-function renderFilterInput(filter, proxy, dialect) {
-  const value = typeof filter === "function" ? filter(proxy) : filter;
-  if (typeof value === "string") return value;
-  return dialect === "odata" ? value.toOdata() : value.toFetchXml();
-}
-
-function propertyName(property) {
-  return property.fromDataverseName ?? property.name;
-}
-function renderFilters(filters) {
-  if (filters.length === 0) return void 0;
-  return `$filter=${filters.map((filter) => renderFilterOdata(filter)).join(" and ")}`;
-}
-function renderOrderby(orderby) {
-  if (orderby.length === 0) return void 0;
-  return `$orderby=${orderby.map((order) => `${fieldPathName(order.field)} ${order.direction}`).join(",")}`;
-}
-function renderAggregateOrderby(orderby) {
-  if (orderby.length === 0) return void 0;
-  return `$orderby=${orderby.map((order) => `${order.field} ${order.direction}`).join(",")}`;
-}
-function serializeApply(ast) {
-  if (ast.kind === "aggregate") {
-    return `aggregate(${ast.expressions.map((expression) => expression.field ? `${fieldPathName(expression.field)} with ${expression.operation} as ${expression.alias}` : `$count as ${expression.alias}`).join(",")})`;
-  }
-  return `groupby((${ast.fields.map(fieldPathName).join(",")})${ast.next ? `,${serializeApply(ast.next)}` : ""})`;
-}
-function renderExpands(expands) {
-  if (expands.length === 0) return void 0;
-  return `$expand=${expands.map((expand) => {
-    const name = propertyName(expand.navigation);
-    if (!expand.query) return name;
-    return `${name}(${serializeODataSelect(expand.query, ";")})`;
-  }).join(",")}`;
-}
-function serializeODataSelect(ast, separator = "&") {
-  return [
-    ast.select.length > 0 ? `$select=${ast.select.map(fieldPathName).join(",")}` : void 0,
-    renderFilters(ast.filters),
-    renderOrderby(ast.orderby),
-    renderExpands(ast.expands),
-    ast.top === void 0 ? void 0 : `$top=${ast.top}`
-  ].filter((part) => part !== void 0).join(separator);
-}
-function serializeODataAggregate(ast) {
-  return [
-    renderFilters(ast.filters),
-    ast.apply ? `$apply=${serializeApply(ast.apply)}` : void 0,
-    renderAggregateOrderby(ast.orderby),
-    ast.top === void 0 ? void 0 : `$top=${ast.top}`
-  ].filter((part) => part !== void 0).join("&");
-}
-
-const proxyTableMap = /* @__PURE__ */ new WeakMap();
-const proxyPathMap = /* @__PURE__ */ new WeakMap();
-class ODataApplyQuery {
-  _table;
-  _filters = [];
-  _apply;
-  _orderby = [];
-  _top;
-  _aliasProxy = {};
-  _aliasFields = {};
-  constructor(table, apply, aliasProxy, initialFilters, aliasFields) {
-    this._table = table;
-    this._apply = apply;
-    this._aliasProxy = aliasProxy;
-    this._aliasFields = aliasFields ?? {};
-    if (initialFilters) this._filters = [...initialFilters];
-  }
-  filter(filter) {
-    this._filters.push(filterInputNode(filter, _buildProxyForTable(this._table)));
-    return this;
-  }
-  orderby(nameOrSelector, direction = "asc") {
-    if (typeof nameOrSelector === "function") {
-      const result = nameOrSelector(this._aliasProxy);
-      this._orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
-    } else {
-      this._orderby.push({ name: nameOrSelector, dir: direction });
-    }
-    return this;
-  }
-  top(n) {
-    this._top = n;
-    return this;
-  }
-  _build() {
-    return serializeODataAggregate(this.toAst());
-  }
-  toAst() {
-    return {
-      kind: "aggregate",
-      filters: [...this._filters],
-      apply: this._apply,
-      orderby: this._orderby.map((order) => ({ field: order.name, direction: order.dir })),
-      top: this._top
-    };
-  }
-  toString() {
-    return this._build();
-  }
-  _transformRow(v) {
-    const r = { ...v };
-    for (const [alias, field] of Object.entries(this._aliasFields)) {
-      if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
-    }
-    r[Etag] = v["@odata.etag"];
-    delete r["@odata.etag"];
-    return r;
-  }
-  async execute() {
-    const results = [];
-    for await (const page of this.iteratePages()) {
-      results.push(...page);
-    }
-    return results;
-  }
-  async *iterate(options) {
-    for await (const page of this.iteratePages(options)) {
-      yield* page;
-    }
-  }
-  async *iteratePages(options) {
-    const qs = this.toString();
-    const raw = this._table.client.iteratePages(this._table.entitySetName, { ...options, query: qs });
-    for await (const page of raw) {
-      yield page.map((v) => this._transformRow(v));
-    }
-  }
-}
-class ODataQuery {
-  #table;
-  #fields = [];
-  #selectedKeys = [];
-  #filters = [];
-  #expands = [];
-  #expandMeta = [];
-  #orderby = [];
-  #top;
-  #proxy;
-  #subQueryMode;
-  constructor(table, subQueryMode) {
-    this.#table = table;
-    this.#proxy = _buildProxyForTable(table);
-    this.#subQueryMode = subQueryMode;
-  }
-  get _table() {
-    return this.#table;
-  }
-  get _proxy() {
-    return this.#proxy;
-  }
-  get _expandMeta() {
-    return this.#expandMeta;
-  }
-  select(...keys) {
-    if (keys.length === 0) {
-      this.#fields = [];
-      this.#selectedKeys = [];
-      for (const [key, prop] of Object.entries(this.#table.fields)) {
-        if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
-          this.#fields.push([prop]);
-          this.#selectedKeys.push(key);
-        }
-      }
-    } else {
-      this.#fields = keys.map((k) => this.#proxy[k].path);
-      this.#selectedKeys = keys;
-    }
-    return this;
-  }
-  expand(key, sub) {
-    const prop = this.#table.fields[key];
-    const isCollection = prop.type === "collection";
-    if (this.#subQueryMode === "collection" && isCollection) {
-      throw new Error("expand() within a collection expand only supports lookup navigation properties");
-    }
-    const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
-    const result = sub?.(child);
-    const q = result ?? child;
-    this.#expands.push({ navigation: prop, key, query: q.toAst() });
-    const childSelectedKeys = q._getSelectedKeys();
-    const childExpandMeta = q._expandMeta;
-    const subQueryProvided = !!sub;
-    this.#expandMeta.push({
-      key,
-      dvName: prop.name,
-      isCollection,
-      selectedKeys: subQueryProvided ? childSelectedKeys.length > 0 ? childSelectedKeys : null : null,
-      subExpands: subQueryProvided && childExpandMeta.length > 0 ? childExpandMeta : null
-    });
-    return this;
-  }
-  filter(filter) {
-    this.#filters.push(filterInputNode(filter, this.#proxy));
-    return this;
-  }
-  orderby(nameOrSelector, direction = "asc") {
-    if (this.#subQueryMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
-    if (typeof nameOrSelector === "function") {
-      const result = nameOrSelector(this.#proxy);
-      this.#orderby.push({
-        field: typeof result === "string" ? pathForName(this.#table, result) : result.path,
-        direction
-      });
-    } else {
-      this.#orderby.push({ field: pathForName(this.#table, nameOrSelector), direction });
-    }
-    return this;
-  }
-  top(n) {
-    if (this.#subQueryMode === "lookup") throw new Error("top() is not supported in lookup expands");
-    this.#top = n;
-    return this;
-  }
-  apply(expr) {
-    const result = expr(this.#proxy);
-    const groupByFields = [];
-    const aggregateExpressions = [];
-    const aliasProxy = {};
-    const aliasFields = {};
-    for (const [alias, value] of Object.entries(result)) {
-      aliasProxy[alias] = alias;
-      if (value instanceof GroupByExpr) {
-        if (value.path) groupByFields.push(value.path);
-        aliasFields[alias] = value.fieldRef;
-      } else if (value instanceof Aggregation) {
-        aggregateExpressions.push({ field: value.path, operation: value.operation, alias });
-        aliasFields[alias] = value.fieldRef;
-      }
-    }
-    const aggregate = aggregateExpressions.length > 0 ? { kind: "aggregate", expressions: aggregateExpressions } : void 0;
-    const apply = groupByFields.length > 0 ? { kind: "groupby", fields: groupByFields, next: aggregate } : aggregate;
-    return new ODataApplyQuery(
-      this.#table,
-      apply,
-      aliasProxy,
-      this.#filters.length > 0 ? this.#filters : void 0,
-      aliasFields
-    );
-  }
-  _buildForExpand() {
-    return serializeODataSelect(this.toAst(), ";");
-  }
-  toAst() {
-    return {
-      kind: "select",
-      select: this.#fields,
-      filters: this.#filters,
-      orderby: this.#orderby,
-      expands: this.#expands.map((expand) => ({ navigation: expand.navigation, query: expand.query })),
-      top: this.#top
-    };
-  }
-  toString() {
-    return serializeODataSelect(this.toAst());
-  }
-  _getSelectedKeys() {
-    return this.#selectedKeys;
-  }
-  _partialTransform(value) {
-    const result = {};
-    const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.name];
-    const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" };
-    for (const key of this.#selectedKeys) {
-      const prop = this.#table.fields[key];
-      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(value[prop.fromDataverseName], ctx);
-    }
-    for (const expand of this.#expandMeta) {
-      if (value[expand.dvName] !== void 0) {
-        result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
-      }
-    }
-    result[Etag] = value["@odata.etag"];
-    return result;
-  }
-  _transformRow(value) {
-    if (this.#selectedKeys.length > 0) {
-      return this._partialTransform(value);
-    }
-    if (this.#expandMeta.some((e) => e.selectedKeys)) {
-      return this._partialTransform(value);
-    }
-    return this.#table.transformValueFromDataverse(value);
-  }
-  async execute() {
-    const results = [];
-    for await (const page of this.iteratePages()) {
-      results.push(...page);
-    }
-    return results;
-  }
-  async *iterate(options) {
-    const qs = this.toString();
-    if (!qs) {
-      yield* this.#table.iterateRecords(void 0, options);
-      return;
-    }
-    for await (const page of this.iteratePages(options)) {
-      yield* page;
-    }
-  }
-  async *iteratePages(options) {
-    const qs = this.toString();
-    if (!qs) {
-      yield* this.#table.iteratePages(void 0, options);
-      return;
-    }
-    for await (const page of this.#table.client.iteratePages(
-      this.#table.entitySetName,
-      { ...options, query: qs }
-    )) {
-      yield page.map((v) => this._transformRow(v));
-    }
-  }
-}
-class InitialQueryImpl {
-  #table;
-  constructor(table) {
-    this.#table = table;
-  }
-  select(...keys) {
-    const q = new ODataQuery(this.#table);
-    if (keys.length === 0) {
-      q.select();
-    } else {
-      q.select(...keys);
-    }
-    return q;
-  }
-  apply(expr) {
-    return new ODataQuery(this.#table).apply(expr);
-  }
-}
-function pathForName(table, path) {
-  const segments = [];
-  let current = table;
-  for (const name of path.split("/")) {
-    const entry = Object.values(current.fields).find((field) => (field.fromDataverseName ?? field.name) === name);
-    if (!entry) throw new Error(`Unknown query field: ${path}`);
-    segments.push(entry);
-    if (entry.kind === "navigation") current = entry.table;
-  }
-  return segments;
-}
-function _processExpand(raw, expand, table) {
-  if (raw === null || raw === void 0) return null;
-  const navProp = table.fields[expand.key];
-  const relatedTable = navProp.table;
-  if (expand.isCollection) {
-    const items = Array.from(raw ?? []);
-    if (expand.selectedKeys) {
-      return items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands));
-    } else {
-      return navProp.transformValueFromDataverse(raw);
-    }
-  } else {
-    if (expand.selectedKeys) {
-      return _partialTransformItem(relatedTable, expand.selectedKeys, raw, expand.subExpands);
-    } else {
-      return navProp.transformValueFromDataverse(raw);
-    }
-  }
-}
-function _partialTransformItem(table, selectedKeys, raw, subExpands) {
-  const result = {};
-  const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.name];
-  const ctx = { table, client: table.client, recordId: recordId ?? "" };
-  for (const key of selectedKeys) {
-    const prop = table.fields[key];
-    if (prop) {
-      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(raw[prop.fromDataverseName], ctx);
-    }
-  }
-  if (subExpands) {
-    for (const expand of subExpands) {
-      if (raw[expand.dvName] !== void 0) {
-        result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
-      }
-    }
-  }
-  return result;
-}
-function _buildProxyForTable(table, prefix, prefixPath = []) {
-  const proxy = {};
-  const fields = table.fields;
-  for (const [key, prop] of Object.entries(fields)) {
-    const dataverseName = prop.fromDataverseName ?? prop.name;
-    const isCollection = prop.kind === "navigation" && prop.type === "collection";
-    const isLookup = prop.kind === "navigation" && prop.type === "lookup";
-    if (isCollection || isLookup) {
-      const navProp = prop;
-      const currentPrefix = prefix ? `${prefix}/${dataverseName}` : dataverseName;
-      let cached;
-      Object.defineProperty(proxy, key, {
-        get: () => {
-          if (!cached) {
-            const sub = _buildProxyForTable(navProp.table, currentPrefix, [...prefixPath, navProp]);
-            sub.toString = () => currentPrefix;
-            Object.defineProperty(sub, "path", { value: [...prefixPath, navProp], enumerable: false });
-            if (isCollection) proxyTableMap.set(sub, navProp.table);
-            proxyPathMap.set(sub, [...prefixPath, navProp]);
-            cached = sub;
-          }
-          return cached;
-        },
-        enumerable: true,
-        configurable: true
-      });
-    } else {
-      proxy[key] = FieldRef.fromPath(prop, prefix ? `${prefix}/${dataverseName}` : dataverseName, [...prefixPath, prop]);
-    }
-  }
-  return proxy;
-}
-function buildLambdaProxy(alias, table) {
-  const fields = table.fields;
-  const proxy = {};
-  for (const [key, prop] of Object.entries(fields)) {
-    proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.name}`);
-  }
-  return proxy;
-}
-function any(proxy, condition) {
-  const alias = "x";
-  const table = proxyTableMap.get(proxy);
-  if (!table) throw new Error("any() requires a collection navigation proxy");
-  const result = condition(buildLambdaProxy(alias, table));
-  return new FilterExpr({
-    type: "lambda",
-    field: proxyPathMap.get(proxy) ?? [],
-    operator: "any",
-    alias,
-    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
-  });
-}
-function all(proxy, condition) {
-  const alias = "x";
-  const table = proxyTableMap.get(proxy);
-  if (!table) throw new Error("all() requires a collection navigation proxy");
-  const result = condition(buildLambdaProxy(alias, table));
-  return new FilterExpr({
-    type: "lambda",
-    field: proxyPathMap.get(proxy) ?? [],
-    operator: "all",
-    alias,
-    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
-  });
-}
-function fetchOdata(table) {
-  return new InitialQueryImpl(table);
-}
-
 function buildFlatFieldProxy(table) {
   const proxy = {};
   for (const [key, property] of Object.entries(table.fields)) {
@@ -3682,6 +3740,12 @@ function buildFlatFieldProxy(table) {
   return proxy;
 }
 
+function fetchAttributeAst(attribute) {
+  return { ...attribute };
+}
+function fetchOrderAst(order) {
+  return { ...order };
+}
 class FilterCollector {
   _filters = [];
   _proxy;
@@ -3807,6 +3871,38 @@ class FetchXmlAggregateQuery {
       this._orders.push({ attribute, entityname, descending: direction === "desc" });
     }
     return this;
+  }
+  toAst() {
+    return {
+      kind: "xml-aggregate",
+      entity: this._table.logicalName,
+      version: "1.0",
+      mapping: "logical",
+      attributes: this._attributes.map(fetchAttributeAst),
+      filters: [...this._filters],
+      orders: this._orders.map(fetchOrderAst),
+      links: this._links.map((link) => {
+        const child = link.builder instanceof FilterCollector ? void 0 : link.builder.toAst();
+        return {
+          name: link.name,
+          from: link.from,
+          to: link.to,
+          alias: link.alias,
+          linkType: link.linkType,
+          intersect: link.intersect,
+          attributes: child?.attributes ?? [],
+          filters: link.builder instanceof FilterCollector ? [...link.builder._filters] : child?.filters ?? [],
+          orders: child?.orders ?? [],
+          links: child?.links ?? []
+        };
+      }),
+      top: this._top,
+      aggregateLimit: this._aggregateLimit,
+      datasource: this._datasource,
+      options: this._options,
+      lateMaterialize: this._lateMaterialize,
+      useRawOrderBy: this._useRawOrderBy
+    };
   }
   toXml() {
     const lines = [];
@@ -4188,6 +4284,39 @@ class EntityQueryBuilder {
     }
     return this;
   }
+  toAst() {
+    return {
+      kind: "xml-select",
+      entity: this._table.logicalName,
+      version: "1.0",
+      mapping: "logical",
+      attributes: this._getEffectiveAttributes().map(fetchAttributeAst),
+      filters: [...this._filters],
+      orders: this._orders.map(fetchOrderAst),
+      links: this._links.map((link) => {
+        const child = link.builder instanceof FilterCollector ? void 0 : link.builder.toAst();
+        return {
+          name: link.name,
+          from: link.from,
+          to: link.to,
+          alias: link.alias,
+          linkType: link.linkType,
+          intersect: link.intersect,
+          attributes: child?.attributes ?? [],
+          filters: link.builder instanceof FilterCollector ? [...link.builder._filters] : child?.filters ?? [],
+          orders: child?.orders ?? [],
+          links: child?.links ?? []
+        };
+      }),
+      distinct: this._isDistinct,
+      top: this._top,
+      aggregateLimit: this._aggregateLimit,
+      datasource: this._datasource,
+      options: this._options,
+      lateMaterialize: this._lateMaterialize,
+      useRawOrderBy: this._useRawOrderBy
+    };
+  }
   toXml() {
     const lines = [];
     const fetchAttrs = [`version="1.0"`, `mapping="logical"`];
@@ -4412,6 +4541,9 @@ class FetchXmlInitialImpl {
     this.#builder.orderby(...args);
     return this;
   }
+  toAst() {
+    return this.#builder.toAst();
+  }
   toXml() {
     return this.#builder.toXml();
   }
@@ -4429,4 +4561,61 @@ class FetchXmlInitialImpl {
   }
 }
 
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, startsWith, string, sum, toBase64, toDateOnly, wrapString, xml };
+function escapeXml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function serializeAttribute(attribute) {
+  const values = [
+    `name="${escapeXml(attribute.name)}"`,
+    attribute.alias === void 0 ? void 0 : `alias="${escapeXml(attribute.alias)}"`,
+    attribute.aggregate === void 0 ? void 0 : `aggregate="${escapeXml(attribute.aggregate)}"`,
+    attribute.groupby ? `groupby="true"` : void 0,
+    attribute.dategrouping === void 0 ? void 0 : `dategrouping="${escapeXml(attribute.dategrouping)}"`,
+    attribute.distinct ? `distinct="true"` : void 0,
+    attribute.rowaggregate === void 0 ? void 0 : `rowaggregate="${escapeXml(attribute.rowaggregate)}"`
+  ].filter((value) => value !== void 0);
+  return `<attribute ${values.join(" ")}/>`;
+}
+function serializeOrder(order) {
+  const values = [
+    `attribute="${escapeXml(order.attribute)}"`,
+    order.entityname === void 0 ? void 0 : `entityname="${escapeXml(order.entityname)}"`,
+    order.descending ? `descending="true"` : void 0
+  ].filter((value) => value !== void 0);
+  return `<order ${values.join(" ")}/>`;
+}
+function serializeLink(link) {
+  const values = [
+    `name="${escapeXml(link.name)}"`,
+    link.from === void 0 ? void 0 : `from="${escapeXml(link.from)}"`,
+    link.to === void 0 ? void 0 : `to="${escapeXml(link.to)}"`,
+    `link-type="${escapeXml(link.linkType)}"`,
+    link.alias === void 0 ? void 0 : `alias="${escapeXml(link.alias)}"`,
+    link.intersect ? `intersect="true"` : void 0
+  ].filter((value) => value !== void 0);
+  return `<link-entity ${values.join(" ")}>${serializeContents(link)}</link-entity>`;
+}
+function serializeContents(ast) {
+  const attributes = ast.attributes.map(serializeAttribute).join("");
+  const filters = ast.filters.map((filter) => typeof filter === "string" ? filter : renderFilterFetchXml(filter)).join("");
+  const orders = ast.orders.map(serializeOrder).join("");
+  const links = ast.links.map(serializeLink).join("");
+  return `${attributes}${filters}${orders}${links}`;
+}
+function serializeFetchXml(ast) {
+  const values = [
+    `name="${escapeXml(ast.entity)}"`,
+    ast.version === void 0 ? void 0 : `version="${escapeXml(ast.version)}"`,
+    ast.mapping === void 0 ? void 0 : `mapping="${escapeXml(ast.mapping)}"`,
+    ast.distinct ? `distinct="true"` : void 0,
+    ast.top === void 0 ? void 0 : `top="${ast.top}"`,
+    ast.datasource === void 0 ? void 0 : `datasource="${escapeXml(ast.datasource)}"`,
+    ast.options === void 0 ? void 0 : `options="${escapeXml(ast.options)}"`,
+    ast.lateMaterialize ? `latematerialize="true"` : void 0,
+    ast.aggregateLimit === void 0 ? void 0 : `aggregatelimit="${ast.aggregateLimit}"`,
+    ast.useRawOrderBy ? `useraworderby="true"` : void 0
+  ].filter((value) => value !== void 0);
+  return `<fetch${ast.kind === "xml-aggregate" ? ` aggregate="true"` : ""}><entity ${values.join(" ")}>${serializeContents(ast)}</entity></fetch>`;
+}
+
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
