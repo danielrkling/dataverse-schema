@@ -1,7 +1,8 @@
 import { DataverseClient } from "./client";
 import { DataverseRecord, Primitive } from "./types";
 
-export const Etag = Symbol("etag");
+//we want Etag to stil be serializable
+export const Etag = "$etag";
 
 // --- OData value helpers ---
 
