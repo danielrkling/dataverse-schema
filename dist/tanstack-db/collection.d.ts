@@ -1,5 +1,5 @@
 import { CollectionConfig, UtilsRecord } from '@tanstack/db';
-import { DataverseTable, GenericProperties, Infer } from 'dataverse-schema';
+import { DataverseTable, GenericProperties, Infer } from '../index.ts';
 export type DataverseCollectionConfig<T extends GenericProperties> = {
     table: DataverseTable<T>;
     syncInterval?: number;

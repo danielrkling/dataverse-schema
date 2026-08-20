@@ -6,13 +6,13 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/dataverse-schema.mjs",
-  "module": "dist/dataverse-schema.mjs",
-  "typings": "dist/dataverse-schema.d.ts",
+  "main": "./dist/index.mjs",
+  "module": "dist/index.mjs",
+  "typings": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/dataverse-schema.mjs",
-      "types": "./dist/dataverse-schema.d.ts"
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
     },
     "./tanstack-db": {
       "import": "./dist/tanstack-db.mjs",

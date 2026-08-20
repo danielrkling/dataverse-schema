@@ -363,13 +363,17 @@ export class ImageField extends FieldBase<ImageRef | null> {
     return { url, fullSizeUrl };
   }
 
+  //When using conditional operations (If-Match: Etag) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
   async transformValueToDataverse(value: ImageRef | null): Promise<string | null | typeof SKIP> {
-    if (value == null) return null;
-    if (!value.data) return SKIP;
-    if (value.data instanceof Blob) {
-      return blobToBase64(value.data);
+    return SKIP
+  }
+
+  async afterSave(ctx: TransformContext, value: any): Promise<void> {
+    if (value?.data === null){
+      await ctx.table.deletePropertyValue(this.toDataverseName,ctx.recordId)
+    }else if (value?.data instanceof Blob){
+      await ctx.table.updatePropertyValue(this.toDataverseName,ctx.recordId,blobToBase64(value.data))
     }
-    return null;
   }
 }
 

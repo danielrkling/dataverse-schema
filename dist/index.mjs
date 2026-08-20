@@ -1,4 +1,6 @@
-const Etag = Symbol("etag");
+import * as v from 'valibot';
+
+const Etag = "$etag";
 const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
 const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
 function isNonEmptyString(value) {
@@ -850,689 +852,6 @@ function mapChoices(data) {
     label: String(option.Label.UserLocalizedLabel.Label),
     description: String(option.Description.UserLocalizedLabel.Label)
   }));
-}
-
-//#region src/storages/globalConfig/globalConfig.ts
-const DEFAULT_CONFIG = {
-	lang: void 0,
-	message: void 0,
-	abortEarly: void 0,
-	abortPipeEarly: void 0
-};
-/**
-* Returns the global configuration.
-*
-* @param config The config to merge.
-*
-* @returns The configuration.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function getGlobalConfig(config$1) {
-	return DEFAULT_CONFIG;
-}
-
-//#endregion
-//#region src/storages/globalMessage/globalMessage.ts
-let store$3;
-/**
-* Returns a global error message.
-*
-* @param lang The language of the message.
-*
-* @returns The error message.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function getGlobalMessage(lang) {
-	return store$3?.get(lang);
-}
-
-//#endregion
-//#region src/storages/schemaMessage/schemaMessage.ts
-let store$2;
-/**
-* Returns a schema error message.
-*
-* @param lang The language of the message.
-*
-* @returns The error message.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function getSchemaMessage(lang) {
-	return store$2?.get(lang);
-}
-
-//#endregion
-//#region src/storages/specificMessage/specificMessage.ts
-let store$1;
-/**
-* Returns a specific error message.
-*
-* @param reference The identifier reference.
-* @param lang The language of the message.
-*
-* @returns The error message.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function getSpecificMessage(reference, lang) {
-	return store$1?.get(reference)?.get(lang);
-}
-
-//#endregion
-//#region src/utils/_stringify/_stringify.ts
-/**
-* Stringifies an unknown input to a literal or type string.
-*
-* @param input The unknown input.
-*
-* @returns A literal or type string.
-*
-* @internal
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function _stringify(input) {
-	const type = typeof input;
-	if (type === "string") return `"${input}"`;
-	if (type === "number" || type === "bigint" || type === "boolean") return `${input}`;
-	if (type === "object" || type === "function") return (input && Object.getPrototypeOf(input)?.constructor?.name) ?? "null";
-	return type;
-}
-
-//#endregion
-//#region src/utils/_addIssue/_addIssue.ts
-/**
-* Adds an issue to the dataset.
-*
-* @param context The issue context.
-* @param label The issue label.
-* @param dataset The input dataset.
-* @param config The configuration.
-* @param other The optional props.
-*
-* @internal
-*/
-function _addIssue(context, label, dataset, config$1, other) {
-	const input = other && "input" in other ? other.input : dataset.value;
-	const expected = other?.expected ?? context.expects ?? null;
-	const received = other?.received ?? /* @__PURE__ */ _stringify(input);
-	const issue = {
-		kind: context.kind,
-		type: context.type,
-		input,
-		expected,
-		received,
-		message: `Invalid ${label}: ${expected ? `Expected ${expected} but r` : "R"}eceived ${received}`,
-		requirement: context.requirement,
-		path: other?.path,
-		issues: other?.issues,
-		lang: config$1.lang,
-		abortEarly: config$1.abortEarly,
-		abortPipeEarly: config$1.abortPipeEarly
-	};
-	const isSchema = context.kind === "schema";
-	const message$1 = other?.message ?? context.message ?? /* @__PURE__ */ getSpecificMessage(context.reference, issue.lang) ?? (isSchema ? /* @__PURE__ */ getSchemaMessage(issue.lang) : null) ?? config$1.message ?? /* @__PURE__ */ getGlobalMessage(issue.lang);
-	if (message$1 !== void 0) issue.message = typeof message$1 === "function" ? message$1(issue) : message$1;
-	if (isSchema) dataset.typed = false;
-	if (dataset.issues) dataset.issues.push(issue);
-	else dataset.issues = [issue];
-}
-
-//#endregion
-//#region src/utils/_getStandardProps/_getStandardProps.ts
-const _standardCache = /* @__PURE__ */ new WeakMap();
-/**
-* Returns the Standard Schema properties.
-*
-* @param context The schema context.
-*
-* @returns The Standard Schema properties.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function _getStandardProps(context) {
-	let cached = _standardCache.get(context);
-	if (!cached) {
-		cached = {
-			version: 1,
-			vendor: "valibot",
-			validate(value$1) {
-				return context["~run"]({ value: value$1 }, /* @__PURE__ */ getGlobalConfig());
-			}
-		};
-		_standardCache.set(context, cached);
-	}
-	return cached;
-}
-
-//#endregion
-//#region src/utils/_joinExpects/_joinExpects.ts
-/**
-* Joins multiple `expects` values with the given separator.
-*
-* @param values The `expects` values.
-* @param separator The separator.
-*
-* @returns The joined `expects` property.
-*
-* @internal
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function _joinExpects(values$1, separator) {
-	const list = [...new Set(values$1)];
-	if (list.length > 1) return `(${list.join(` ${separator} `)})`;
-	return list[0] ?? "never";
-}
-
-//#endregion
-//#region src/utils/ValiError/ValiError.ts
-/**
-* A Valibot error with useful information.
-*/
-var ValiError = class extends Error {
-	/**
-	* Creates a Valibot error with useful information.
-	*
-	* @param issues The error issues.
-	*/
-	constructor(issues) {
-		super(issues[0].message);
-		this.name = "ValiError";
-		this.issues = issues;
-	}
-};
-/**
-* [UUID](https://en.wikipedia.org/wiki/Universally_unique_identifier) regex.
-*/
-const UUID_REGEX = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/iu;
-
-//#endregion
-//#region src/actions/minLength/minLength.ts
-/* @__NO_SIDE_EFFECTS__ */
-function minLength(requirement, message$1) {
-	return {
-		kind: "validation",
-		type: "min_length",
-		reference: minLength,
-		async: false,
-		expects: `>=${requirement}`,
-		requirement,
-		message: message$1,
-		"~run"(dataset, config$1) {
-			if (dataset.typed && dataset.value.length < this.requirement) _addIssue(this, "length", dataset, config$1, { received: `${dataset.value.length}` });
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/actions/uuid/uuid.ts
-/* @__NO_SIDE_EFFECTS__ */
-function uuid(message$1) {
-	return {
-		kind: "validation",
-		type: "uuid",
-		reference: uuid,
-		async: false,
-		expects: null,
-		requirement: UUID_REGEX,
-		message: message$1,
-		"~run"(dataset, config$1) {
-			if (dataset.typed && !this.requirement.test(dataset.value)) _addIssue(this, "UUID", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/methods/getFallback/getFallback.ts
-/**
-* Returns the fallback value of the schema.
-*
-* @param schema The schema to get it from.
-* @param dataset The output dataset if available.
-* @param config The config if available.
-*
-* @returns The fallback value.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function getFallback(schema, dataset, config$1) {
-	return typeof schema.fallback === "function" ? schema.fallback(dataset, config$1) : schema.fallback;
-}
-
-//#endregion
-//#region src/methods/getDefault/getDefault.ts
-/**
-* Returns the default value of the schema.
-*
-* @param schema The schema to get it from.
-* @param dataset The input dataset if available.
-* @param config The config if available.
-*
-* @returns The default value.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function getDefault(schema, dataset, config$1) {
-	return typeof schema.default === "function" ? schema.default(dataset, config$1) : schema.default;
-}
-
-//#endregion
-//#region src/schemas/array/array.ts
-/* @__NO_SIDE_EFFECTS__ */
-function array(item, message$1) {
-	return {
-		kind: "schema",
-		type: "array",
-		reference: array,
-		expects: "Array",
-		async: false,
-		item,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			const input = dataset.value;
-			if (Array.isArray(input)) {
-				dataset.typed = true;
-				dataset.value = [];
-				for (let key = 0; key < input.length; key++) {
-					const value$1 = input[key];
-					const itemDataset = this.item["~run"]({ value: value$1 }, config$1);
-					if (itemDataset.issues) {
-						const pathItem = {
-							type: "array",
-							origin: "value",
-							input,
-							key,
-							value: value$1
-						};
-						for (const issue of itemDataset.issues) {
-							if (issue.path) issue.path.unshift(pathItem);
-							else issue.path = [pathItem];
-							dataset.issues?.push(issue);
-						}
-						if (!dataset.issues) dataset.issues = itemDataset.issues;
-						if (config$1.abortEarly) {
-							dataset.typed = false;
-							break;
-						}
-					}
-					if (!itemDataset.typed) dataset.typed = false;
-					dataset.value.push(itemDataset.value);
-				}
-			} else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/boolean/boolean.ts
-/* @__NO_SIDE_EFFECTS__ */
-function boolean$1(message$1) {
-	return {
-		kind: "schema",
-		type: "boolean",
-		reference: boolean$1,
-		expects: "boolean",
-		async: false,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (typeof dataset.value === "boolean") dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/custom/custom.ts
-/* @__NO_SIDE_EFFECTS__ */
-function custom(check$1, message$1) {
-	return {
-		kind: "schema",
-		type: "custom",
-		reference: custom,
-		expects: "unknown",
-		async: false,
-		check: check$1,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (this.check(dataset.value)) dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/date/date.ts
-/* @__NO_SIDE_EFFECTS__ */
-function date$1(message$1) {
-	return {
-		kind: "schema",
-		type: "date",
-		reference: date$1,
-		expects: "Date",
-		async: false,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (dataset.value instanceof Date) if (!isNaN(dataset.value)) dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1, { received: "\"Invalid Date\"" });
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/instance/instance.ts
-/* @__NO_SIDE_EFFECTS__ */
-function instance(class_, message$1) {
-	return {
-		kind: "schema",
-		type: "instance",
-		reference: instance,
-		expects: class_.name,
-		async: false,
-		class: class_,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (dataset.value instanceof this.class) dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/lazy/lazy.ts
-/**
-* Creates a lazy schema.
-*
-* @param getter The schema getter.
-*
-* @returns A lazy schema.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function lazy(getter) {
-	return {
-		kind: "schema",
-		type: "lazy",
-		reference: lazy,
-		expects: "unknown",
-		async: false,
-		getter,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			return this.getter(dataset.value)["~run"](dataset, config$1);
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/nullable/nullable.ts
-/* @__NO_SIDE_EFFECTS__ */
-function nullable(wrapped, default_) {
-	return {
-		kind: "schema",
-		type: "nullable",
-		reference: nullable,
-		expects: `(${wrapped.expects} | null)`,
-		async: false,
-		wrapped,
-		default: default_,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (dataset.value === null) {
-				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
-				if (dataset.value === null) {
-					dataset.typed = true;
-					return dataset;
-				}
-			}
-			return this.wrapped["~run"](dataset, config$1);
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/number/number.ts
-/* @__NO_SIDE_EFFECTS__ */
-function number$1(message$1) {
-	return {
-		kind: "schema",
-		type: "number",
-		reference: number$1,
-		expects: "number",
-		async: false,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (typeof dataset.value === "number" && !isNaN(dataset.value)) dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/object/object.ts
-/* @__NO_SIDE_EFFECTS__ */
-function object(entries$1, message$1) {
-	return {
-		kind: "schema",
-		type: "object",
-		reference: object,
-		expects: "Object",
-		async: false,
-		entries: entries$1,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			const input = dataset.value;
-			if (input && typeof input === "object") {
-				dataset.typed = true;
-				dataset.value = {};
-				for (const key in this.entries) {
-					const valueSchema = this.entries[key];
-					if (key in input || (valueSchema.type === "exact_optional" || valueSchema.type === "optional" || valueSchema.type === "nullish") && valueSchema.default !== void 0) {
-						const value$1 = key in input ? input[key] : /* @__PURE__ */ getDefault(valueSchema);
-						const valueDataset = valueSchema["~run"]({ value: value$1 }, config$1);
-						if (valueDataset.issues) {
-							const pathItem = {
-								type: "object",
-								origin: "value",
-								input,
-								key,
-								value: value$1
-							};
-							for (const issue of valueDataset.issues) {
-								if (issue.path) issue.path.unshift(pathItem);
-								else issue.path = [pathItem];
-								dataset.issues?.push(issue);
-							}
-							if (!dataset.issues) dataset.issues = valueDataset.issues;
-							if (config$1.abortEarly) {
-								dataset.typed = false;
-								break;
-							}
-						}
-						if (!valueDataset.typed) dataset.typed = false;
-						dataset.value[key] = valueDataset.value;
-					} else if (valueSchema.fallback !== void 0) dataset.value[key] = /* @__PURE__ */ getFallback(valueSchema);
-					else if (valueSchema.type !== "exact_optional" && valueSchema.type !== "optional" && valueSchema.type !== "nullish") {
-						_addIssue(this, "key", dataset, config$1, {
-							input: void 0,
-							expected: `"${key}"`,
-							path: [{
-								type: "object",
-								origin: "key",
-								input,
-								key,
-								value: input[key]
-							}]
-						});
-						if (config$1.abortEarly) break;
-					}
-				}
-			} else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/optional/optional.ts
-/* @__NO_SIDE_EFFECTS__ */
-function optional(wrapped, default_) {
-	return {
-		kind: "schema",
-		type: "optional",
-		reference: optional,
-		expects: `(${wrapped.expects} | undefined)`,
-		async: false,
-		wrapped,
-		default: default_,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (dataset.value === void 0) {
-				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
-				if (dataset.value === void 0) {
-					dataset.typed = true;
-					return dataset;
-				}
-			}
-			return this.wrapped["~run"](dataset, config$1);
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/picklist/picklist.ts
-/* @__NO_SIDE_EFFECTS__ */
-function picklist(options, message$1) {
-	return {
-		kind: "schema",
-		type: "picklist",
-		reference: picklist,
-		expects: /* @__PURE__ */ _joinExpects(options.map(_stringify), "|"),
-		async: false,
-		options,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (this.options.includes(dataset.value)) dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/schemas/string/string.ts
-/* @__NO_SIDE_EFFECTS__ */
-function string$1(message$1) {
-	return {
-		kind: "schema",
-		type: "string",
-		reference: string$1,
-		expects: "string",
-		async: false,
-		message: message$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			if (typeof dataset.value === "string") dataset.typed = true;
-			else _addIssue(this, "type", dataset, config$1);
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/methods/parse/parse.ts
-/**
-* Parses an unknown input based on a schema.
-*
-* @param schema The schema to be used.
-* @param input The input to be parsed.
-* @param config The parse configuration.
-*
-* @returns The parsed input.
-*/
-function parse(schema, input, config$1) {
-	const dataset = schema["~run"]({ value: input }, /* @__PURE__ */ getGlobalConfig());
-	if (dataset.issues) throw new ValiError(dataset.issues);
-	return dataset.value;
-}
-
-//#endregion
-//#region src/methods/pipe/pipe.ts
-/* @__NO_SIDE_EFFECTS__ */
-function pipe(...pipe$1) {
-	return {
-		...pipe$1[0],
-		pipe: pipe$1,
-		get "~standard"() {
-			return /* @__PURE__ */ _getStandardProps(this);
-		},
-		"~run"(dataset, config$1) {
-			for (const item of pipe$1) if (item.kind !== "metadata") {
-				if (dataset.issues && (item.kind === "schema" || item.kind === "transformation")) {
-					dataset.typed = false;
-					break;
-				}
-				if (!dataset.issues || !config$1.abortEarly && !config$1.abortPipeEarly) dataset = item["~run"](dataset, config$1);
-			}
-			return dataset;
-		}
-	};
-}
-
-//#endregion
-//#region src/methods/safeParse/safeParse.ts
-/**
-* Parses an unknown input based on a schema.
-*
-* @param schema The schema to be used.
-* @param input The input to be parsed.
-* @param config The parse configuration.
-*
-* @returns The parse result.
-*/
-/* @__NO_SIDE_EFFECTS__ */
-function safeParse(schema, input, config$1) {
-	const dataset = schema["~run"]({ value: input }, /* @__PURE__ */ getGlobalConfig());
-	return {
-		typed: dataset.typed,
-		success: !dataset.issues,
-		output: dataset.value,
-		issues: dataset.issues
-	};
 }
 
 class FieldRef {
@@ -2575,7 +1894,7 @@ class DataverseTable {
     for (const [key, field] of Object.entries(this.fields)) {
       shape[key] = field.schema;
     }
-    return object(shape);
+    return v.object(shape);
   }
   getDefault(value) {
     const result = {};
@@ -3130,10 +2449,10 @@ class DataverseIntersectTable {
   }
 }
 
-const DATE_SCHEMA = date$1();
-const NON_EMPTY_STRING_SCHEMA = pipe(string$1(), minLength(1));
+const DATE_SCHEMA = v.date();
+const NON_EMPTY_STRING_SCHEMA = v.pipe(v.string(), v.minLength(1));
 function isValidDate(value) {
-  return safeParse(DATE_SCHEMA, value).success;
+  return v.safeParse(DATE_SCHEMA, value).success;
 }
 function parseValidDateOnly(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
@@ -3181,13 +2500,13 @@ function buildObjectSchema(fields) {
   for (const [key, field] of Object.entries(fields)) {
     shape[key] = field.schema;
   }
-  return object(shape);
+  return v.object(shape);
 }
 class BooleanField extends FieldBase {
   kind = "value";
   type = "boolean";
   constructor(name, options) {
-    super(name, { defaultValue: false, schema: boolean$1() }, options);
+    super(name, { defaultValue: false, schema: v.boolean() }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? false;
@@ -3199,7 +2518,7 @@ class NullableBooleanField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(boolean$1())
+      schema: v.nullable(v.boolean())
     }, options);
   }
   transformValueFromDataverse(value) {
@@ -3210,7 +2529,7 @@ class NumberField extends FieldBase {
   kind = "value";
   type = "number";
   constructor(name, options) {
-    super(name, { defaultValue: 0, schema: number$1() }, options);
+    super(name, { defaultValue: 0, schema: v.number() }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? 0;
@@ -3220,7 +2539,7 @@ class NullableNumberField extends FieldBase {
   kind = "value";
   type = "number";
   constructor(name, options) {
-    super(name, { defaultValue: null, schema: nullable(number$1()) }, options);
+    super(name, { defaultValue: null, schema: v.nullable(v.number()) }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? null;
@@ -3230,7 +2549,7 @@ class StringField extends FieldBase {
   kind = "value";
   type = "string";
   constructor(name, options) {
-    super(name, { defaultValue: "", schema: string$1() }, options);
+    super(name, { defaultValue: "", schema: v.string() }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? "";
@@ -3240,7 +2559,7 @@ class NullableStringField extends FieldBase {
   kind = "value";
   type = "string";
   constructor(name, options) {
-    super(name, { defaultValue: null, schema: nullable(string$1()) }, options);
+    super(name, { defaultValue: null, schema: v.nullable(v.string()) }, options);
   }
   transformValueFromDataverse(value) {
     return value ?? null;
@@ -3252,7 +2571,7 @@ class PrimaryKeyField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: "",
-      schema: pipe(string$1(), uuid())
+      schema: v.pipe(v.string(), v.uuid())
     }, options);
   }
   getDefault() {
@@ -3267,7 +2586,7 @@ class ListField extends FieldBase {
     const values = Object.freeze([...list2]);
     super(name, {
       defaultValue: null,
-      schema: nullable(custom((value) => values.includes(value), `Value not in [${values}]`))
+      schema: v.nullable(v.custom((value) => values.includes(value), `Value not in [${values}]`))
     }, options);
     this.list = values;
   }
@@ -3282,7 +2601,7 @@ class ChoiceField extends FieldBase {
     const values = Object.values(options);
     super(name, {
       defaultValue: options[Number(firstKey)],
-      schema: picklist(values)
+      schema: v.picklist(values)
     }, fieldOptions);
     this.#options = options;
   }
@@ -3307,7 +2626,7 @@ class NullableChoiceField extends FieldBase {
     const values = Object.values(options);
     super(name, {
       defaultValue: null,
-      schema: nullable(picklist(values))
+      schema: v.nullable(v.picklist(values))
     }, fieldOptions);
     this.#options = options;
   }
@@ -3331,7 +2650,7 @@ class DateTimeField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: /* @__PURE__ */ new Date(),
-      schema: instance(Date)
+      schema: v.instance(Date)
     }, options);
   }
   getDefault() {
@@ -3350,7 +2669,7 @@ class NullableDateTimeField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(instance(Date))
+      schema: v.nullable(v.instance(Date))
     }, options);
   }
   transformValueFromDataverse(value) {
@@ -3367,7 +2686,7 @@ class DateField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
-      schema: instance(Date)
+      schema: v.instance(Date)
     }, options);
   }
   transformValueFromDataverse(value) {
@@ -3385,7 +2704,7 @@ class NullableDateField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(instance(Date))
+      schema: v.nullable(v.instance(Date))
     }, options);
   }
   transformValueFromDataverse(value) {
@@ -3403,7 +2722,7 @@ class FormattedField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(string$1())
+      schema: v.nullable(v.string())
     }, { ...options, readonly: true });
     this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
   }
@@ -3414,10 +2733,10 @@ class ImageField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(object({
-        url: optional(string$1()),
-        fullSizeUrl: optional(string$1()),
-        data: optional(nullable(instance(Blob)))
+      schema: v.nullable(v.object({
+        url: v.optional(v.string()),
+        fullSizeUrl: v.optional(v.string()),
+        data: v.optional(v.nullable(v.instance(Blob)))
       }))
     }, options);
   }
@@ -3430,13 +2749,16 @@ class ImageField extends FieldBase {
     const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.name);
     return { url, fullSizeUrl };
   }
+  //When using conditional operations (If-Match: Etag) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
   async transformValueToDataverse(value) {
-    if (value == null) return null;
-    if (!value.data) return SKIP;
-    if (value.data instanceof Blob) {
-      return blobToBase64(value.data);
+    return SKIP;
+  }
+  async afterSave(ctx, value) {
+    if (value?.data === null) {
+      await ctx.table.deletePropertyValue(this.toDataverseName, ctx.recordId);
+    } else if (value?.data instanceof Blob) {
+      await ctx.table.updatePropertyValue(this.toDataverseName, ctx.recordId, blobToBase64(value.data));
     }
-    return null;
   }
 }
 async function blobToBase64(blob) {
@@ -3454,10 +2776,10 @@ class FileField extends FieldBase {
   constructor(name, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(object({
-        name: string$1(),
-        url: optional(string$1()),
-        data: optional(nullable(instance(Blob)))
+      schema: v.nullable(v.object({
+        name: v.string(),
+        url: v.optional(v.string()),
+        data: v.optional(v.nullable(v.instance(Blob)))
       }))
     }, { ...options, readonly: true });
     this.fromDataverseName = `${name}_name`;
@@ -3493,7 +2815,7 @@ class JsonField extends FieldBase {
   transformValueFromDataverse(value) {
     if (value == null) return this.getDefault();
     const raw = typeof value === "string" ? JSON.parse(value) : value;
-    return parse(this.schema, raw);
+    return v.parse(this.schema, raw);
   }
   transformValueToDataverse(value) {
     if (value == null) return null;
@@ -3562,7 +2884,7 @@ class LookupIdProperty extends FieldBase {
   constructor(name, getTable, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(NON_EMPTY_STRING_SCHEMA)
+      schema: v.nullable(NON_EMPTY_STRING_SCHEMA)
     }, options);
     this.navigationName = name;
     this.#getTable = getTable;
@@ -3593,7 +2915,7 @@ class CollectionProperty extends FieldBase {
   constructor(name, getTable, options) {
     super(name, {
       defaultValue: [],
-      schema: array(lazy(() => buildObjectSchema(getTable().fields)))
+      schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields)))
     }, options);
     this.#getTable = getTable;
   }
@@ -3634,7 +2956,7 @@ class CollectionIdsProperty extends FieldBase {
   constructor(name, getTable, options) {
     super(name, {
       defaultValue: [],
-      schema: array(NON_EMPTY_STRING_SCHEMA)
+      schema: v.array(NON_EMPTY_STRING_SCHEMA)
     }, options);
     this.#getTable = getTable;
   }
@@ -3678,7 +3000,7 @@ class LookupProperty extends FieldBase {
   constructor(name, getTable, options) {
     super(name, {
       defaultValue: null,
-      schema: nullable(lazy(() => buildObjectSchema(getTable().fields)))
+      schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields)))
     }, options);
     this.#getTable = getTable;
   }

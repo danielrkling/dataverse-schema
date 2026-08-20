@@ -2,8 +2,6 @@ import { defineConfig } from "vite";
 import dts from "vite-plugin-dts";
 import path from "path";
 
-const src = path.resolve(__dirname, "src");
-
 export default defineConfig(({ mode }) => {
   if (mode === "browser-test") {
     return {
@@ -26,68 +24,33 @@ export default defineConfig(({ mode }) => {
     };
   }
 
-  if (mode === "tanstack-db") {
-    return {
-      build: {
-        emptyOutDir: false,
-        lib: {
-          entry: path.resolve(src, "tanstack-db/index.ts"),
-          formats: ["es"],
-          fileName: () => "tanstack-db.mjs",
-        },
-        rollupOptions: {
-          external: ["@tanstack/db", "dataverse-schema"],
-        },
-        minify: false,
-        target: "esnext",
-      },
-
-      plugins: [
-        dts({
-          rollupTypes: false,
-          insertTypesEntry: true,
-          outDir: "dist",
-          entryRoot: src,
-          tsconfigPath: path.resolve(__dirname, "tsconfig.tanstack-db.json"),
-          compilerOptions: {
-            target: "esnext",
-          },
-          beforeWriteFile(filePath, content) {
-            if (path.basename(filePath) === "dataverse-schema.d.ts") {
-              return {
-                filePath: path.resolve("dist", "tanstack-db.d.ts"),
-                content,
-              };
-            }
-          },
-        }),
-      ],
-    };
-  }
-
   return {
     build: {
       lib: {
-        entry: path.resolve(src, "index.ts"),
+        entry: {
+          index: path.resolve(__dirname, 'src/index.ts'),
+          "tanstack-db": path.resolve(__dirname, 'src/tanstack-db/index.ts')
+        },
         formats: ["es"],
-        fileName: () => "dataverse-schema.mjs",
+              fileName: (format, entryName) => {
+                        if (entryName === 'tanstack-db') {
+          return 'tanstack-db/index.mjs';
+        }
+        return `${entryName}.mjs`;
+      },
       },
       rollupOptions: {
-        external: ["@tanstack/db"],
+        external: ["@tanstack/db","valibot","dataverse-schema"],
       },
       minify: false,
       target: "esnext",
     },
 
     plugins: [
-      dts({
-        rollupTypes: true,
-        outDir: "dist",
-        entryRoot: src,
-        compilerOptions: {
-          target: "esnext",
-        },
-      }),
+    dts({
+      insertTypesEntry: true,
+      tsconfigPath: './tsconfig.json',
+    }),
     ],
   };
 });

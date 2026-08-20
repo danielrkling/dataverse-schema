@@ -1,6 +1,6 @@
 import { CollectionConfig, PendingMutation } from '@tanstack/db';
 import { IDBPDatabase } from 'idb';
-import { DataverseTable, GenericProperties, Infer } from 'dataverse-schema';
+import { DataverseTable, GenericProperties, Infer } from '../index.ts';
 import { DataverseCollectionConfig } from './collection';
 export type DataverseOfflineCollectionConfig<T extends GenericProperties> = DataverseCollectionConfig<T>;
 export type QueuedMutation = {
