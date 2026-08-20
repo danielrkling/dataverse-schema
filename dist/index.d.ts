@@ -894,7 +894,7 @@ declare class FormattedField extends FieldBase<string | null> {
   constructor(name: string, options?: FieldOptions<string | null>);
 }
 declare class ImageField extends FieldBase<ImageRef | null> {
-  kind: "image";
+  kind: "value";
   type: "image";
   constructor(name: string, options?: FieldOptions<ImageRef | null>);
   transformValueFromDataverse(value: any, ctx?: TransformContext): ImageRef | null;

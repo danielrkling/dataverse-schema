@@ -337,7 +337,7 @@ export class FormattedField extends FieldBase<string | null> {
 }
 
 export class ImageField extends FieldBase<ImageRef | null> {
-  kind = "image" as const;
+  kind = "value" as const;
   type = "image" as const;
   constructor(name: string, options?: FieldOptions<ImageRef | null>) {
     super(name, {
@@ -370,9 +370,9 @@ export class ImageField extends FieldBase<ImageRef | null> {
 
   async afterSave(ctx: TransformContext, value: any): Promise<void> {
     if (value?.data === null){
-      await ctx.table.deletePropertyValue(this.toDataverseName,ctx.recordId)
+      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name)
     }else if (value?.data instanceof Blob){
-      await ctx.table.updatePropertyValue(this.toDataverseName,ctx.recordId,blobToBase64(value.data))
+      await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, "image", value.data)
     }
   }
 }

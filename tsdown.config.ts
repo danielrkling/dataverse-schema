@@ -12,10 +12,10 @@ export default defineConfig({
   
   // 3. Enable automatic isolated type-bundling
   dts: true,
-  
-  // 4. Mark dependencies & peer dependencies as external
-  external: ['@tanstack/db', 'valibot', 'dataverse-schema'],
-  
+  deps:{
+    neverBundle:['@tanstack/db', 'valibot', 'dataverse-schema']
+  }, 
+
   // 5. Build configuration optimization
   minify: false,
   platform: 'browser',

@@ -1661,7 +1661,7 @@ var ODataQuery = class ODataQuery {
 		if (keys.length === 0) {
 			this.#fields = [];
 			this.#selectedKeys = [];
-			for (const [key, prop] of Object.entries(this.#table.fields)) if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
+			for (const [key, prop] of Object.entries(this.#table.fields)) if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file" || prop.type === "image") {
 				this.#fields.push([prop]);
 				this.#selectedKeys.push(key);
 			}
@@ -2830,7 +2830,7 @@ var FormattedField = class extends FieldBase {
 	}
 };
 var ImageField = class extends FieldBase {
-	kind = "image";
+	kind = "value";
 	type = "image";
 	constructor(name, options) {
 		super(name, {
@@ -2856,17 +2856,10 @@ var ImageField = class extends FieldBase {
 		return SKIP;
 	}
 	async afterSave(ctx, value) {
-		if (value?.data === null) await ctx.table.deletePropertyValue(this.toDataverseName, ctx.recordId);
-		else if (value?.data instanceof Blob) await ctx.table.updatePropertyValue(this.toDataverseName, ctx.recordId, blobToBase64(value.data));
+		if (value?.data === null) await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name);
+		else if (value?.data instanceof Blob) await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, "image", value.data);
 	}
 };
-async function blobToBase64(blob) {
-	const buffer = await blob.arrayBuffer();
-	const bytes = new Uint8Array(buffer);
-	let binary = "";
-	for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-	return btoa(binary);
-}
 var FileField = class extends FieldBase {
 	type = "file";
 	kind = "file";

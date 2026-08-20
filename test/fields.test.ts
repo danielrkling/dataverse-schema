@@ -203,7 +203,7 @@ test("nullableChoice transformValueToDataverse maps string to number", () => {
 test("image field type", () => {
   const f = image("profilepic")
   expect(f.type).toBe("image")
-  expect(f.kind).toBe("image")
+  expect(f.kind).toBe("value")
   expect(f.getReadOnly()).toBe(false)
   expect(f.getDefault()).toBeNull()
 })
