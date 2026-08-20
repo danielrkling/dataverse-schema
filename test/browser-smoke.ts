@@ -34,6 +34,13 @@ function assert(cond: unknown, msg: string) {
   if (!cond) throw new Error(`Assertion failed: ${msg}`)
 }
 
+// A valid 1x1 PNG so Dataverse can actually process the uploaded image bytes.
+function pngBlob(): Blob {
+  const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+  return new Blob([bytes], { type: "image/png" })
+}
+
 let passed = 0
 let failed = 0
 async function test(name: string, fn: () => Promise<void> | void) {
@@ -102,6 +109,9 @@ const TestTable = new DataverseTable({
 async function run() {
   // IDs we create, so we can clean up at the end.
   const created: string[] = []
+  let parentId: string | undefined
+  let childId: string | undefined
+  let child2Id: string | undefined
 
   try {
     await test("WhoAmI returns a userId", async () => {
@@ -110,31 +120,36 @@ async function run() {
     })
 
     // --- Seed (assume the table starts empty) ---
-    const parentId = await TestTable0.insertRecord({
-      name: "smoke-parent",
-      int: 100,
-      bool: true,
-      text: "parent",
+    await test("seed parent record", async () => {
+      parentId = await TestTable0.insertRecord({
+        name: "smoke-parent",
+        int: 100,
+        bool: true,
+        text: "parent",
+      })
+      assert(parentId, "parent id missing")
+      created.push(parentId)
     })
-    created.push(parentId)
 
-    // Child exercises the self-lookup plus the file/image afterSave uploads.
-    const childId = await TestTable.insertRecord({
-      name: "smoke-child",
-      int: 5,
-      bool: false,
-      text: "child",
-      testLookup: parentId,
-      file: { name: "smoke.txt", data: new Blob(["hello file"]) },
-      image: { data: new Blob(["fake-image-bytes"]) },
+    await test("seed child record (no file/image)", async () => {
+      assert(parentId, "parent must exist first")
+      childId = await TestTable.insertRecord({
+        name: "smoke-child",
+        int: 5,
+        bool: false,
+        text: "child",
+        testLookup: parentId,
+      })
+      assert(childId, "child id missing")
+      created.push(childId)
     })
-    created.push(childId)
 
     await test("insertRecord returned GUIDs", () => {
       assert(parentId && childId, "insert ids missing")
     })
 
     await test("getRecords filter/orderby/top (OData, transformed)", async () => {
+      assert(childId, "child must exist")
       const rows = await TestTable.getRecords({
         filter: "nnsyc200_int gt 0",
         orderby: "nnsyc200_name asc",
@@ -166,23 +181,27 @@ async function run() {
     })
 
     await test("getPropertyValue (value column)", async () => {
+      assert(childId, "child must exist")
       const v = await TestTable.getPropertyValue("text", childId)
       assert(v === "child", `expected 'child', got ${JSON.stringify(v)}`)
     })
 
     await test("updatePropertyValue + read back", async () => {
+      assert(childId, "child must exist")
       await TestTable.updatePropertyValue("text", childId, "child-updated")
       const v = await TestTable.getPropertyValue("text", childId)
       assert(v === "child-updated", `expected updated text, got ${JSON.stringify(v)}`)
     })
 
     await test("deletePropertyValue clears value", async () => {
+      assert(childId, "child must exist")
       await TestTable.deletePropertyValue("text", childId)
       const v = await TestTable.getPropertyValue("text", childId)
       assert(v === null || v === undefined, `expected null, got ${JSON.stringify(v)}`)
     })
 
     await test("updateRecord persists", async () => {
+      assert(childId, "child must exist")
       await TestTable.updateRecord(childId, { int: 42 })
       const rows = await TestTable.getRecords({
         filter: `nnsyc200_test_tableid eq ${childId}`,
@@ -191,9 +210,33 @@ async function run() {
     })
 
     await test("upsertRecord (update path) persists", async () => {
+      assert(childId, "child must exist")
       await TestTable.upsertRecord(childId, { text: "upserted" })
       const v = await TestTable.getPropertyValue("text", childId)
       assert(v === "upserted", `upsert text not persisted, got ${JSON.stringify(v)}`)
+    })
+
+    // --- afterSave upload paths (isolated so a failure can't abort the run) ---
+    await test("file + image upload via afterSave (updateRecord)", async () => {
+      assert(childId, "child must exist")
+      await TestTable.updateRecord(childId, {
+        file: { name: "smoke.txt", data: new Blob(["hello file"]) },
+        image: { data: pngBlob() },
+      })
+    })
+
+    await test("file + image upload via afterSave (insertRecord)", async () => {
+      assert(parentId, "parent must exist first")
+      child2Id = await TestTable.insertRecord({
+        name: "smoke-child2",
+        int: 7,
+        text: "child2",
+        testLookup: parentId,
+        file: { name: "smoke2.txt", data: new Blob(["hello2"]) },
+        image: { data: pngBlob() },
+      })
+      assert(child2Id, "child2 id missing")
+      created.push(child2Id)
     })
   } catch (e) {
     reportError("unexpected error in run()", e)
