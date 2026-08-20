@@ -372,7 +372,7 @@ export class ImageField extends FieldBase<ImageRef | null> {
     if (value?.data === null){
       await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name)
     }else if (value?.data instanceof Blob){
-      await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, "image", value.data)
+      await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, "image.png", value.data)
     }
   }
 }
