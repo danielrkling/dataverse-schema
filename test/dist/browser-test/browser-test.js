@@ -342,7 +342,7 @@
      *   "00000000-0000-0000-0000-000000000001", "name")
      */
     async getPropertyValue(entitySetName, id, propertyName, options) {
-      return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r.value);
+      return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r ? r.value : void 0);
     }
     /**
      * Retrieves a property's raw value (e.g. file content) via `/$value`.
@@ -3633,7 +3633,7 @@ ${error.stack ?? ""}` : error);
         assert(child.testLookup === parentId, "lookupId value not persisted");
       });
       await test("fetchOdata select + filter", async () => {
-        const q = fetchOdata(TestTable).select((f) => ({ name: f.name, int: f.int })).filter("nnsyc200_int gt 0").toString();
+        const q = fetchOdata(TestTable).select("name", "int").filter("nnsyc200_int gt 0").toString();
         const rows = await client.getRecords(TestTable.entitySetName, { query: q });
         assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows");
       });

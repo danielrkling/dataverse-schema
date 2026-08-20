@@ -470,7 +470,7 @@ export class DataverseClient {
      *   "00000000-0000-0000-0000-000000000001", "name")
      */
     async getPropertyValue(entitySetName: Name, id: string, propertyName: Name, options?: RequestOptions): Promise<any> {
-        return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r.value);
+        return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r ? r.value : undefined);
     }
 
     /**

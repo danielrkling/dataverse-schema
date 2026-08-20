@@ -163,7 +163,7 @@ async function run() {
 
     await test("fetchOdata select + filter", async () => {
       const q = fetchOdata(TestTable)
-        .select((f) => ({ name: f.name, int: f.int }))
+        .select("name", "int")
         .filter("nnsyc200_int gt 0")
         .toString()
       const rows = await client.getRecords(TestTable.entitySetName, { query: q })
