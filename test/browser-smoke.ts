@@ -8,11 +8,18 @@ import {
   boolean,
   datetime,
   date,
+  lookup,
   lookupId,
   file,
   image,
   fetchOdata,
   fetchXml,
+  eq,
+  gt,
+  lt,
+  and,
+  count,
+  sum,
 } from "../src"
 
 const output = document.createElement("pre")
@@ -90,6 +97,7 @@ const TestTable = new DataverseTable({
     bool: boolean("nnsyc200_boolean"),
     modifiedOn: datetime("modifiedon"),
     testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0),
+    testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTable0),
     datetime: datetime("nnsyc200_datetime"),
     dateOnly: date("nnsyc200_dateonly"),
     stateCode: number("statecode"),
@@ -136,8 +144,10 @@ async function run() {
       childId = await TestTable.insertRecord({
         name: "smoke-child",
         int: 5,
-        bool: false,
+        bool: true,
         text: "child",
+        datetime: new Date("2024-01-15T10:30:00Z"),
+        dateOnly: new Date("2024-01-15T00:00:00Z"),
         testLookup: parentId,
       })
       assert(childId, "child id missing")
@@ -178,6 +188,83 @@ async function run() {
         .toString()
       const rows = await client.getRecords(TestTable.entitySetName, { query: fx })
       assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows")
+    })
+
+    // --- In-depth OData (via execute() so transforms are applied) ---
+    await test("fetchOdata filter with comparison operators (FilterExpr) + transforms", async () => {
+      const rows = await fetchOdata(TestTable)
+        .select("name", "int", "bool", "datetime")
+        .filter((f) => and(gt(f.int, 0), lt(f.int, 1000)))
+        .orderby("name", "asc")
+        .top(10)
+        .execute()
+      assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows")
+      const r = rows[0]
+      assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`)
+      assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`)
+      assert(typeof r.name === "string", `name not transformed: ${JSON.stringify(r.name)}`)
+      assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`)
+    })
+
+    await test("fetchOdata expand navigation lookup (join) + nested transforms", async () => {
+      const rows = await fetchOdata(TestTable)
+        .select("name")
+        .expand("testLookupNav", (q) => q.select("name", "createdOn", "int"))
+        .filter(`nnsyc200_test_tableid eq ${childId}`)
+        .execute()
+      assert(Array.isArray(rows) && rows.length === 1, "expected the child row")
+      const child = rows[0]
+      assert(
+        child.testLookupNav && child.testLookupNav.name === "smoke-parent",
+        `expand failed: ${JSON.stringify(child.testLookupNav)}`,
+      )
+      // the related record must also be transformed (createdOn is a Date, int a number)
+      assert(
+        child.testLookupNav.createdOn instanceof Date,
+        `related transform failed: ${JSON.stringify(child.testLookupNav?.createdOn)}`,
+      )
+      assert(
+        typeof child.testLookupNav.int === "number",
+        `related int transform failed: ${JSON.stringify(child.testLookupNav?.int)}`,
+      )
+    })
+
+    // --- In-depth fetchXml (via execute() so transforms are applied) ---
+    await test("fetchXml filter with FilterExpr (and/eq) + transforms", async () => {
+      const rows = await fetchXml(TestTable)
+        .select((f) => ({ name: f.name, int: f.int, bool: f.bool, datetime: f.datetime }))
+        .filter((f) => and(eq(f.name, "smoke-child"), gt(f.int, 0)))
+        .execute()
+      assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows")
+      const r = rows[0]
+      assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`)
+      assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`)
+      assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`)
+    })
+
+    await test("fetchXml join (link-entity) to parent", async () => {
+      const base = fetchXml(TestTable)
+        .select((f) => ({ name: f.name }))
+        .join("inner", TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name })))
+        .filter(`nnsyc200_test_tableid eq ${childId}`)
+      // join correctness (raw query preserves the aliased parent column)
+      const raw = await client.getRecords(TestTable.entitySetName, { query: base.toString() })
+      assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join")
+      assert(raw[0].parentName === "smoke-parent", `join failed: ${JSON.stringify(raw[0])}`)
+      // transforms applied to the main entity
+      const transformed = await base.execute()
+      const child = transformed[0]
+      assert(child.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(child.datetime)}`)
+      assert(typeof child.int === "number", `int not transformed: ${JSON.stringify(child.int)}`)
+    })
+
+    await test("fetchXml aggregate (count + sum)", async () => {
+      const fx = fetchXml(TestTable)
+        .apply((f) => ({ count: count(f.id), totalInt: sum(f.int) }))
+        .toString()
+      const rows = await client.getRecords(TestTable.entitySetName, { query: fx })
+      assert(Array.isArray(rows) && rows.length >= 1, "expected aggregate row")
+      assert(rows[0].count !== undefined, `aggregate count missing: ${JSON.stringify(rows[0])}`)
     })
 
     await test("getPropertyValue (value column)", async () => {

@@ -1040,6 +1040,33 @@
   }
 
   //#endregion
+  //#region src/schemas/lazy/lazy.ts
+  /**
+  * Creates a lazy schema.
+  *
+  * @param getter The schema getter.
+  *
+  * @returns A lazy schema.
+  */
+  /* @__NO_SIDE_EFFECTS__ */
+  function lazy(getter) {
+  	return {
+  		kind: "schema",
+  		type: "lazy",
+  		reference: lazy,
+  		expects: "unknown",
+  		async: false,
+  		getter,
+  		get "~standard"() {
+  			return /* @__PURE__ */ _getStandardProps(this);
+  		},
+  		"~run"(dataset, config$1) {
+  			return this.getter(dataset.value)["~run"](dataset, config$1);
+  		}
+  	};
+  }
+
+  //#endregion
   //#region src/schemas/nullable/nullable.ts
   /* @__NO_SIDE_EFFECTS__ */
   function nullable(wrapped, default_) {
@@ -1298,6 +1325,128 @@
     return path.map(propertyName).join("/");
   }
 
+  function renderFilterOdata(node, scope) {
+    const fieldName = (path) => `${scope ? `${scope}/` : ""}${fieldPathName(path)}`;
+    switch (node.type) {
+      case "comparison":
+        return `(${fieldName(node.field)} ${node.operator} ${wrapString(node.value)})`;
+      case "null":
+        return `${fieldName(node.field)} ${node.positive ? "eq" : "ne"} null`;
+      case "contains":
+        return `contains(${fieldName(node.field)},${wrapString(node.value)})`;
+      case "startsWith":
+        return `startswith(${fieldName(node.field)},${wrapString(node.value)})`;
+      case "endsWith":
+        return `endswith(${fieldName(node.field)},${wrapString(node.value)})`;
+      case "compare":
+        return `(${fieldName(node.field)} ${node.operator} ${fieldName(node.otherField)})`;
+      case "lambda":
+        return `${fieldPathName(node.field)}/${node.operator}(${node.alias}: ${renderFilterOdata(node.condition, node.alias)})`;
+      case "fn": {
+        const field = wrapString(fieldName(node.field));
+        const vals = node.values.map(wrapString);
+        if (vals.length === 0) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field})`;
+        if (vals.length === 1) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue=${vals[0]})`;
+        if (node.fnName === "Between" || node.fnName === "NotBetween") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+        if (node.fnName === "InFiscalPeriodAndYear" || node.fnName === "InOrAfterFiscalPeriodAndYear" || node.fnName === "InOrBeforeFiscalPeriodAndYear") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue1=${vals[0]},PropertyValue2=${vals[1]})`;
+        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+      }
+      case "raw":
+        return node.value;
+      case "and":
+        return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" and ")})`;
+      case "or":
+        return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" or ")})`;
+      case "not":
+        return `not(${renderFilterOdata(node.condition, scope)})`;
+    }
+  }
+
+  function escapeXml(value) {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  }
+  function renderFilterFetchXml(node) {
+    const fieldName = (path) => fieldPathName(path);
+    switch (node.type) {
+      case "comparison":
+        return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${node.value === null ? "" : escapeXml(String(node.value))}" />`;
+      case "null":
+        return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${node.positive ? "null" : "not-null"}" />`;
+      case "contains":
+        return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="like" value="%${escapeXml(node.value)}%" />`;
+      case "startsWith":
+        return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="begins-with" value="${escapeXml(node.value)}" />`;
+      case "endsWith":
+        return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="ends-with" value="${escapeXml(node.value)}" />`;
+      case "compare":
+        return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(fieldName(node.otherField))}" />`;
+      case "lambda":
+        return `<condition entityname="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${escapeXml(`${node.alias}: ${renderFilterFetchXml(node.condition)}`)}" />`;
+      case "fn": {
+        const attr = escapeXml(fieldName(node.field));
+        const op = escapeXml(node.operator);
+        if (node.values.length === 0) return `<condition attribute="${attr}" operator="${op}" />`;
+        if (node.values.length === 1) return `<condition attribute="${attr}" operator="${op}" value="${escapeXml(String(node.values[0]))}" />`;
+        return `<condition attribute="${attr}" operator="${op}">${node.values.map((value) => `<value>${escapeXml(String(value))}</value>`).join("")}</condition>`;
+      }
+      case "raw":
+        return node.value;
+      case "and":
+        return node.conditions.length === 0 ? "" : `<filter type="and">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
+      case "or":
+        return node.conditions.length === 0 ? "" : `<filter type="or">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
+      case "not":
+        return `<filter type="and"><filter type="or">${renderFilterFetchXml(node.condition)}</filter></filter>`;
+    }
+  }
+
+  function pathOf(field) {
+    return field.path;
+  }
+  class FilterExpr {
+    constructor(node) {
+      this.node = node;
+    }
+    toString() {
+      return this.toOdata();
+    }
+    toOdata() {
+      return renderFilterOdata(this.node);
+    }
+    toFetchXml() {
+      return renderFilterFetchXml(this.node);
+    }
+    getNode() {
+      return this.node;
+    }
+  }
+  function eq(field, value) {
+    if (value instanceof FieldRef) {
+      return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) });
+    }
+    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value });
+  }
+  function gt(field, value) {
+    if (value instanceof FieldRef) {
+      return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) });
+    }
+    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value });
+  }
+  function lt(field, value) {
+    if (value instanceof FieldRef) {
+      return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) });
+    }
+    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value });
+  }
+  function and(...conditions) {
+    const valid = conditions.filter((c) => c != null && c !== "");
+    const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
+    return new FilterExpr({ type: "and", conditions: exprs.map((expr) => expr.getNode()) });
+  }
+
+  function fieldName(field) {
+    return typeof field === "string" ? field : field.toString();
+  }
   class GroupByExpr {
     field;
     fieldRef;
@@ -1319,6 +1468,12 @@
       this.fieldRef = fieldRef;
       this.path = fieldRef?.path;
     }
+  }
+  function sum(field) {
+    return new Aggregation("sum", fieldName(field), field);
+  }
+  function count(field) {
+    return new Aggregation("count", field ? fieldName(field) : void 0, field);
   }
 
   function filterInputNode(filter, proxy) {
@@ -2467,6 +2622,13 @@
       return value;
     }
   }
+  function buildObjectSchema(fields) {
+    const shape = {};
+    for (const [key, field] of Object.entries(fields)) {
+      shape[key] = field.schema;
+    }
+    return object(shape);
+  }
   class BooleanField extends FieldBase {
     kind = "value";
     type = "boolean";
@@ -2675,6 +2837,45 @@
   }
   function lookupId(name, getTable) {
     return new LookupIdProperty(name, getTable);
+  }
+  class LookupProperty extends FieldBase {
+    kind = "navigation";
+    type = "lookup";
+    #getTable;
+    constructor(name, getTable, options) {
+      super(name, {
+        defaultValue: null,
+        schema: nullable(lazy(() => buildObjectSchema(getTable().fields)))
+      }, options);
+      this.#getTable = getTable;
+    }
+    #table;
+    get table() {
+      return this.#table ??= this.#getTable();
+    }
+    transformValueFromDataverse(value) {
+      return value == null ? null : this.table.transformValueFromDataverse(value);
+    }
+    transformValueToDataverse() {
+      return SKIP;
+    }
+    async afterSave(ctx, value) {
+      if (value === null) {
+        await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.name);
+      } else {
+        const childId = await this.table.upsertRecord(void 0, value);
+        await ctx.client.associateRecord(
+          ctx.table.entitySetName,
+          ctx.recordId,
+          this.name,
+          this.table.entitySetName,
+          childId
+        );
+      }
+    }
+  }
+  function lookup(name, getTable) {
+    return new LookupProperty(name, getTable);
   }
 
   function buildFlatFieldProxy(table) {
@@ -3570,6 +3771,7 @@ ${error.stack ?? ""}` : error);
       bool: boolean("nnsyc200_boolean"),
       modifiedOn: datetime("modifiedon"),
       testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0),
+      testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTable0),
       datetime: datetime("nnsyc200_datetime"),
       dateOnly: date("nnsyc200_dateonly"),
       stateCode: number("statecode"),
@@ -3610,8 +3812,10 @@ ${error.stack ?? ""}` : error);
         childId = await TestTable.insertRecord({
           name: "smoke-child",
           int: 5,
-          bool: false,
+          bool: true,
           text: "child",
+          datetime: /* @__PURE__ */ new Date("2024-01-15T10:30:00Z"),
+          dateOnly: /* @__PURE__ */ new Date("2024-01-15T00:00:00Z"),
           testLookup: parentId
         });
         assert(childId, "child id missing");
@@ -3641,6 +3845,56 @@ ${error.stack ?? ""}` : error);
         const fx = fetchXml(TestTable).select((f) => ({ name: f.name, int: f.int })).filter("nnsyc200_int gt 0").top(10).toString();
         const rows = await client.getRecords(TestTable.entitySetName, { query: fx });
         assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows");
+      });
+      await test("fetchOdata filter with comparison operators (FilterExpr) + transforms", async () => {
+        const rows = await fetchOdata(TestTable).select("name", "int", "bool", "datetime").filter((f) => and(gt(f.int, 0), lt(f.int, 1e3))).orderby("name", "asc").top(10).execute();
+        assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows");
+        const r = rows[0];
+        assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`);
+        assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`);
+        assert(typeof r.name === "string", `name not transformed: ${JSON.stringify(r.name)}`);
+        assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`);
+      });
+      await test("fetchOdata expand navigation lookup (join) + nested transforms", async () => {
+        const rows = await fetchOdata(TestTable).select("name").expand("testLookupNav", (q) => q.select("name", "createdOn", "int")).filter(`nnsyc200_test_tableid eq ${childId}`).execute();
+        assert(Array.isArray(rows) && rows.length === 1, "expected the child row");
+        const child = rows[0];
+        assert(
+          child.testLookupNav && child.testLookupNav.name === "smoke-parent",
+          `expand failed: ${JSON.stringify(child.testLookupNav)}`
+        );
+        assert(
+          child.testLookupNav.createdOn instanceof Date,
+          `related transform failed: ${JSON.stringify(child.testLookupNav?.createdOn)}`
+        );
+        assert(
+          typeof child.testLookupNav.int === "number",
+          `related int transform failed: ${JSON.stringify(child.testLookupNav?.int)}`
+        );
+      });
+      await test("fetchXml filter with FilterExpr (and/eq) + transforms", async () => {
+        const rows = await fetchXml(TestTable).select((f) => ({ name: f.name, int: f.int, bool: f.bool, datetime: f.datetime })).filter((f) => and(eq(f.name, "smoke-child"), gt(f.int, 0))).execute();
+        assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows");
+        const r = rows[0];
+        assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`);
+        assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`);
+        assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`);
+      });
+      await test("fetchXml join (link-entity) to parent", async () => {
+        const base = fetchXml(TestTable).select((f) => ({ name: f.name })).join("inner", TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter(`nnsyc200_test_tableid eq ${childId}`);
+        const raw = await client.getRecords(TestTable.entitySetName, { query: base.toString() });
+        assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join");
+        assert(raw[0].parentName === "smoke-parent", `join failed: ${JSON.stringify(raw[0])}`);
+        const transformed = await base.execute();
+        const child = transformed[0];
+        assert(child.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(child.datetime)}`);
+        assert(typeof child.int === "number", `int not transformed: ${JSON.stringify(child.int)}`);
+      });
+      await test("fetchXml aggregate (count + sum)", async () => {
+        const fx = fetchXml(TestTable).apply((f) => ({ count: count(f.id), totalInt: sum(f.int) })).toString();
+        const rows = await client.getRecords(TestTable.entitySetName, { query: fx });
+        assert(Array.isArray(rows) && rows.length >= 1, "expected aggregate row");
+        assert(rows[0].count !== void 0, `aggregate count missing: ${JSON.stringify(rows[0])}`);
       });
       await test("getPropertyValue (value column)", async () => {
         assert(childId, "child must exist");
