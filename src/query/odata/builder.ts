@@ -1,15 +1,15 @@
-import { DataverseTable } from "./table"
-import { GenericProperties, Infer } from "./types"
-import { LookupProperty, CollectionProperty } from "./fields"
-import { Etag } from "./util"
-import { FilterExpr, FieldRef } from "./query"
-import { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "./query/shared/aggregation"
-import { filterInputNode } from "./query/filter/input"
-import type { FilterNode } from "./query/filter/ast"
-import { ODataAggregateAst, ODataApplyAst, ODataSelectAst, FieldPath, serializeODataAggregate, serializeODataSelect } from "./query/odata/ast"
-import type { FieldBase } from "./fields"
+import { DataverseTable } from "../../table"
+import { GenericProperties, Infer } from "../../types"
+import { LookupProperty, CollectionProperty } from "../../fields"
+import { Etag } from "../../util"
+import { FilterExpr, FieldRef } from "../filter/expr"
+import { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "../shared/aggregation"
+import { filterInputNode } from "../filter/input"
+import type { FilterNode } from "../filter/ast"
+import { ODataAggregateAst, ODataApplyAst, ODataSelectAst, FieldPath, serializeODataAggregate, serializeODataSelect, toODataFilterNode, toODataPath } from "./ast"
+import type { FieldBase } from "../../fields"
 
-export { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "./query/shared/aggregation"
+export { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "../shared/aggregation"
 
 // --- Internal proxy & key types ---
 
@@ -66,6 +66,7 @@ export interface ApplyQuery<T extends GenericProperties, TResult extends Record<
   orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): ApplyQuery<T, TResult>
   orderby(alias: string, direction?: "asc" | "desc"): ApplyQuery<T, TResult>
   top(n: number): ApplyQuery<T, TResult>
+  toAst(): ODataAggregateAst
   toString(): string
   execute(): Promise<TResult[]>
   iterate(options?: { pageSize?: number }): AsyncGenerator<TResult>
@@ -98,6 +99,7 @@ export interface SelectQuery<TAll extends GenericProperties, TChosen extends Rec
   orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>
   orderby(alias: string, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>
   top(n: number): SelectQuery<TAll, TChosen, TResult>
+  toAst(): ODataSelectAst
   toString(): string
   execute(): Promise<TResult[]>
   iterate(options?: { pageSize?: number }): AsyncGenerator<TResult>
@@ -190,10 +192,10 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
 
   toAst(): ODataAggregateAst {
     return {
-      kind: "odata-aggregate",
-      filters: [...this._filters],
+      kind: "aggregate",
+      filters: this._filters.map(toODataFilterNode),
       apply: this._apply,
-      orderby: this._orderby.map((order) => ({ field: { kind: "alias", name: order.name }, direction: order.dir })),
+       orderby: this._orderby.map((order) => ({ field: order.name, direction: order.dir })),
       top: this._top,
     }
   }
@@ -253,12 +255,12 @@ type SubQueryMode = "collection" | "lookup"
 
 class ODataQuery<T extends GenericProperties> {
   #table: DataverseTable<T>
-  #fields: string[] = []
+  #fields: FieldPath[] = []
   #selectedKeys: string[] = []
   #filters: FilterNode[] = []
   #expands: Array<{ navigation: LookupProperty<any> | CollectionProperty<any>; key: string; query: ODataSelectAst }> = []
   #expandMeta: ExpandMeta[] = []
-  #orderby: Array<{ name: string; dir: "asc" | "desc" }> = []
+  #orderby: Array<{ field: FieldPath; direction: "asc" | "desc" }> = []
   #top?: number
   #proxy: ODataFieldProxy<T>
   #subQueryMode?: SubQueryMode
@@ -281,12 +283,12 @@ class ODataQuery<T extends GenericProperties> {
       this.#selectedKeys = []
       for (const [key, prop] of Object.entries(this.#table.fields) as [string, any][]) {
         if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
-          this.#fields.push(prop.fromDataverseName ?? prop.name)
+          this.#fields.push([prop])
           this.#selectedKeys.push(key)
         }
       }
     } else {
-      this.#fields = keys.map((k: any) => this.#proxy[k].toString() as string)
+      this.#fields = keys.map((k: any) => (this.#proxy[k] as FieldRef<any>).path)
       this.#selectedKeys = keys as string[]
     }
     return this
@@ -336,9 +338,12 @@ class ODataQuery<T extends GenericProperties> {
     if (this.#subQueryMode === "lookup") throw new Error("orderby() is not supported in lookup expands")
     if (typeof nameOrSelector === "function") {
       const result = nameOrSelector(this.#proxy)
-      this.#orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction })
+      this.#orderby.push({
+        field: typeof result === "string" ? pathForName(this.#table, result) : result.path,
+        direction,
+      })
     } else {
-      this.#orderby.push({ name: nameOrSelector, dir: direction })
+      this.#orderby.push({ field: pathForName(this.#table, nameOrSelector), direction })
     }
     return this
   }
@@ -353,18 +358,18 @@ class ODataQuery<T extends GenericProperties> {
     expr: (f: ODataFieldProxy<T>) => R,
   ): ODataApplyQuery<T, ApplyResultType<R>> {
     const result = expr(this.#proxy as any)
-    const groupByFields: FieldPath[] = []
-    const aggregateExpressions: { field?: FieldPath; operation: string; alias: string }[] = []
+    const groupByFields: string[] = []
+    const aggregateExpressions: { field?: string; operation: string; alias: string }[] = []
     const aliasProxy: Record<string, string> = {}
     const aliasFields: Record<string, FieldRef<any> | undefined> = {}
 
     for (const [alias, value] of Object.entries(result)) {
       aliasProxy[alias] = alias
       if (value instanceof GroupByExpr) {
-        if (value.path) groupByFields.push(value.path)
+        if (value.path) groupByFields.push(toODataPath(value.path))
         aliasFields[alias] = value.fieldRef
       } else if (value instanceof Aggregation) {
-        aggregateExpressions.push({ field: value.path, operation: value.operation, alias })
+        aggregateExpressions.push({ field: value.path ? toODataPath(value.path) : undefined, operation: value.operation, alias })
         aliasFields[alias] = value.fieldRef
       }
     }
@@ -391,11 +396,11 @@ class ODataQuery<T extends GenericProperties> {
 
   toAst(): ODataSelectAst {
     return {
-      kind: "odata-select",
-      select: this.#fields.map((field) => pathForName(this.#table, field)),
-      filters: this.#filters,
-      orderby: this.#orderby.map((order) => ({ field: pathForName(this.#table, order.name), direction: order.dir })),
-      expands: this.#expands.map((expand) => ({ navigation: expand.navigation, query: expand.query })),
+      kind: "select",
+      select: this.#fields.map(toODataPath),
+      filters: this.#filters.map(toODataFilterNode),
+      orderby: this.#orderby.map(order => ({ field: toODataPath(order.field), direction: order.direction })),
+      expands: this.#expands.map((expand) => ({ navigation: expand.navigation.name, query: expand.query })),
       top: this.#top,
     }
   }
@@ -640,4 +645,47 @@ export function all<P extends GenericProperties>(
 
 export function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): InitialQuery<T> {
   return new InitialQueryImpl(table) as any
+}
+
+export type ODataTableQueryOptions = {
+  filter?: string
+  orderby?: Partial<Record<string, "asc" | "desc">> | string
+  top?: number
+}
+
+function expandAll(query: any, table: DataverseTable<any>, depth: number): void {
+  if (depth > 3) return
+  for (const [key, prop] of Object.entries(table.fields) as [string, any][]) {
+    if (prop.kind !== "navigation" || prop.type === "lookupId" || prop.type === "collectionIds") continue
+    query.expand(key, (sub: any) => {
+      sub.select()
+      expandAll(sub, prop.table, depth + 1)
+      return sub
+    })
+  }
+}
+
+export function buildTableQueryAst<T extends GenericProperties>(
+  table: DataverseTable<T>,
+  options?: ODataTableQueryOptions,
+): ODataSelectAst {
+  const query = new ODataQuery(table)
+  query.select()
+  expandAll(query, table, 0)
+
+  if (options?.filter) query.filter(options.filter)
+  if (options?.top !== undefined) query.top(options.top)
+  if (typeof options?.orderby === "string") {
+    for (const value of options.orderby.split(",")) {
+      const [field, direction = "asc"] = value.trim().split(/\s+/)
+      if (field) query.orderby(field, direction as "asc" | "desc")
+    }
+  } else {
+    for (const [field, direction] of Object.entries(options?.orderby ?? {})) {
+      const property = table.fields[field]?.fromDataverseName ?? table.fields[field]?.name ?? field
+      query.orderby(property, direction as "asc" | "desc")
+    }
+  }
+
+  return query.toAst()
 }

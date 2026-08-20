@@ -7,9 +7,9 @@ export declare function AboveOrEqual(field: FieldRef<any>, value: string): Filte
 export declare class Aggregation<V = any> {
     field?: string;
     fieldRef?: FieldRef<V>;
+    path?: FieldPath;
     operation: string;
     constructor(operation: string, field?: string, fieldRef?: FieldRef<V>);
-    toOdata(alias: string): string;
 }
 
 export declare function all<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
@@ -40,6 +40,7 @@ export declare interface ApplyQuery<T extends GenericProperties, TResult extends
     orderby(fieldSelector: (f: ApplyAliasProxy<TResult>) => string | FieldRef<any>, direction?: "asc" | "desc"): ApplyQuery<T, TResult>;
     orderby(alias: string, direction?: "asc" | "desc"): ApplyQuery<T, TResult>;
     top(n: number): ApplyQuery<T, TResult>;
+    toAst(): ODataAggregateAst;
     toString(): string;
     execute(): Promise<TResult[]>;
     iterate(options?: {
@@ -1294,15 +1295,18 @@ export declare type FieldOptions<T> = {
     schema?: ValidationSchema<T>;
 };
 
+declare type FieldPath = readonly QueryProperty[];
+
 export declare type FieldProxy<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never;
 };
 
 export declare class FieldRef<T = any, K extends string = string, F extends FieldBase<T> = FieldBase<T>> {
     readonly field: F;
+    readonly path: readonly QueryProperty[];
     private readonly _path;
-    constructor(field: F, path?: string);
-    static fromPath<T, F extends FieldBase<T>>(field: F, path: string): FieldRef<T, string, F>;
+    constructor(field: F, path?: string, pathSegments?: readonly QueryProperty[]);
+    static fromPath<T, F extends FieldBase<T>>(field: F, path: string, pathSegments?: readonly QueryProperty[]): FieldRef<T, string, F>;
     get dataverseName(): string;
     transformFromDataverse(value: unknown, ctx?: TransformContext): T;
     transformToDataverse(value: T, ctx?: TransformContext): unknown;
@@ -1343,6 +1347,8 @@ export declare class FilterCollector<TProps extends GenericProperties = any> {
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): this;
 }
 
+declare type FilterComparisonOperator = "eq" | "ne" | "gt" | "ge" | "lt" | "le";
+
 export declare class FilterExpr {
     private node;
     constructor(node: FilterNode);
@@ -1352,56 +1358,58 @@ export declare class FilterExpr {
     getNode(): FilterNode;
 }
 
+declare type FilterFunctionName = string;
+
 declare type FilterNode = {
-    type: "comparison";
-    field: FieldRef<any>;
-    operator: string;
-    value: FilterValue;
+    readonly type: "comparison";
+    readonly field: FieldPath;
+    readonly operator: FilterComparisonOperator | string;
+    readonly value: FilterValue;
 } | {
-    type: "null";
-    field: FieldRef<any>;
-    positive: boolean;
+    readonly type: "null";
+    readonly field: FieldPath;
+    readonly positive: boolean;
 } | {
-    type: "contains";
-    field: FieldRef<any>;
-    value: string;
+    readonly type: "contains";
+    readonly field: FieldPath;
+    readonly value: string;
 } | {
-    type: "startsWith";
-    field: FieldRef<any>;
-    value: string;
+    readonly type: "startsWith";
+    readonly field: FieldPath;
+    readonly value: string;
 } | {
-    type: "endsWith";
-    field: FieldRef<any>;
-    value: string;
+    readonly type: "endsWith";
+    readonly field: FieldPath;
+    readonly value: string;
 } | {
-    type: "compare";
-    field: FieldRef<any>;
-    operator: string;
-    otherField: FieldRef<any>;
+    readonly type: "compare";
+    readonly field: FieldPath;
+    readonly operator: FilterComparisonOperator | string;
+    readonly otherField: FieldPath;
 } | {
-    type: "lambda";
-    field: string;
-    operator: "any" | "all";
-    alias: string;
-    condition: string;
+    readonly type: "lambda";
+    readonly field: FieldPath;
+    readonly operator: "any" | "all";
+    readonly alias: string;
+    readonly condition: FilterNode;
 } | {
-    type: "fn";
-    field: FieldRef<any>;
-    fnName: string;
-    operator: string;
-    values: FilterValue[];
+    readonly type: "fn";
+    readonly field: FieldPath;
+    readonly fnName: FilterFunctionName;
+    readonly operator: string;
+    readonly values: readonly FilterValue[];
 } | {
-    type: "raw";
-    value: string;
+    readonly type: "raw";
+    readonly value: string;
 } | {
-    type: "and";
-    conditions: FilterNode[];
+    readonly type: "and";
+    readonly conditions: readonly FilterNode[];
 } | {
-    type: "or";
-    conditions: FilterNode[];
+    readonly type: "or";
+    readonly conditions: readonly FilterNode[];
 } | {
-    type: "not";
-    condition: FilterNode;
+    readonly type: "not";
+    readonly condition: FilterNode;
 };
 
 declare type FilterOnlyLinkType = 'any' | 'not any' | 'all' | 'not all' | 'exists' | 'in';
@@ -1485,6 +1493,7 @@ export declare function groupby<V>(field: FieldRef<V>): GroupByExpr<V>;
 export declare class GroupByExpr<V = any> {
     field: string;
     fieldRef?: FieldRef<V>;
+    path?: FieldPath;
     constructor(field: string, fieldRef?: FieldRef<V>);
 }
 
@@ -1557,13 +1566,9 @@ export declare function isInactive(): FilterExpr;
 
 export declare function isNonEmptyString(value: unknown): value is string;
 
-export declare function isNotNull(field: FieldRef<any> | {
-    toString(): string;
-}): FilterExpr;
+export declare function isNotNull(field: FieldRef<any>): FilterExpr;
 
-export declare function isNull(field: FieldRef<any> | {
-    toString(): string;
-}): FilterExpr;
+export declare function isNull(field: FieldRef<any>): FilterExpr;
 
 /**
  * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
@@ -1944,22 +1949,44 @@ export declare class NumberField extends FieldBase<number> {
 declare type NumericRef = FieldRef<number> | FieldRef<number | null>;
 
 declare type ODataAggregateAst = {
-    kind: "odata-aggregate";
-    filters: string[];
-    apply: string;
-    orderby: ODataOrderAst[];
+    kind: "aggregate";
+    filters: FilterNode[];
+    apply?: ODataApplyAst;
+    orderby: ODataAggregateOrderAst[];
     top?: number;
+};
+
+declare type ODataAggregateExpressionAst = {
+    field?: FieldPath;
+    operation: string;
+    alias: string;
+};
+
+declare type ODataAggregateOrderAst = {
+    field: ODataAlias;
+    direction: "asc" | "desc";
+};
+
+declare type ODataAlias = string;
+
+declare type ODataApplyAst = {
+    kind: "groupby";
+    fields: FieldPath[];
+    next?: ODataApplyAst;
+} | {
+    kind: "aggregate";
+    expressions: ODataAggregateExpressionAst[];
 };
 
 export declare class ODataApplyQuery<T extends GenericProperties, TResult extends Record<string, any> = Record<string, any>> {
     private _table;
     private _filters;
-    private _apply;
+    private _apply?;
     private _orderby;
     private _top?;
     private _aliasProxy;
     private _aliasFields;
-    constructor(table: DataverseTable<T>, apply: string, aliasProxy: Record<string, string>, initialFilters?: string[], aliasFields?: Record<string, FieldRef<any> | undefined>);
+    constructor(table: DataverseTable<T>, apply: ODataApplyAst | undefined, aliasProxy: Record<string, string>, initialFilters?: FilterNode[], aliasFields?: Record<string, FieldRef<any> | undefined>);
     filter(filter: string): this;
     filter(filter: FilterExpr): this;
     filter(filter: (f: ODataFieldProxy<T>) => string | FilterExpr): this;
@@ -1983,6 +2010,11 @@ declare type ODataCollectionNavProxy<P extends GenericProperties> = {
     toString(): string;
 } & ODataFieldProxy<P>;
 
+declare type ODataExpandAst = {
+    navigation: LookupProperty<any> | CollectionProperty<any>;
+    query?: ODataSelectAst;
+};
+
 declare type ODataFieldProxy<T extends GenericProperties> = {
     [K in keyof T]: T[K] extends CollectionProperty<infer P> ? ODataCollectionNavProxy<P> : T[K] extends LookupProperty<infer P> ? ODataLookupNavProxy<P> : T[K] extends FieldBase<infer V> ? FieldRef<V, K extends string ? K : never, T[K]> : never;
 };
@@ -1996,8 +2028,17 @@ declare type ODataLookupNavProxy<P extends GenericProperties> = {
 } & ODataFieldProxy<P>;
 
 declare type ODataOrderAst = {
-    field: string;
+    field: FieldPath;
     direction: "asc" | "desc";
+};
+
+declare type ODataSelectAst = {
+    kind: "select";
+    select: FieldPath[];
+    filters: FilterNode[];
+    orderby: ODataOrderAst[];
+    expands: ODataExpandAst[];
+    top?: number;
 };
 
 export declare function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr;
@@ -2095,6 +2136,8 @@ export declare type QueryForTable<T> = {
     top?: number;
 };
 
+declare type QueryProperty = FieldBase<any> | LookupProperty<any> | CollectionProperty<any>;
+
 export declare type QueryRequestOptions = RequestOptions & {
     query?: string;
 };
@@ -2140,6 +2183,7 @@ export declare interface SelectQuery<TAll extends GenericProperties, TChosen ext
     orderby(fieldSelector: (f: ODataFieldProxy<TAll>) => string | FieldRef<any>, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>;
     orderby(alias: string, direction?: "asc" | "desc"): SelectQuery<TAll, TChosen, TResult>;
     top(n: number): SelectQuery<TAll, TChosen, TResult>;
+    toAst(): ODataSelectAst;
     toString(): string;
     execute(): Promise<TResult[]>;
     iterate(options?: {

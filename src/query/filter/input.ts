@@ -1,4 +1,4 @@
-import { FilterExpr } from "../../query"
+import { FilterExpr } from "./expr"
 import type { FilterNode } from "./ast"
 
 export type FilterDialect = "odata" | "fetchXml"

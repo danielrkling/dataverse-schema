@@ -59,6 +59,20 @@ test("from returns builder with full type", () => {
   expectTypeOf(q.execute).returns.resolves.toExtend<Infer<typeof Person>[]>()
 })
 
+test("fetch XML builders expose an independent serializable AST", () => {
+  const query = fetchXml(Account)
+    .top(5)
+    .select(f => ({ accountName: f.name }))
+    .filter(f => eq(f.city, "Redmond"))
+
+  const ast = query.toAst()
+  expect(ast.kind).toBe("xml-select")
+  expect(ast.entity).toBe("account")
+  expect(ast.top).toBe(5)
+  expect(ast.attributes).toEqual([{ name: "name", alias: "accountName" }])
+  expect(ast.filters).toHaveLength(1)
+})
+
 test("select narrows result type with aliases", () => {
   const q = fetchXml(Person).select(f => ({ myName: f.name, myAge: f.age }))
   expectTypeOf(q.execute).returns.resolves.toExtend<{ myName: string; myAge: number }[]>()
@@ -1149,4 +1163,3 @@ test("[docs] aggregate: rowaggregate CountChildren", () => {
   expect(xml).toContain(`name="accountid" alias="numberOfChildren"`)
   expect(xml).toContain(`<order attribute='accountid' descending='true' />`)
 })
-

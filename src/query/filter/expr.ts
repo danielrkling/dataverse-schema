@@ -1,11 +1,11 @@
-import { FieldRef } from "./query/shared/field-ref"
-import { FilterNode, FilterValue } from "./query/filter/ast"
-import { renderFilterOdata } from "./query/filter/render-odata"
-import { renderFilterFetchXml } from "./query/filter/render-fetchxml"
-import { NumberField } from "./fields"
-import type { FieldPath } from "./query/path"
+import { FieldRef } from "../shared/field-ref"
+import { FilterNode, FilterValue } from "./ast"
+import { renderFilterOdata } from "./render-odata"
+import { renderFilterFetchXml } from "./render-fetchxml"
+import { NumberField } from "../../fields"
+import type { FieldPath } from "../path"
 
-export { FieldRef } from "./query/shared/field-ref"
+export { FieldRef } from "../shared/field-ref"
 
 type NonNullType<T> = T extends Date | null ? Date : Exclude<T, null>
 

@@ -2,6 +2,8 @@
 
 A strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. Provides schema definitions, type inference, query builders (OData + FetchXML), validation, and CRUD operations.
 
+For real-environment browser checks, see [Browser Smoke Testing](./BROWSER-SMOKE-TESTING.md).
+
 ## Installation
 
 ```bash

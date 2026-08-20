@@ -68,6 +68,28 @@ const TrippinPerson = new DataverseTable({
 
 // --- Type inference tests (compile-time, no mock needed) ---
 
+test("OData builder emits a standalone AST", () => {
+  const ast = fetchOdata(Person)
+    .select("name")
+    .filter(f => eq(f.age, 21))
+    .expand("primaryAddress", sub => sub.select("street"))
+    .toAst()
+
+  expect(ast).toEqual({
+    kind: "select",
+    select: ["fullname"],
+    filters: [{ type: "comparison", field: "person_age", operator: "eq", value: 21 }],
+    orderby: [],
+    expands: [{ navigation: "person_Address", query: {
+      kind: "select",
+      select: ["street_Address"],
+      filters: [],
+      orderby: [],
+      expands: [],
+    } }],
+  })
+})
+
 test("from returns full type after select()", () => {
   const q = fetchOdata(Person).select()
   expectTypeOf(q.execute).returns.resolves.toExtend<Infer<typeof Person>[]>()

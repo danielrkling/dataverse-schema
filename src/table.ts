@@ -1,16 +1,9 @@
 import * as v from "valibot"
 import { DataverseClient } from "./client";
+import { buildTableQueryAst, ODataTableQueryOptions } from "./query/odata/builder";
+import { serializeODataSelect } from "./query/odata/ast";
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField, ImageField } from "./fields";
 import { FieldBase, SKIP, TransformContext, ValidationSchema } from "./fields";
-function queryString(opts: { select?: string; top?: number; filter?: string; orderby?: string; expand?: string }): string {
-  const params = new URLSearchParams()
-  if (opts.select) params.set("$select", opts.select)
-  if (opts.top !== undefined) params.set("$top", opts.top.toFixed(0))
-  if (opts.filter) params.set("$filter", opts.filter)
-  if (opts.orderby) params.set("$orderby", opts.orderby)
-  if (opts.expand) params.set("$expand", opts.expand)
-  return params.toString()
-}
 import {
   AlternateKey,
   DataverseKey,
@@ -23,12 +16,6 @@ import {
   NarrowKeysByValue,
 } from "./types";
 import { Etag } from "./util";
-
-export type QueryForTable<T> = {
-  orderby?: Partial<Record<keyof T, "asc" | "desc">> | string;
-  filter?: string;
-  top?: number;
-};
 
 export type TableRequestOptions = {
   pageSize?: number;
@@ -137,7 +124,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     return this.client
       .getRecord(this.entitySetName, id, {
         ...options,
-        query: buildQuery(this as unknown as DataverseTable<GenericProperties>),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>),
       })
       .then((v) => this.transformValueFromDataverse(v));
   }
@@ -161,13 +148,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * });
    */
   async getRecords(
-    queryOptions?: QueryForTable<TProperties>,
+    queryOptions?: ODataTableQueryOptions,
     options?: TableRequestOptions,
   ): Promise<Infer<TProperties>[]> {
     return this.client
       .getRecords(this.entitySetName, {
         ...options,
-        query: buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
       })
       .then((values) => values.map((v) => this.transformValueFromDataverse(v)));
   }
@@ -187,14 +174,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * }
    */
   async *iterateRecords(
-    queryOptions?: QueryForTable<TProperties>,
+    queryOptions?: ODataTableQueryOptions,
     options?: TableRequestOptions,
   ): AsyncGenerator<Infer<TProperties>> {
     for await (const record of this.client.iterateRecords(
       this.entitySetName,
       {
         ...options,
-        query: buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
       },
     )) {
       yield this.transformValueFromDataverse(record);
@@ -217,14 +204,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * }
    */
   async *iteratePages(
-    queryOptions?: QueryForTable<TProperties>,
+    queryOptions?: ODataTableQueryOptions,
     options?: TableRequestOptions,
   ): AsyncGenerator<Infer<TProperties>[]> {
     for await (const page of this.client.iteratePages(
       this.entitySetName,
       {
         ...options,
-        query: buildQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
       },
     )) {
       yield page.map((v) => this.transformValueFromDataverse(v));
@@ -242,7 +229,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async getPropertyValue<TKey extends keyof TProperties>(
     key: TKey,
     id: DataverseKey,
-    queryOptions?: QueryForTable<TProperties>,
+    queryOptions?: ODataTableQueryOptions,
   ): Promise<Infer<TProperties[TKey]>> {
     const prop = this.fields[key];
     if (prop.kind === "value" || prop.type === "lookupId") {
@@ -258,7 +245,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
           this.entitySetName,
           id,
           prop.name,
-          { query: buildQuery(prop.table as DataverseTable<GenericProperties>, queryOptions as QueryForTable<GenericProperties>) }, // Note: buildQuery needs to handle related table schema
+          { query: tableQuery(prop.table as DataverseTable<GenericProperties>, queryOptions) },
         )
         .then(
           (v) =>
@@ -271,7 +258,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
           this.entitySetName,
           id,
           prop.name,
-          { query: buildQuery(prop.table, queryOptions) },
+          { query: tableQuery(prop.table, queryOptions) },
         )
         .then(
           (v) =>
@@ -392,7 +379,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
-      { query: queryString({ select: pkName }) },
+      { query: selectQuery(pkName) },
     );
     const guid = record?.[pkName] as GUID;
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
@@ -451,13 +438,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
         this.entitySetName,
         id,
         transformed,
-        { query: queryString({ select: pkName }), etag },
+        { query: selectQuery(pkName), etag },
       );
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        { query: queryString({ select: pkName }) },
+        { query: selectQuery(pkName) },
       );
       id = record[pkName] as GUID;
       ctx.recordId = id;
@@ -741,50 +728,18 @@ export class DataverseTable<TProperties extends GenericProperties> {
 
 
 
-function buildQuery(
+function tableQuery(
   table: DataverseTable<GenericProperties>,
-  q?: QueryForTable<GenericProperties>,
+  options?: ODataTableQueryOptions,
 ): string {
-  return queryString({
-    top: q?.top,
-    filter: q?.filter,
-    orderby: q?.orderby
-      ? Object.entries(q?.orderby ?? {})
-          .map(([key, value]) => `${table.fields[key].name} ${value}`)
-          .join(",")
-      : undefined,
-    select: buildSelect(table),
-    expand: buildExpand(table),
+  return serializeODataSelect(buildTableQueryAst(table, options));
+}
+
+function selectQuery(field: string): string {
+  return serializeODataSelect({
+    kind: "select",
+    select: [field],
   });
-}
-
-function buildSelect(table: DataverseTable<GenericProperties>): string {
-  return Object.values(table.fields)
-    .filter((v: any) => v.kind === "value" || v.type === "lookupId" || v.type==="file" || v.type==="image")
-    .map((v: any) =>v.fromDataverseName)
-    .join(",");
-}
-
-function buildExpand(table: DataverseTable<GenericProperties>, depth = 0): string {
-  if (depth > 3) return "";
-  return Object.values(table.fields)
-    .filter(
-      (v: any) =>
-        v.kind === "navigation" &&
-        v.type !== "lookupId" &&
-        v.type !== "collectionIds",
-    )
-    .map((v: any) => {
-      const navProp = v as CollectionProperty<any> | LookupProperty<any>;
-      const innerSelect = buildSelect(navProp.table);
-      const innerExpand = buildExpand(navProp.table, depth + 1);
-      let expandQuery = `$select=${innerSelect}`;
-      if (innerExpand) {
-        expandQuery += `;$expand=${innerExpand}`;
-      }
-      return `${navProp.name}(${expandQuery})`;
-    })
-    .join(",");
 }
 
 /**

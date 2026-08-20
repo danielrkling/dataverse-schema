@@ -2757,8 +2757,9 @@ function lookup(name, getTable) {
 
 class FieldRef {
   field;
+  path;
   _path;
-  constructor(field, path) {
+  constructor(field, path, pathSegments) {
     if (typeof field === "string") {
       const name = field;
       this.field = {
@@ -2769,13 +2770,15 @@ class FieldRef {
         transformValueToDataverse: (value) => value
       };
       this._path = path ?? name;
+      this.path = pathSegments ?? [this.field];
     } else {
       this.field = field;
       this._path = path ?? field.fromDataverseName;
+      this.path = pathSegments ?? [field];
     }
   }
-  static fromPath(field, path) {
-    return new FieldRef(field, path);
+  static fromPath(field, path, pathSegments) {
+    return new FieldRef(field, path, pathSegments);
   }
   get dataverseName() {
     return this._path;
@@ -2791,45 +2794,47 @@ class FieldRef {
   }
 }
 
-function renderFilterOdata(node) {
+function propertyName$1(property) {
+  return property.fromDataverseName ?? property.name;
+}
+function fieldPathName(path) {
+  return path.map(propertyName$1).join("/");
+}
+
+function renderFilterOdata(node, scope) {
+  const fieldName = (path) => `${scope ? `${scope}/` : ""}${fieldPathName(path)}`;
   switch (node.type) {
     case "comparison":
-      return `(${node.field.toString()} ${node.operator} ${wrapString(node.value)})`;
+      return `(${fieldName(node.field)} ${node.operator} ${wrapString(node.value)})`;
     case "null":
-      return `${node.field.toString()} ${node.positive ? "eq" : "ne"} null`;
+      return `${fieldName(node.field)} ${node.positive ? "eq" : "ne"} null`;
     case "contains":
-      return `contains(${node.field.toString()},${wrapString(node.value)})`;
+      return `contains(${fieldName(node.field)},${wrapString(node.value)})`;
     case "startsWith":
-      return `startswith(${node.field.toString()},${wrapString(node.value)})`;
+      return `startswith(${fieldName(node.field)},${wrapString(node.value)})`;
     case "endsWith":
-      return `endswith(${node.field.toString()},${wrapString(node.value)})`;
+      return `endswith(${fieldName(node.field)},${wrapString(node.value)})`;
     case "compare":
-      return `(${node.field.toString()} ${node.operator} ${node.otherField.toString()})`;
+      return `(${fieldName(node.field)} ${node.operator} ${fieldName(node.otherField)})`;
     case "lambda":
-      return `${node.field}/${node.operator}(${node.alias}: ${node.condition})`;
+      return `${fieldPathName(node.field)}/${node.operator}(${node.alias}: ${renderFilterOdata(node.condition, node.alias)})`;
     case "fn": {
-      const field = wrapString(node.field.toString());
+      const field = wrapString(fieldName(node.field));
       const vals = node.values.map(wrapString);
       if (vals.length === 0) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field})`;
       if (vals.length === 1) return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue=${vals[0]})`;
-      if (node.fnName === "Between" || node.fnName === "NotBetween") {
-        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
-      }
-      if (node.fnName === "InFiscalPeriodAndYear" || node.fnName === "InOrAfterFiscalPeriodAndYear" || node.fnName === "InOrBeforeFiscalPeriodAndYear") {
-        return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue1=${vals[0]},PropertyValue2=${vals[1]})`;
-      }
+      if (node.fnName === "Between" || node.fnName === "NotBetween") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
+      if (node.fnName === "InFiscalPeriodAndYear" || node.fnName === "InOrAfterFiscalPeriodAndYear" || node.fnName === "InOrBeforeFiscalPeriodAndYear") return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValue1=${vals[0]},PropertyValue2=${vals[1]})`;
       return `Microsoft.Dynamics.CRM.${node.fnName}(PropertyName=${field},PropertyValues=[${vals.join(",")}])`;
     }
     case "raw":
       return node.value;
     case "and":
-      if (node.conditions.length === 0) return "";
-      return `(${node.conditions.map(renderFilterOdata).join(" and ")})`;
+      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" and ")})`;
     case "or":
-      if (node.conditions.length === 0) return "";
-      return `(${node.conditions.map(renderFilterOdata).join(" or ")})`;
+      return node.conditions.length === 0 ? "" : `(${node.conditions.map((child) => renderFilterOdata(child, scope)).join(" or ")})`;
     case "not":
-      return `not(${renderFilterOdata(node.condition)})`;
+      return `not(${renderFilterOdata(node.condition, scope)})`;
   }
 }
 
@@ -2837,43 +2842,43 @@ function escapeXml(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 function renderFilterFetchXml(node) {
+  const fieldName = (path) => fieldPathName(path);
   switch (node.type) {
-    case "comparison": {
-      const value = node.value === null ? "" : escapeXml(String(node.value));
-      return `<condition attribute="${escapeXml(node.field.toString())}" operator="${escapeXml(node.operator)}" value="${value}" />`;
-    }
+    case "comparison":
+      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${node.value === null ? "" : escapeXml(String(node.value))}" />`;
     case "null":
-      return `<condition attribute="${escapeXml(node.field.toString())}" operator="${node.positive ? "null" : "not-null"}" />`;
+      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${node.positive ? "null" : "not-null"}" />`;
     case "contains":
-      return `<condition attribute="${escapeXml(node.field.toString())}" operator="like" value="%${escapeXml(node.value)}%" />`;
+      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="like" value="%${escapeXml(node.value)}%" />`;
     case "startsWith":
-      return `<condition attribute="${escapeXml(node.field.toString())}" operator="begins-with" value="${escapeXml(node.value)}" />`;
+      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="begins-with" value="${escapeXml(node.value)}" />`;
     case "endsWith":
-      return `<condition attribute="${escapeXml(node.field.toString())}" operator="ends-with" value="${escapeXml(node.value)}" />`;
+      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="ends-with" value="${escapeXml(node.value)}" />`;
     case "compare":
-      return `<condition attribute="${escapeXml(node.field.toString())}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(node.otherField.toString())}" />`;
+      return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" valueof="${escapeXml(fieldName(node.otherField))}" />`;
     case "lambda":
-      return `<condition entityname="${escapeXml(node.field)}" operator="${escapeXml(node.operator)}" value="${escapeXml(`${node.alias}: ${node.condition}`)}" />`;
+      return `<condition entityname="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${escapeXml(`${node.alias}: ${renderFilterFetchXml(node.condition)}`)}" />`;
     case "fn": {
-      const attr = escapeXml(node.field.toString());
+      const attr = escapeXml(fieldName(node.field));
       const op = escapeXml(node.operator);
       if (node.values.length === 0) return `<condition attribute="${attr}" operator="${op}" />`;
       if (node.values.length === 1) return `<condition attribute="${attr}" operator="${op}" value="${escapeXml(String(node.values[0]))}" />`;
-      return `<condition attribute="${attr}" operator="${op}">${node.values.map((v) => `<value>${escapeXml(String(v))}</value>`).join("")}</condition>`;
+      return `<condition attribute="${attr}" operator="${op}">${node.values.map((value) => `<value>${escapeXml(String(value))}</value>`).join("")}</condition>`;
     }
     case "raw":
       return node.value;
     case "and":
-      if (node.conditions.length === 0) return "";
-      return `<filter type="and">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
+      return node.conditions.length === 0 ? "" : `<filter type="and">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
     case "or":
-      if (node.conditions.length === 0) return "";
-      return `<filter type="or">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
+      return node.conditions.length === 0 ? "" : `<filter type="or">${node.conditions.map(renderFilterFetchXml).join("")}</filter>`;
     case "not":
       return `<filter type="and"><filter type="or">${renderFilterFetchXml(node.condition)}</filter></filter>`;
   }
 }
 
+function pathOf(field) {
+  return field.path;
+}
 class FilterExpr {
   constructor(node) {
     this.node = node;
@@ -2892,58 +2897,58 @@ class FilterExpr {
   }
 }
 function fn(field, fnName, operator, values) {
-  return new FilterExpr({ type: "fn", field, fnName, operator, values });
+  return new FilterExpr({ type: "fn", field: pathOf(field), fnName, operator, values });
 }
 function eq(field, value) {
   if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field, operator: "eq", otherField: value });
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) });
   }
-  return new FilterExpr({ type: "comparison", field, operator: "eq", value });
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value });
 }
 function ne(field, value) {
   if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field, operator: "ne", otherField: value });
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ne", otherField: pathOf(value) });
   }
-  return new FilterExpr({ type: "comparison", field, operator: "ne", value });
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ne", value });
 }
 function gt(field, value) {
   if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field, operator: "gt", otherField: value });
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) });
   }
-  return new FilterExpr({ type: "comparison", field, operator: "gt", value });
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value });
 }
 function ge(field, value) {
   if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field, operator: "ge", otherField: value });
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ge", otherField: pathOf(value) });
   }
-  return new FilterExpr({ type: "comparison", field, operator: "ge", value });
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ge", value });
 }
 function lt(field, value) {
   if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field, operator: "lt", otherField: value });
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) });
   }
-  return new FilterExpr({ type: "comparison", field, operator: "lt", value });
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value });
 }
 function le(field, value) {
   if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field, operator: "le", otherField: value });
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "le", otherField: pathOf(value) });
   }
-  return new FilterExpr({ type: "comparison", field, operator: "le", value });
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "le", value });
 }
 function isNull(field) {
-  return new FilterExpr({ type: "null", field, positive: true });
+  return new FilterExpr({ type: "null", field: pathOf(field), positive: true });
 }
 function isNotNull(field) {
-  return new FilterExpr({ type: "null", field, positive: false });
+  return new FilterExpr({ type: "null", field: pathOf(field), positive: false });
 }
 function contains(field, value) {
-  return new FilterExpr({ type: "contains", field, value });
+  return new FilterExpr({ type: "contains", field: pathOf(field), value });
 }
 function startsWith(field, value) {
-  return new FilterExpr({ type: "startsWith", field, value });
+  return new FilterExpr({ type: "startsWith", field: pathOf(field), value });
 }
 function endsWith(field, value) {
-  return new FilterExpr({ type: "endsWith", field, value });
+  return new FilterExpr({ type: "endsWith", field: pathOf(field), value });
 }
 function and(...conditions) {
   const valid = conditions.filter((c) => c != null && c !== "");
@@ -3173,22 +3178,23 @@ function fieldName(field) {
 class GroupByExpr {
   field;
   fieldRef;
+  path;
   constructor(field, fieldRef) {
     this.field = field;
     this.fieldRef = fieldRef;
+    this.path = fieldRef?.path;
   }
 }
 class Aggregation {
   field;
   fieldRef;
+  path;
   operation;
   constructor(operation, field, fieldRef) {
     this.operation = operation;
     this.field = field;
     this.fieldRef = fieldRef;
-  }
-  toOdata(alias) {
-    return this.field ? `${this.field} with ${this.operation} as ${alias}` : `$count as ${alias}`;
+    this.path = fieldRef?.path;
   }
 }
 function sum(field) {
@@ -3210,27 +3216,48 @@ function groupby(field) {
   return new GroupByExpr(fieldName(field), field);
 }
 
+function filterInputNode(filter, proxy) {
+  const value = typeof filter === "function" ? filter(proxy) : filter;
+  return typeof value === "string" ? { type: "raw", value } : value.getNode();
+}
 function renderFilterInput(filter, proxy, dialect) {
   const value = typeof filter === "function" ? filter(proxy) : filter;
   if (typeof value === "string") return value;
   return dialect === "odata" ? value.toOdata() : value.toFetchXml();
 }
 
+function propertyName(property) {
+  return property.fromDataverseName ?? property.name;
+}
 function renderFilters(filters) {
   if (filters.length === 0) return void 0;
-  return `$filter=${filters.join(" and ")}`;
+  return `$filter=${filters.map((filter) => renderFilterOdata(filter)).join(" and ")}`;
 }
 function renderOrderby(orderby) {
   if (orderby.length === 0) return void 0;
+  return `$orderby=${orderby.map((order) => `${fieldPathName(order.field)} ${order.direction}`).join(",")}`;
+}
+function renderAggregateOrderby(orderby) {
+  if (orderby.length === 0) return void 0;
   return `$orderby=${orderby.map((order) => `${order.field} ${order.direction}`).join(",")}`;
+}
+function serializeApply(ast) {
+  if (ast.kind === "aggregate") {
+    return `aggregate(${ast.expressions.map((expression) => expression.field ? `${fieldPathName(expression.field)} with ${expression.operation} as ${expression.alias}` : `$count as ${expression.alias}`).join(",")})`;
+  }
+  return `groupby((${ast.fields.map(fieldPathName).join(",")})${ast.next ? `,${serializeApply(ast.next)}` : ""})`;
 }
 function renderExpands(expands) {
   if (expands.length === 0) return void 0;
-  return `$expand=${expands.map((expand) => expand.query ? `${expand.name}(${expand.query})` : expand.name).join(",")}`;
+  return `$expand=${expands.map((expand) => {
+    const name = propertyName(expand.navigation);
+    if (!expand.query) return name;
+    return `${name}(${serializeODataSelect(expand.query, ";")})`;
+  }).join(",")}`;
 }
 function serializeODataSelect(ast, separator = "&") {
   return [
-    ast.select.length > 0 ? `$select=${ast.select.join(",")}` : void 0,
+    ast.select.length > 0 ? `$select=${ast.select.map(fieldPathName).join(",")}` : void 0,
     renderFilters(ast.filters),
     renderOrderby(ast.orderby),
     renderExpands(ast.expands),
@@ -3240,13 +3267,14 @@ function serializeODataSelect(ast, separator = "&") {
 function serializeODataAggregate(ast) {
   return [
     renderFilters(ast.filters),
-    ast.apply ? `$apply=${ast.apply}` : void 0,
-    renderOrderby(ast.orderby),
+    ast.apply ? `$apply=${serializeApply(ast.apply)}` : void 0,
+    renderAggregateOrderby(ast.orderby),
     ast.top === void 0 ? void 0 : `$top=${ast.top}`
   ].filter((part) => part !== void 0).join("&");
 }
 
 const proxyTableMap = /* @__PURE__ */ new WeakMap();
+const proxyPathMap = /* @__PURE__ */ new WeakMap();
 class ODataApplyQuery {
   _table;
   _filters = [];
@@ -3263,7 +3291,7 @@ class ODataApplyQuery {
     if (initialFilters) this._filters = [...initialFilters];
   }
   filter(filter) {
-    this._filters.push(renderFilterInput(filter, _buildProxyForTable(this._table), "odata"));
+    this._filters.push(filterInputNode(filter, _buildProxyForTable(this._table)));
     return this;
   }
   orderby(nameOrSelector, direction = "asc") {
@@ -3284,7 +3312,7 @@ class ODataApplyQuery {
   }
   toAst() {
     return {
-      kind: "odata-aggregate",
+      kind: "aggregate",
       filters: [...this._filters],
       apply: this._apply,
       orderby: this._orderby.map((order) => ({ field: order.name, direction: order.dir })),
@@ -3354,12 +3382,12 @@ class ODataQuery {
       this.#selectedKeys = [];
       for (const [key, prop] of Object.entries(this.#table.fields)) {
         if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file") {
-          this.#fields.push(prop.fromDataverseName ?? prop.name);
+          this.#fields.push([prop]);
           this.#selectedKeys.push(key);
         }
       }
     } else {
-      this.#fields = keys.map((k) => this.#proxy[k].toString());
+      this.#fields = keys.map((k) => this.#proxy[k].path);
       this.#selectedKeys = keys;
     }
     return this;
@@ -3373,7 +3401,7 @@ class ODataQuery {
     const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
     const result = sub?.(child);
     const q = result ?? child;
-    this.#expands.push({ name: prop.name, key, query: q._buildForExpand() });
+    this.#expands.push({ navigation: prop, key, query: q.toAst() });
     const childSelectedKeys = q._getSelectedKeys();
     const childExpandMeta = q._expandMeta;
     const subQueryProvided = !!sub;
@@ -3387,16 +3415,19 @@ class ODataQuery {
     return this;
   }
   filter(filter) {
-    this.#filters.push(renderFilterInput(filter, this.#proxy, "odata"));
+    this.#filters.push(filterInputNode(filter, this.#proxy));
     return this;
   }
   orderby(nameOrSelector, direction = "asc") {
     if (this.#subQueryMode === "lookup") throw new Error("orderby() is not supported in lookup expands");
     if (typeof nameOrSelector === "function") {
       const result = nameOrSelector(this.#proxy);
-      this.#orderby.push({ name: typeof result === "string" ? result : result.toString(), dir: direction });
+      this.#orderby.push({
+        field: typeof result === "string" ? pathForName(this.#table, result) : result.path,
+        direction
+      });
     } else {
-      this.#orderby.push({ name: nameOrSelector, dir: direction });
+      this.#orderby.push({ field: pathForName(this.#table, nameOrSelector), direction });
     }
     return this;
   }
@@ -3408,30 +3439,24 @@ class ODataQuery {
   apply(expr) {
     const result = expr(this.#proxy);
     const groupByFields = [];
-    const aggParts = [];
+    const aggregateExpressions = [];
     const aliasProxy = {};
     const aliasFields = {};
     for (const [alias, value] of Object.entries(result)) {
       aliasProxy[alias] = alias;
       if (value instanceof GroupByExpr) {
-        groupByFields.push(value.field);
+        if (value.path) groupByFields.push(value.path);
         aliasFields[alias] = value.fieldRef;
       } else if (value instanceof Aggregation) {
-        aggParts.push(value.toOdata(alias));
+        aggregateExpressions.push({ field: value.path, operation: value.operation, alias });
         aliasFields[alias] = value.fieldRef;
       }
     }
-    let applyStr = "";
-    if (groupByFields.length > 0 && aggParts.length > 0) {
-      applyStr = `groupby((${groupByFields.join(",")}),aggregate(${aggParts.join(",")}))`;
-    } else if (groupByFields.length > 0) {
-      applyStr = `groupby((${groupByFields.join(",")}))`;
-    } else if (aggParts.length > 0) {
-      applyStr = `aggregate(${aggParts.join(",")})`;
-    }
+    const aggregate = aggregateExpressions.length > 0 ? { kind: "aggregate", expressions: aggregateExpressions } : void 0;
+    const apply = groupByFields.length > 0 ? { kind: "groupby", fields: groupByFields, next: aggregate } : aggregate;
     return new ODataApplyQuery(
       this.#table,
-      applyStr,
+      apply,
       aliasProxy,
       this.#filters.length > 0 ? this.#filters : void 0,
       aliasFields
@@ -3442,11 +3467,11 @@ class ODataQuery {
   }
   toAst() {
     return {
-      kind: "odata-select",
+      kind: "select",
       select: this.#fields,
       filters: this.#filters,
-      orderby: this.#orderby.map((order) => ({ field: order.name, direction: order.dir })),
-      expands: this.#expands.map((expand) => ({ name: expand.name, query: expand.query })),
+      orderby: this.#orderby,
+      expands: this.#expands.map((expand) => ({ navigation: expand.navigation, query: expand.query })),
       top: this.#top
     };
   }
@@ -3530,6 +3555,17 @@ class InitialQueryImpl {
     return new ODataQuery(this.#table).apply(expr);
   }
 }
+function pathForName(table, path) {
+  const segments = [];
+  let current = table;
+  for (const name of path.split("/")) {
+    const entry = Object.values(current.fields).find((field) => (field.fromDataverseName ?? field.name) === name);
+    if (!entry) throw new Error(`Unknown query field: ${path}`);
+    segments.push(entry);
+    if (entry.kind === "navigation") current = entry.table;
+  }
+  return segments;
+}
 function _processExpand(raw, expand, table) {
   if (raw === null || raw === void 0) return null;
   const navProp = table.fields[expand.key];
@@ -3568,7 +3604,7 @@ function _partialTransformItem(table, selectedKeys, raw, subExpands) {
   }
   return result;
 }
-function _buildProxyForTable(table, prefix) {
+function _buildProxyForTable(table, prefix, prefixPath = []) {
   const proxy = {};
   const fields = table.fields;
   for (const [key, prop] of Object.entries(fields)) {
@@ -3582,9 +3618,11 @@ function _buildProxyForTable(table, prefix) {
       Object.defineProperty(proxy, key, {
         get: () => {
           if (!cached) {
-            const sub = _buildProxyForTable(navProp.table, currentPrefix);
+            const sub = _buildProxyForTable(navProp.table, currentPrefix, [...prefixPath, navProp]);
             sub.toString = () => currentPrefix;
+            Object.defineProperty(sub, "path", { value: [...prefixPath, navProp], enumerable: false });
             if (isCollection) proxyTableMap.set(sub, navProp.table);
+            proxyPathMap.set(sub, [...prefixPath, navProp]);
             cached = sub;
           }
           return cached;
@@ -3593,7 +3631,7 @@ function _buildProxyForTable(table, prefix) {
         configurable: true
       });
     } else {
-      proxy[key] = FieldRef.fromPath(prop, prefix ? `${prefix}/${dataverseName}` : dataverseName);
+      proxy[key] = FieldRef.fromPath(prop, prefix ? `${prefix}/${dataverseName}` : dataverseName, [...prefixPath, prop]);
     }
   }
   return proxy;
@@ -3611,14 +3649,26 @@ function any(proxy, condition) {
   const table = proxyTableMap.get(proxy);
   if (!table) throw new Error("any() requires a collection navigation proxy");
   const result = condition(buildLambdaProxy(alias, table));
-  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "any", alias, condition: result instanceof FilterExpr ? result.toOdata() : result });
+  return new FilterExpr({
+    type: "lambda",
+    field: proxyPathMap.get(proxy) ?? [],
+    operator: "any",
+    alias,
+    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
+  });
 }
 function all(proxy, condition) {
   const alias = "x";
   const table = proxyTableMap.get(proxy);
   if (!table) throw new Error("all() requires a collection navigation proxy");
   const result = condition(buildLambdaProxy(alias, table));
-  return new FilterExpr({ type: "lambda", field: String(proxy), operator: "all", alias, condition: result instanceof FilterExpr ? result.toOdata() : result });
+  return new FilterExpr({
+    type: "lambda",
+    field: proxyPathMap.get(proxy) ?? [],
+    operator: "all",
+    alias,
+    condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
+  });
 }
 function fetchOdata(table) {
   return new InitialQueryImpl(table);

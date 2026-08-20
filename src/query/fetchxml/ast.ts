@@ -25,7 +25,7 @@ export type FetchXmlLinkAst = {
   alias?: string;
   intersect?: boolean;
   attributes: FetchXmlAttributeAst[];
-  filters: FilterNode[];
+  filters: Array<FilterNode | string>;
   orders: FetchXmlOrderAst[];
   links: FetchXmlLinkAst[];
 };
@@ -33,7 +33,7 @@ export type FetchXmlLinkAst = {
 type FetchXmlBaseAst = {
   entity: string;
   attributes: FetchXmlAttributeAst[];
-  filters: FilterNode[];
+  filters: Array<FilterNode | string>;
   orders: FetchXmlOrderAst[];
   links: FetchXmlLinkAst[];
   distinct?: boolean;
@@ -43,6 +43,8 @@ type FetchXmlBaseAst = {
   lateMaterialize?: boolean;
   aggregateLimit?: number;
   useRawOrderBy?: boolean;
+  version?: string;
+  mapping?: string;
 };
 
 export type FetchXmlSelectAst = FetchXmlBaseAst & { kind: "xml-select" };
@@ -93,7 +95,7 @@ function serializeLink(link: FetchXmlLinkAst): string {
 
 function serializeContents(ast: Pick<FetchXmlBaseAst, "attributes" | "filters" | "orders" | "links">): string {
   const attributes = ast.attributes.map(serializeAttribute).join("");
-  const filters = ast.filters.map(renderFilterFetchXml).join("");
+  const filters = ast.filters.map(filter => typeof filter === "string" ? filter : renderFilterFetchXml(filter)).join("");
   const orders = ast.orders.map(serializeOrder).join("");
   const links = ast.links.map(serializeLink).join("");
   return `${attributes}${filters}${orders}${links}`;
@@ -102,6 +104,8 @@ function serializeContents(ast: Pick<FetchXmlBaseAst, "attributes" | "filters" |
 export function serializeFetchXml(ast: FetchXmlSelectAst | FetchXmlAggregateAst): string {
   const values = [
     `name="${escapeXml(ast.entity)}"`,
+    ast.version === undefined ? undefined : `version="${escapeXml(ast.version)}"`,
+    ast.mapping === undefined ? undefined : `mapping="${escapeXml(ast.mapping)}"`,
     ast.distinct ? `distinct="true"` : undefined,
     ast.top === undefined ? undefined : `top="${ast.top}"`,
     ast.datasource === undefined ? undefined : `datasource="${escapeXml(ast.datasource)}"`,

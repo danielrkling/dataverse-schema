@@ -1,11 +1,18 @@
-import { DataverseTable, DataverseIntersectTable } from "./table";
-import { GenericProperties, Infer } from "./types";
-import { FilterExpr, FieldRef } from "./query";
-import { Aggregation, GroupByExpr } from "./query/shared/aggregation";
-import { renderFilterInput } from "./query/filter/input";
-import { buildFlatFieldProxy } from "./query/shared/proxy";
-import type { FieldBase } from "./fields";
-import { Etag } from "./util";
+import { DataverseTable, DataverseIntersectTable } from "../../table";
+import { GenericProperties, Infer } from "../../types";
+import { FilterExpr, FieldRef } from "../filter/expr";
+import { Aggregation, GroupByExpr } from "../shared/aggregation";
+import { renderFilterInput } from "../filter/input";
+import { buildFlatFieldProxy } from "../shared/proxy";
+import type { FieldBase } from "../../fields";
+import { Etag } from "../../util";
+import {
+    FetchXmlAggregateAst,
+    FetchXmlAttributeAst,
+    FetchXmlLinkAst,
+    FetchXmlOrderAst,
+    FetchXmlSelectAst,
+} from "./ast";
 
 type AliasInfo = {
     field?: FieldRef<any>;
@@ -48,6 +55,14 @@ type OrderDef = {
     entityname?: string;
     descending?: boolean;
 };
+
+function fetchAttributeAst(attribute: AttrDef): FetchXmlAttributeAst {
+    return { ...attribute };
+}
+
+function fetchOrderAst(order: OrderDef): FetchXmlOrderAst {
+    return { ...order };
+}
 
 type ApplyResultType<R extends Record<string, GroupByExpr<any> | Aggregation<any>>> = {
   [K in keyof R]: R[K] extends GroupByExpr<infer V> ? V
@@ -210,6 +225,7 @@ export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult e
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>
     toXml(): string
+    toAst(): FetchXmlSelectAst
     toString(): string
     execute(options?: ExecuteOptions): Promise<TResult[]>
     iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<TResult>
@@ -266,6 +282,7 @@ export interface FetchXmlInitial<TProps extends GenericProperties> {
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): FetchXmlInitial<TProps>
     toXml(): string
+    toAst(): FetchXmlSelectAst
     toString(): string
     execute(options?: ExecuteOptions): Promise<Infer<TProps>[]>
     iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>>
@@ -464,6 +481,39 @@ export class FetchXmlAggregateQuery<
             this._orders.push({ attribute, entityname, descending: direction === 'desc' });
         }
         return this;
+    }
+
+    toAst(): FetchXmlAggregateAst {
+        return {
+            kind: "xml-aggregate",
+            entity: this._table.logicalName,
+            version: "1.0",
+            mapping: "logical",
+            attributes: this._attributes.map(fetchAttributeAst),
+            filters: [...this._filters],
+            orders: this._orders.map(fetchOrderAst),
+            links: this._links.map((link): FetchXmlLinkAst => {
+                const child = link.builder instanceof FilterCollector ? undefined : (link.builder as any).toAst();
+                return {
+                    name: link.name,
+                    from: link.from,
+                    to: link.to,
+                    alias: link.alias,
+                    linkType: link.linkType,
+                    intersect: link.intersect,
+                    attributes: child?.attributes ?? [],
+                    filters: link.builder instanceof FilterCollector ? [...(link.builder as any)._filters] : child?.filters ?? [],
+                    orders: child?.orders ?? [],
+                    links: child?.links ?? [],
+                };
+            }),
+            top: this._top,
+            aggregateLimit: this._aggregateLimit,
+            datasource: this._datasource,
+            options: this._options,
+            lateMaterialize: this._lateMaterialize,
+            useRawOrderBy: this._useRawOrderBy,
+        };
     }
 
     toXml(): string {
@@ -976,6 +1026,40 @@ export class EntityQueryBuilder<
         return this;
     }
 
+    toAst(): FetchXmlSelectAst {
+        return {
+            kind: "xml-select",
+            entity: this._table.logicalName,
+            version: "1.0",
+            mapping: "logical",
+            attributes: this._getEffectiveAttributes().map(fetchAttributeAst),
+            filters: [...this._filters],
+            orders: this._orders.map(fetchOrderAst),
+            links: this._links.map((link): FetchXmlLinkAst => {
+                const child = link.builder instanceof FilterCollector ? undefined : (link.builder as any).toAst();
+                return {
+                    name: link.name,
+                    from: link.from,
+                    to: link.to,
+                    alias: link.alias,
+                    linkType: link.linkType,
+                    intersect: link.intersect,
+                    attributes: child?.attributes ?? [],
+                    filters: link.builder instanceof FilterCollector ? [...(link.builder as any)._filters] : child?.filters ?? [],
+                    orders: child?.orders ?? [],
+                    links: child?.links ?? [],
+                };
+            }),
+            distinct: this._isDistinct,
+            top: this._top,
+            aggregateLimit: this._aggregateLimit,
+            datasource: this._datasource,
+            options: this._options,
+            lateMaterialize: this._lateMaterialize,
+            useRawOrderBy: this._useRawOrderBy,
+        };
+    }
+
     toXml(): string {
         const lines: string[] = [];
         const fetchAttrs: string[] = [`version="1.0"`, `mapping="logical"`];
@@ -1253,6 +1337,10 @@ class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlI
     orderby(...args: any[]): FetchXmlInitial<TProps> {
         ;(this.#builder as any).orderby(...args)
         return this
+    }
+
+    toAst(): FetchXmlSelectAst {
+        return this.#builder.toAst()
     }
 
     toXml(): string {

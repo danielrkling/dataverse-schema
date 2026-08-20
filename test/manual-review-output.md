@@ -259,7 +259,7 @@ fetchOdata(Contact).select("name").expand("account").toString()
 ```
 
 ```
-$select=log_name&$expand=log_account
+$select=log_name&$expand=log_account()
 ```
 
 ### OData expand: lookup with select
@@ -301,7 +301,7 @@ fetchOdata(Ticket).select("title").expand("tags").toString()
 ```
 
 ```
-$select=log_title&$expand=log_tags
+$select=log_title&$expand=log_tags()
 ```
 
 ### OData expand: collection with select

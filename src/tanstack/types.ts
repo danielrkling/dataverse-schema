@@ -1,12 +1,12 @@
 import type { CollectionConfig, InsertMutationFn, UpdateMutationFn, DeleteMutationFn, UtilsRecord } from "@tanstack/db";
-import type { DataverseTable, GenericProperties, Infer, QueryForTable } from "dataverse-schema";
+import type { DataverseTable, GenericProperties, Infer, ODataTableQueryOptions } from "dataverse-schema";
 
 export const DEFAULT_QUEUE_STORE = "__mutations";
 
 export type DataverseCollectionConfig<T extends GenericProperties> = {
   id?: string;
   table: DataverseTable<T>;
-  query?: QueryForTable<Infer<T>>;
+  query?: ODataTableQueryOptions;
   getKey?: (item: Infer<T>) => string | number;
   onInsert?: InsertMutationFn<Infer<T>>;
   onUpdate?: UpdateMutationFn<Infer<T>>;
