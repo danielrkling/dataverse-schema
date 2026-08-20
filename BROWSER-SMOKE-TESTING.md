@@ -13,17 +13,17 @@ Use `test/browser-smoke.ts` for tests that need to run against a real Dataverse 
    npm run build:browser-test
    ```
 
-5. Commit both the source test and the generated `dist/browser-smoke.js` when the bundle needs to be run from GitHub.
+5. Commit both the source test and the generated `test/dist/browser-test/browser-test.js` when the bundle needs to be run from GitHub.
 6. Load the bundle in the authenticated Dataverse page:
 
    ```html
-   <script src="https://raw.githubusercontent.com/OWNER/REPO/BRANCH/dist/browser-smoke.js"></script>
+   <script src="https://raw.githubusercontent.com/OWNER/REPO/BRANCH/test/dist/browser-test/browser-test.js"></script>
    ```
 
    Add a cache-busting query string when needed:
 
    ```html
-   <script src="https://raw.githubusercontent.com/OWNER/REPO/BRANCH/dist/browser-smoke.js?v=2"></script>
+   <script src="https://raw.githubusercontent.com/OWNER/REPO/BRANCH/test/dist/browser-test/browser-test.js?v=2"></script>
    ```
 
 ## Adding Tests

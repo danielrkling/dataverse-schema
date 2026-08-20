@@ -6,12 +6,13 @@ export default defineConfig(({ mode }) => {
   if (mode === "browser-test") {
     return {
       build: {
-        emptyOutDir: false,
+        outDir: path.resolve(__dirname, "test/dist/browser-test"),
+        emptyOutDir: true,
         lib: {
           entry: path.resolve(__dirname, "test/browser-smoke.ts"),
           formats: ["iife"],
           name: "DataverseSchemaBrowserTest",
-          fileName: () => "browser-smoke.js",
+          fileName: () => "browser-test.js",
         },
         rollupOptions: {
           output: {
