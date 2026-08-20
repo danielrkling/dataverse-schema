@@ -15,7 +15,7 @@ test("string field type and defaults", () => {
   const f = string("fullname")
   expect(f.type).toBe("string")
   expect(f.kind).toBe("value")
-  expect(f.name).toBe("fullname")
+  expect(f.logicalName).toBe("fullname")
   expect(f.getDefault()).toBe("")
 })
 
@@ -141,7 +141,7 @@ test("choice field type and defaults", () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" })
   expect(f.type).toBe("choice")
   expect(f.kind).toBe("value")
-  expect(f.name).toBe("statuscode")
+  expect(f.logicalName).toBe("statuscode")
   expect(f.getDefault()).toBe("Active")
 })
 

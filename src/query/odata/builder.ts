@@ -313,7 +313,7 @@ class ODataQuery<T extends GenericProperties> {
     const subQueryProvided = !!sub
     this.#expandMeta.push({
       key,
-      dvName: prop.name,
+      dvName: prop.fromDataverseName,
       isCollection,
       selectedKeys: subQueryProvided
         ? (childSelectedKeys.length > 0 ? childSelectedKeys : null)
@@ -400,7 +400,7 @@ class ODataQuery<T extends GenericProperties> {
       select: this.#fields.map(toODataPath),
       filters: this.#filters.map(toODataFilterNode),
       orderby: this.#orderby.map(order => ({ field: toODataPath(order.field), direction: order.direction })),
-      expands: this.#expands.map((expand) => ({ navigation: expand.navigation.name, query: expand.query })),
+        expands: this.#expands.map((expand) => ({ navigation: expand.navigation.fromDataverseName, query: expand.query })),
       top: this.#top,
     }
   }
@@ -415,11 +415,11 @@ class ODataQuery<T extends GenericProperties> {
 
   private _partialTransform(value: any): Record<string, any> {
     const result: Record<string | symbol, any> = {}
-    const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.name]
+    const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.logicalName]
     const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" }
     for (const key of this.#selectedKeys) {
       const prop = this.#table.fields[key]
-      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(value[prop.fromDataverseName], ctx)
+      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx)
     }
     for (const expand of this.#expandMeta) {
       if (value[expand.dvName] !== undefined) {
@@ -538,12 +538,12 @@ function _processExpand(raw: any, expand: ExpandMeta, table: DataverseTable<any>
 
 function _partialTransformItem(table: DataverseTable<any>, selectedKeys: string[], raw: any, subExpands?: ExpandMeta[] | null): Record<string, any> {
   const result: Record<string, any> = {}
-  const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.name]
+  const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.logicalName]
   const ctx = { table, client: table.client, recordId: recordId ?? "" }
   for (const key of selectedKeys) {
     const prop = table.fields[key]
     if (prop) {
-      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(raw[prop.fromDataverseName], ctx)
+      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx)
     }
   }
   if (subExpands) {
@@ -564,7 +564,7 @@ function _buildProxyForTable<T extends GenericProperties>(
   const proxy: Record<string, any> = {}
   const fields = table.fields as Record<string, any>
   for (const [key, prop] of Object.entries(fields)) {
-    const dataverseName = prop.fromDataverseName ?? prop.name
+    const dataverseName = prop.fromDataverseName ?? prop.logicalName
     const isCollection = prop.kind === "navigation" && prop.type === "collection"
     const isLookup = prop.kind === "navigation" && prop.type === "lookup"
     if (isCollection || isLookup) {
@@ -602,7 +602,7 @@ export function buildLambdaProxy<P extends GenericProperties>(
   const fields = table.fields as Record<string, any>
   const proxy = {} as Record<string, any>
   for (const [key, prop] of Object.entries(fields)) {
-    proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.name}`)
+    proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.logicalName}`)
   }
   return proxy as ODataLambdaProxy<P>
 }
@@ -682,7 +682,7 @@ export function buildTableQueryAst<T extends GenericProperties>(
     }
   } else {
     for (const [field, direction] of Object.entries(options?.orderby ?? {})) {
-      const property = table.fields[field]?.fromDataverseName ?? table.fields[field]?.name ?? field
+      const property = table.fields[field]?.fromDataverseName ?? table.fields[field]?.logicalName ?? field
       query.orderby(property, direction as "asc" | "desc")
     }
   }

@@ -400,15 +400,15 @@ export class FetchXmlAggregateQuery<
                 targetTable = intersectTable.table1;
             } else {
                 throw new Error(
-                    `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`,
+                    `Table "${this._table.entitySetName}" is not related to intersect table "${intersectTable.name}"`,
                 );
             }
 
             const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
             subqueryFn(targetBuilder as unknown as SubAggregateJoinBuilder<any>);
 
-            const pkName = this._table.primaryKey.property.name;
-            const targetPkName = targetTable.primaryKey.property.name;
+            const pkName = this._table.primaryKey.property.logicalName;
+            const targetPkName = targetTable.primaryKey.property.logicalName;
 
             const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
             const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
@@ -440,8 +440,8 @@ export class FetchXmlAggregateQuery<
         const nested = new EntityQueryBuilder(table, this._linkAlias);
         subquery!(nested as unknown as SubAggregateJoinBuilder<any>);
 
-        const fromFieldName = table.fields[from].name;
-        const toFieldName = this._table.fields[to!].name;
+        const fromFieldName = table.fields[from].logicalName;
+        const toFieldName = this._table.fields[to!].logicalName;
         const autoAlias = `auto_link_${++this._linkAlias.value}`;
         const isIntersect = intersect ?? ((table as any).intersect === true);
 
@@ -582,7 +582,7 @@ export class FetchXmlAggregateQuery<
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
             const result: Record<string | symbol, any> = {};
-            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.name] ?? "";
+            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.logicalName] ?? "";
             const ctx = { table: this._table, client: this._table.client, recordId };
             for (const [alias, info] of aliasInfo) {
                 if (info.name in v) {
@@ -636,11 +636,11 @@ export class FetchXmlAggregateQuery<
         for (const attr of builder._getEffectiveAttributes()) {
             const fields = builder._table.fields as Record<string, any>;
             const entry = Object.entries(fields).find(
-                ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
+                ([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name,
             );
             if (entry) {
                 const fieldDef = entry[1];
-                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
                 map.set(attr.alias, {
                     field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
@@ -741,11 +741,11 @@ export class FetchXmlAggregateQuery<
         for (const attr of (builder as any)._getEffectiveAttributes()) {
             const fields = (builder as any)._table.fields as Record<string, any>;
             const entry = Object.entries(fields).find(
-                ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
+                ([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name,
             );
             if (entry) {
                 const fieldDef = entry[1];
-                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
                 map.set(attr.alias, {
                     field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
@@ -807,7 +807,7 @@ export class EntityQueryBuilder<
         for (const [key, prop] of Object.entries(this._table.fields)) {
             const p = prop as any;
             if (p.kind === "value" || p.type === "lookupId" || p.type === "file") {
-                attrs.push({ name: p.name, alias: key });
+                attrs.push({ name: p.logicalName, alias: key });
             }
         }
         return attrs;
@@ -828,7 +828,7 @@ export class EntityQueryBuilder<
         const selectedMap = selector(fieldsMock);
         for (const [alias, propKey] of Object.entries(selectedMap)) {
             const fieldDef = this._table.fields[propKey as keyof TProps];
-            this._attributes.push({ name: fieldDef.name, alias });
+            this._attributes.push({ name: fieldDef.logicalName, alias });
         }
         return this as any;
     }
@@ -843,7 +843,7 @@ export class EntityQueryBuilder<
             if (value instanceof GroupByExpr) {
                 initialAttributes.push({ name: value.field, alias, groupby: true });
             } else if (value instanceof Aggregation) {
-                const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.name;
+                const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.logicalName;
                 initialAttributes.push({ name: fieldName, alias, aggregate: value.operation });
             }
         }
@@ -927,15 +927,15 @@ export class EntityQueryBuilder<
                 targetTable = intersectTable.table1;
             } else {
                 throw new Error(
-                    `Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`,
+                    `Table "${this._table.entitySetName}" is not related to intersect table "${intersectTable.name}"`,
                 );
             }
 
             const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
             subqueryFn(targetBuilder as unknown as SubJoinBuilder<any, {}>);
 
-            const pkName = this._table.primaryKey.property.name;
-            const targetPkName = targetTable.primaryKey.property.name;
+            const pkName = this._table.primaryKey.property.logicalName;
+            const targetPkName = targetTable.primaryKey.property.logicalName;
 
             const stubTable = { name: intersectTable.name, fields: {}, client: this._table.client } as unknown as DataverseTable<any>;
             const intersectBuilder = new EntityQueryBuilder(stubTable, this._linkAlias);
@@ -967,8 +967,8 @@ export class EntityQueryBuilder<
         if (isFilterOnly) {
             const collector = new FilterCollector(table)
             subquery!(collector)
-            const fromFieldName = table.fields[from].name;
-            const toFieldName = this._table.fields[to!].name;
+            const fromFieldName = table.fields[from].logicalName;
+            const toFieldName = this._table.fields[to!].logicalName;
             this._links.push({
                 name: table.logicalName,
                 from: fromFieldName,
@@ -981,8 +981,8 @@ export class EntityQueryBuilder<
         } else {
             const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias)
             subquery!(nestedBuilder)
-            const fromFieldName = table.fields[from].name;
-            const toFieldName = this._table.fields[to!].name;
+            const fromFieldName = table.fields[from].logicalName;
+            const toFieldName = this._table.fields[to!].logicalName;
             this._links.push({
                 name: table.logicalName,
                 from: fromFieldName,
@@ -1199,7 +1199,7 @@ export class EntityQueryBuilder<
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
             const result: Record<string | symbol, any> = {};
-            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.name] ?? "";
+            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.logicalName] ?? "";
             const ctx = { table: this._table, client: this._table.client, recordId };
             for (const [alias, info] of aliasInfo) {
                 if (info.name in v) {
@@ -1253,11 +1253,11 @@ export class EntityQueryBuilder<
         for (const attr of builder._getEffectiveAttributes()) {
             const fields = builder._table.fields as Record<string, any>;
             const entry = Object.entries(fields).find(
-                ([_, f]) => (f.fromDataverseName ?? f.name) === attr.name,
+                ([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name,
             );
             if (entry) {
                 const fieldDef = entry[1];
-                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
                 map.set(attr.alias, {
                     field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),

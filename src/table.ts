@@ -64,7 +64,6 @@ export class DataverseTable<TProperties extends GenericProperties> {
   fields: TProperties;
   logicalName: string;
   entitySetName: string;
-  name: string;
   kind = "table" as const;
   type = "table" as const;
   schema?: ValidationSchema<Infer<TProperties>>;
@@ -77,7 +76,6 @@ export class DataverseTable<TProperties extends GenericProperties> {
     this.client = options.client;
     this.entitySetName = options.entitySetName;
     this.logicalName = options.logicalName;
-    this.name = options.entitySetName;
     this.fields = options.fields;
     this.schema = options.schema;
     if (options.primaryKey) {
@@ -131,7 +129,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
 
   getAlternateKeys(value: Partial<Infer<TProperties>>): AlternateKey {
     return Object.entries(value)
-      .map((kv) => `${this.fields[kv[0]].name}=${kv[1]}`)
+      .map((kv) => `${this.fields[kv[0]].logicalName}=${kv[1]}`)
       .join(",") as AlternateKey;
   }
 
@@ -234,7 +232,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const prop = this.fields[key];
     if (prop.kind === "value" || prop.type === "lookupId") {
       return this.client
-        .getPropertyValue(this.entitySetName, id, prop.name)
+        .getPropertyValue(this.entitySetName, id, prop.logicalName)
         .then((v) => prop.transformValueFromDataverse(v)) as Infer<
         TProperties[TKey]
       >;
@@ -244,7 +242,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
         .getAssociatedRecords(
           this.entitySetName,
           id,
-          prop.name,
+          prop.schemaName,
           { query: tableQuery(prop.table as DataverseTable<GenericProperties>, queryOptions) },
         )
         .then(
@@ -257,7 +255,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
         .getAssociatedRecord(
           this.entitySetName,
           id,
-          prop.name,
+          prop.schemaName,
           { query: tableQuery(prop.table, queryOptions) },
         )
         .then(
@@ -302,7 +300,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
         await this.client.updatePropertyValue(
           this.entitySetName,
           id,
-          this.fields[key].name,
+          this.fields[key].logicalName,
           v,
         );
       }
@@ -324,7 +322,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       return this.client.associateRecord(
         this.entitySetName,
         id,
-        prop.name,
+        prop.type === "collection" || prop.type === "lookup" ? prop.schemaName : prop.logicalName,
         prop.table.entitySetName,
         childId,
       );
@@ -360,7 +358,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   >(key: TKey, id: DataverseKey, childId?: GUID): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
-      return this.client.dissociateRecord(this.entitySetName, id, prop.name, childId);
+      return this.client.dissociateRecord(this.entitySetName, id, prop.type === "collection" || prop.type === "lookup" ? prop.schemaName : prop.logicalName, childId);
     } else {
       throw new Error("Can only dissociate navigation properties");
     }
@@ -375,7 +373,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * const newId = await Person.insertRecord({ name: "John", age: 30 });
    */
   async insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
-    const pkName = this.primaryKey.property.name;
+    const pkName = this.primaryKey.property.logicalName;
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
@@ -428,7 +426,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
   async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
-    const pkName = this.primaryKey.property.name;
+    const pkName = this.primaryKey.property.logicalName;
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: "" };
 
     if (id) {
@@ -499,7 +497,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   >(key: TKey, id: DataverseKey): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "value") {
-      return this.client.deletePropertyValue(this.entitySetName, id, prop.name);
+      return this.client.deletePropertyValue(this.entitySetName, id, prop.logicalName);
     }
     throw new Error("Cannot delete navigation property values");
   }
@@ -695,13 +693,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async deleteFile(id: GUID, fieldName: string): Promise<void> {
     const field = this.fields[fieldName];
     if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
-    await this.client.deletePropertyValue(this.entitySetName, id, (field as FileField).name);
+    await this.client.deletePropertyValue(this.entitySetName, id, (field as FileField).logicalName);
   }
 
   async downloadImage(id: GUID, fieldName: string): Promise<Blob> {
     const field = this.fields[fieldName];
     if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
-    const response = await this.client.fetch(`${this.entitySetName}(${id})/${field.name}/$value`, { raw: true });
+    const response = await this.client.fetch(`${this.entitySetName}(${id})/${field.logicalName}/$value`, { raw: true });
     if (!response.ok) throw new Error(response.status + "-" + response.statusText);
     return response.blob();
   }
@@ -709,7 +707,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async deleteImage(id: GUID, fieldName: string): Promise<void> {
     const field = this.fields[fieldName];
     if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
-    await this.client.deletePropertyValue(this.entitySetName, id, field.name);
+    await this.client.deletePropertyValue(this.entitySetName, id, field.logicalName);
   }
 
   private async _afterSave(ctx: TransformContext, value: Partial<Infer<TProperties>>): Promise<void> {

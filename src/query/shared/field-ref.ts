@@ -16,7 +16,8 @@ export class FieldRef<T = any, K extends string = string, F extends FieldBase<T>
     if (typeof (field as unknown) === "string") {
       const name = field as unknown as string
       this.field = {
-        name,
+        schemaName: name,
+        logicalName: name,
         fromDataverseName: name,
         toDataverseName: name,
         transformValueFromDataverse: (value: unknown) => value,

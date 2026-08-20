@@ -195,7 +195,7 @@ async function run() {
       const rows = await fetchOdata(TestTable)
         .select("name", "int", "bool", "datetime")
         .filter((f) => and(gt(f.int, 0), lt(f.int, 1000)))
-        .orderby("name", "asc")
+        .orderby((f) => f.name, "asc")
         .top(10)
         .execute()
       assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows")

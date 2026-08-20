@@ -446,7 +446,6 @@ declare class DataverseTable<TProperties extends GenericProperties> {
   fields: TProperties;
   logicalName: string;
   entitySetName: string;
-  name: string;
   kind: "table";
   type: "table";
   schema?: ValidationSchema<Infer<TProperties>>;
@@ -781,7 +780,10 @@ type TransformContext = {
 };
 declare abstract class FieldBase<T> {
   #private;
-  name: string;
+  /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
+  schemaName: string;
+  /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
+  logicalName: string;
   fromDataverseName: string;
   toDataverseName: string;
   kind: string;

@@ -470,7 +470,7 @@ var DataverseClient = class {
 	*   "00000000-0000-0000-0000-000000000001", "name")
 	*/
 	async getPropertyValue(entitySetName, id, propertyName, options) {
-		return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r.value);
+		return this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, options).then((r) => r ? r.value : void 0);
 	}
 	/**
 	* Retrieves a property's raw value (e.g. file content) via `/$value`.
@@ -889,7 +889,8 @@ var FieldRef = class FieldRef {
 		if (typeof field === "string") {
 			const name = field;
 			this.field = {
-				name,
+				schemaName: name,
+				logicalName: name,
 				fromDataverseName: name,
 				toDataverseName: name,
 				transformValueFromDataverse: (value) => value,
@@ -923,7 +924,7 @@ var FieldRef = class FieldRef {
 //#endregion
 //#region src/query/path.ts
 function propertyName(property) {
-	return property.fromDataverseName ?? property.name;
+	return property.fromDataverseName ?? property.logicalName;
 }
 function fieldPathName(path) {
 	return path.map(propertyName).join("/");
@@ -1687,7 +1688,7 @@ var ODataQuery = class ODataQuery {
 		const subQueryProvided = !!sub;
 		this.#expandMeta.push({
 			key,
-			dvName: prop.name,
+			dvName: prop.fromDataverseName,
 			isCollection,
 			selectedKeys: subQueryProvided ? childSelectedKeys.length > 0 ? childSelectedKeys : null : null,
 			subExpands: subQueryProvided && childExpandMeta.length > 0 ? childExpandMeta : null
@@ -1761,7 +1762,7 @@ var ODataQuery = class ODataQuery {
 				direction: order.direction
 			})),
 			expands: this.#expands.map((expand) => ({
-				navigation: expand.navigation.name,
+				navigation: expand.navigation.fromDataverseName,
 				query: expand.query
 			})),
 			top: this.#top
@@ -1775,7 +1776,7 @@ var ODataQuery = class ODataQuery {
 	}
 	_partialTransform(value) {
 		const result = {};
-		const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.name];
+		const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.logicalName];
 		const ctx = {
 			table: this.#table,
 			client: this.#table.client,
@@ -1783,7 +1784,7 @@ var ODataQuery = class ODataQuery {
 		};
 		for (const key of this.#selectedKeys) {
 			const prop = this.#table.fields[key];
-			result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(value[prop.fromDataverseName], ctx);
+			result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
 		}
 		for (const expand of this.#expandMeta) if (value[expand.dvName] !== void 0) result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
 		result[Etag] = value["@odata.etag"];
@@ -1857,7 +1858,7 @@ function _processExpand(raw, expand, table) {
 }
 function _partialTransformItem(table, selectedKeys, raw, subExpands) {
 	const result = {};
-	const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.name];
+	const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.logicalName];
 	const ctx = {
 		table,
 		client: table.client,
@@ -1865,7 +1866,7 @@ function _partialTransformItem(table, selectedKeys, raw, subExpands) {
 	};
 	for (const key of selectedKeys) {
 		const prop = table.fields[key];
-		if (prop) result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.name).transformFromDataverse(raw[prop.fromDataverseName], ctx);
+		if (prop) result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
 	}
 	if (subExpands) {
 		for (const expand of subExpands) if (raw[expand.dvName] !== void 0) result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
@@ -1876,7 +1877,7 @@ function _buildProxyForTable(table, prefix, prefixPath = []) {
 	const proxy = {};
 	const fields = table.fields;
 	for (const [key, prop] of Object.entries(fields)) {
-		const dataverseName = prop.fromDataverseName ?? prop.name;
+		const dataverseName = prop.fromDataverseName ?? prop.logicalName;
 		const isCollection = prop.kind === "navigation" && prop.type === "collection";
 		const isLookup = prop.kind === "navigation" && prop.type === "lookup";
 		if (isCollection || isLookup) {
@@ -1908,7 +1909,7 @@ function _buildProxyForTable(table, prefix, prefixPath = []) {
 function buildLambdaProxy(alias, table) {
 	const fields = table.fields;
 	const proxy = {};
-	for (const [key, prop] of Object.entries(fields)) proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.name}`);
+	for (const [key, prop] of Object.entries(fields)) proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.logicalName}`);
 	return proxy;
 }
 function any(proxy, condition) {
@@ -1968,7 +1969,7 @@ function buildTableQueryAst(table, options) {
 		if (field) query.orderby(field, direction);
 	}
 	else for (const [field, direction] of Object.entries(options?.orderby ?? {})) {
-		const property = table.fields[field]?.fromDataverseName ?? table.fields[field]?.name ?? field;
+		const property = table.fields[field]?.fromDataverseName ?? table.fields[field]?.logicalName ?? field;
 		query.orderby(property, direction);
 	}
 	return query.toAst();
@@ -2009,7 +2010,6 @@ var DataverseTable = class DataverseTable {
 	fields;
 	logicalName;
 	entitySetName;
-	name;
 	kind = "table";
 	type = "table";
 	schema;
@@ -2021,7 +2021,6 @@ var DataverseTable = class DataverseTable {
 		this.client = options.client;
 		this.entitySetName = options.entitySetName;
 		this.logicalName = options.logicalName;
-		this.name = options.entitySetName;
 		this.fields = options.fields;
 		this.schema = options.schema;
 		if (options.primaryKey) this.primaryKey = options.primaryKey;
@@ -2063,7 +2062,7 @@ var DataverseTable = class DataverseTable {
 		}).then((v) => this.transformValueFromDataverse(v));
 	}
 	getAlternateKeys(value) {
-		return Object.entries(value).map((kv) => `${this.fields[kv[0]].name}=${kv[1]}`).join(",");
+		return Object.entries(value).map((kv) => `${this.fields[kv[0]].logicalName}=${kv[1]}`).join(",");
 	}
 	/**
 	* Retrieves multiple records from the table, with optional filtering, sorting, and paging.
@@ -2134,9 +2133,9 @@ var DataverseTable = class DataverseTable {
 	*/
 	async getPropertyValue(key, id, queryOptions) {
 		const prop = this.fields[key];
-		if (prop.kind === "value" || prop.type === "lookupId") return this.client.getPropertyValue(this.entitySetName, id, prop.name).then((v) => prop.transformValueFromDataverse(v));
-		if (prop.type === "collection" || prop.type === "collectionIds") return this.client.getAssociatedRecords(this.entitySetName, id, prop.name, { query: tableQuery(prop.table, queryOptions) }).then((v) => prop.transformValueFromDataverse(v));
-		if (prop.type === "lookup") return this.client.getAssociatedRecord(this.entitySetName, id, prop.name, { query: tableQuery(prop.table, queryOptions) }).then((v) => prop.transformValueFromDataverse(v));
+		if (prop.kind === "value" || prop.type === "lookupId") return this.client.getPropertyValue(this.entitySetName, id, prop.logicalName).then((v) => prop.transformValueFromDataverse(v));
+		if (prop.type === "collection" || prop.type === "collectionIds") return this.client.getAssociatedRecords(this.entitySetName, id, prop.schemaName, { query: tableQuery(prop.table, queryOptions) }).then((v) => prop.transformValueFromDataverse(v));
+		if (prop.type === "lookup") return this.client.getAssociatedRecord(this.entitySetName, id, prop.schemaName, { query: tableQuery(prop.table, queryOptions) }).then((v) => prop.transformValueFromDataverse(v));
 		throw new Error("Invalid Property kind for getPropertyValue");
 	}
 	/**
@@ -2161,7 +2160,7 @@ var DataverseTable = class DataverseTable {
 		else {
 			let v = prop.transformValueToDataverse(value, ctx);
 			if (v instanceof Promise) v = await v;
-			if (v !== SKIP) await this.client.updatePropertyValue(this.entitySetName, id, this.fields[key].name, v);
+			if (v !== SKIP) await this.client.updatePropertyValue(this.entitySetName, id, this.fields[key].logicalName, v);
 		}
 		return id;
 	}
@@ -2173,12 +2172,12 @@ var DataverseTable = class DataverseTable {
 	*/
 	async associateRecord(key, id, childId) {
 		const prop = this.fields[key];
-		if (prop.kind === "navigation") return this.client.associateRecord(this.entitySetName, id, prop.name, prop.table.entitySetName, childId);
+		if (prop.kind === "navigation") return this.client.associateRecord(this.entitySetName, id, prop.type === "collection" || prop.type === "lookup" ? prop.schemaName : prop.logicalName, prop.table.entitySetName, childId);
 		else throw new Error("Can only associate to navigation properties");
 	}
 	async dissociateRecord(key, id, childId) {
 		const prop = this.fields[key];
-		if (prop.kind === "navigation") return this.client.dissociateRecord(this.entitySetName, id, prop.name, childId);
+		if (prop.kind === "navigation") return this.client.dissociateRecord(this.entitySetName, id, prop.type === "collection" || prop.type === "lookup" ? prop.schemaName : prop.logicalName, childId);
 		else throw new Error("Can only dissociate navigation properties");
 	}
 	/**
@@ -2190,7 +2189,7 @@ var DataverseTable = class DataverseTable {
 	* const newId = await Person.insertRecord({ name: "John", age: 30 });
 	*/
 	async insertRecord(value) {
-		const pkName = this.primaryKey.property.name;
+		const pkName = this.primaryKey.property.logicalName;
 		const guid = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), { query: selectQuery(pkName) }))?.[pkName];
 		const ctx = {
 			table: this,
@@ -2239,7 +2238,7 @@ var DataverseTable = class DataverseTable {
 	* await Person.upsertRecord(existingId, { name: "Jane" });
 	*/
 	async upsertRecord(id, value, etag) {
-		const pkName = this.primaryKey.property.name;
+		const pkName = this.primaryKey.property.logicalName;
 		const ctx = {
 			table: this,
 			client: this.client,
@@ -2298,7 +2297,7 @@ var DataverseTable = class DataverseTable {
 	*/
 	async deletePropertyValue(key, id) {
 		const prop = this.fields[key];
-		if (prop.kind === "value") return this.client.deletePropertyValue(this.entitySetName, id, prop.name);
+		if (prop.kind === "value") return this.client.deletePropertyValue(this.entitySetName, id, prop.logicalName);
 		throw new Error("Cannot delete navigation property values");
 	}
 	/**
@@ -2470,19 +2469,19 @@ var DataverseTable = class DataverseTable {
 	async deleteFile(id, fieldName) {
 		const field = this.fields[fieldName];
 		if (!field || field.type !== "file") throw new Error(`"${fieldName}" is not a file column`);
-		await this.client.deletePropertyValue(this.entitySetName, id, field.name);
+		await this.client.deletePropertyValue(this.entitySetName, id, field.logicalName);
 	}
 	async downloadImage(id, fieldName) {
 		const field = this.fields[fieldName];
 		if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
-		const response = await this.client.fetch(`${this.entitySetName}(${id})/${field.name}/$value`, { raw: true });
+		const response = await this.client.fetch(`${this.entitySetName}(${id})/${field.logicalName}/$value`, { raw: true });
 		if (!response.ok) throw new Error(response.status + "-" + response.statusText);
 		return response.blob();
 	}
 	async deleteImage(id, fieldName) {
 		const field = this.fields[fieldName];
 		if (!field || field.type !== "image") throw new Error(`"${fieldName}" is not an image column`);
-		await this.client.deletePropertyValue(this.entitySetName, id, field.name);
+		await this.client.deletePropertyValue(this.entitySetName, id, field.logicalName);
 	}
 	async _afterSave(ctx, value) {
 		const promises = [];
@@ -2556,7 +2555,10 @@ function parseValidDateOnly(value) {
 }
 const SKIP = Symbol("skip");
 var FieldBase = class {
-	name;
+	/** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
+	schemaName;
+	/** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
+	logicalName;
 	fromDataverseName;
 	toDataverseName;
 	kind;
@@ -2565,9 +2567,10 @@ var FieldBase = class {
 	#default;
 	#readOnly;
 	constructor(name, defaults, options) {
-		this.name = name;
-		this.fromDataverseName = name;
-		this.toDataverseName = name;
+		this.schemaName = name;
+		this.logicalName = name.toLowerCase();
+		this.fromDataverseName = this.logicalName;
+		this.toDataverseName = this.logicalName;
 		this.#default = options?.default ?? defaults.defaultValue;
 		this.#readOnly = options?.readonly ?? false;
 		this.schema = options?.schema ?? defaults.schema;
@@ -2849,15 +2852,15 @@ var ImageField = class extends FieldBase {
 		if (!ctx) return { url };
 		return {
 			url,
-			fullSizeUrl: ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.name)
+			fullSizeUrl: ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.logicalName)
 		};
 	}
 	async transformValueToDataverse(value) {
 		return SKIP;
 	}
 	async afterSave(ctx, value) {
-		if (value?.data === null) await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name);
-		else if (value?.data instanceof Blob) await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, "image", value.data);
+		if (value?.data === null) await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.logicalName);
+		else if (value?.data instanceof Blob) await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.logicalName, "image.png", value.data);
 	}
 };
 var FileField = class extends FieldBase {
@@ -2882,7 +2885,7 @@ var FileField = class extends FieldBase {
 		if (!ctx) return { name: value };
 		return {
 			name: value,
-			url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.name)
+			url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.logicalName)
 		};
 	}
 	transformValueToDataverse() {
@@ -2891,8 +2894,8 @@ var FileField = class extends FieldBase {
 	async afterSave(ctx, value) {
 		if (value?.data instanceof Blob) {
 			const fileName = value.name ?? this.getDefault()?.name;
-			if (fileName) await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, fileName, value.data);
-		} else if (value?.data === null) await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name);
+			if (fileName) await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.logicalName, fileName, value.data);
+		} else if (value?.data === null) await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.logicalName);
 	}
 };
 var JsonField = class extends FieldBase {
@@ -3149,10 +3152,10 @@ var LookupIdProperty = class extends FieldBase {
 			defaultValue: null,
 			schema: v.nullable(NON_EMPTY_STRING_SCHEMA)
 		}, options);
-		this.navigationName = name;
+		this.navigationName = this.schemaName;
 		this.#getTable = getTable;
-		this.fromDataverseName = `_${name.toLowerCase()}_value`;
-		this.toDataverseName = `${this.name}@odata.bind`;
+		this.fromDataverseName = `_${this.logicalName}_value`;
+		this.toDataverseName = `${this.logicalName}@odata.bind`;
 	}
 	#table;
 	get table() {
@@ -3161,8 +3164,8 @@ var LookupIdProperty = class extends FieldBase {
 			const { property } = table.primaryKey;
 			this.#table = new DataverseTable({
 				client: table.client,
-				entitySetName: table.name,
-				logicalName: table.name,
+				entitySetName: table.entitySetName,
+				logicalName: table.logicalName,
 				fields: { id: property }
 			});
 		}
@@ -3171,7 +3174,7 @@ var LookupIdProperty = class extends FieldBase {
 	transformValueToDataverse(value) {
 		if (value === null) return null;
 		if (typeof value !== "string" || value.length === 0) throw new Error("Lookup IDs must be non-empty strings");
-		return `${this.table.name}(${value})`;
+		return `${this.table.entitySetName}(${value})`;
 	}
 };
 var CollectionProperty = class extends FieldBase {
@@ -3184,6 +3187,7 @@ var CollectionProperty = class extends FieldBase {
 			schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields)))
 		}, options);
 		this.#getTable = getTable;
+		this.fromDataverseName = this.schemaName;
 	}
 	#table;
 	get table() {
@@ -3198,7 +3202,7 @@ var CollectionProperty = class extends FieldBase {
 	async afterSave(ctx, value) {
 		if (!Array.isArray(value)) return;
 		const ids = await Promise.all(value.map((v) => this.table.upsertRecord(void 0, v)));
-		await ctx.client.associateRecordToList(ctx.table.entitySetName, ctx.recordId, this.name, this.table.entitySetName, this.table.primaryKey.property.name, ids);
+		await ctx.client.associateRecordToList(ctx.table.entitySetName, ctx.recordId, this.schemaName, this.table.entitySetName, this.table.primaryKey.property.logicalName, ids);
 	}
 };
 /**
@@ -3229,6 +3233,7 @@ var CollectionIdsProperty = class extends FieldBase {
 			schema: v.array(NON_EMPTY_STRING_SCHEMA)
 		}, options);
 		this.#getTable = getTable;
+		this.fromDataverseName = this.schemaName;
 	}
 	#table;
 	get table() {
@@ -3237,22 +3242,22 @@ var CollectionIdsProperty = class extends FieldBase {
 			const { property } = table.primaryKey;
 			this.#table = new DataverseTable({
 				client: table.client,
-				entitySetName: table.name,
-				logicalName: table.name,
+				entitySetName: table.entitySetName,
+				logicalName: table.logicalName,
 				fields: { id: property }
 			});
 		}
 		return this.#table;
 	}
 	transformValueFromDataverse(value) {
-		return Array.from(value ?? []).map((v) => v[this.table.fields.id.name]);
+		return Array.from(value ?? []).map((v) => v[this.table.fields.id.logicalName]);
 	}
 	transformValueToDataverse() {
 		return SKIP;
 	}
 	async afterSave(ctx, value) {
 		if (!Array.isArray(value)) return;
-		await ctx.client.associateRecordToList(ctx.table.entitySetName, ctx.recordId, this.name, this.table.entitySetName, this.table.primaryKey.property.name, value);
+		await ctx.client.associateRecordToList(ctx.table.entitySetName, ctx.recordId, this.schemaName, this.table.entitySetName, this.table.primaryKey.property.logicalName, value);
 	}
 };
 /**
@@ -3301,6 +3306,7 @@ var LookupProperty = class extends FieldBase {
 			schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields)))
 		}, options);
 		this.#getTable = getTable;
+		this.fromDataverseName = this.schemaName;
 	}
 	#table;
 	get table() {
@@ -3313,10 +3319,10 @@ var LookupProperty = class extends FieldBase {
 		return SKIP;
 	}
 	async afterSave(ctx, value) {
-		if (value === null) await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.name);
+		if (value === null) await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName);
 		else {
 			const childId = await this.table.upsertRecord(void 0, value);
-			await ctx.client.associateRecord(ctx.table.entitySetName, ctx.recordId, this.name, this.table.entitySetName, childId);
+			await ctx.client.associateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName, this.table.entitySetName, childId);
 		}
 	}
 };
@@ -3409,11 +3415,11 @@ var FetchXmlAggregateQuery = class {
 			let targetTable;
 			if (intersectTable.table1 === this._table) targetTable = intersectTable.table2;
 			else if (intersectTable.table2 === this._table) targetTable = intersectTable.table1;
-			else throw new Error(`Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`);
+			else throw new Error(`Table "${this._table.entitySetName}" is not related to intersect table "${intersectTable.name}"`);
 			const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
 			subqueryFn(targetBuilder);
-			const pkName = this._table.primaryKey.property.name;
-			const targetPkName = targetTable.primaryKey.property.name;
+			const pkName = this._table.primaryKey.property.logicalName;
+			const targetPkName = targetTable.primaryKey.property.logicalName;
 			const stubTable = {
 				name: intersectTable.name,
 				fields: {},
@@ -3444,8 +3450,8 @@ var FetchXmlAggregateQuery = class {
 		const from = fromOrSubquery;
 		const nested = new EntityQueryBuilder(table, this._linkAlias);
 		subquery(nested);
-		const fromFieldName = table.fields[from].name;
-		const toFieldName = this._table.fields[to].name;
+		const fromFieldName = table.fields[from].logicalName;
+		const toFieldName = this._table.fields[to].logicalName;
 		const autoAlias = `auto_link_${++this._linkAlias.value}`;
 		const isIntersect = intersect ?? table.intersect === true;
 		this._links.push({
@@ -3568,7 +3574,7 @@ var FetchXmlAggregateQuery = class {
 		const aliasInfo = this._buildAliasInfo();
 		if (aliasInfo.size > 0) {
 			const result = {};
-			const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.name] ?? "";
+			const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.logicalName] ?? "";
 			const ctx = {
 				table: this._table,
 				client: this._table.client,
@@ -3606,10 +3612,10 @@ var FetchXmlAggregateQuery = class {
 	_collectAliases(builder, map) {
 		for (const attr of builder._getEffectiveAttributes()) {
 			const fields = builder._table.fields;
-			const entry = Object.entries(fields).find(([_, f]) => (f.fromDataverseName ?? f.name) === attr.name);
+			const entry = Object.entries(fields).find(([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name);
 			if (entry) {
 				const fieldDef = entry[1];
-				const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+				const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
 				map.set(attr.alias, {
 					field: FieldRef.fromPath(fieldDef, dataverseName),
 					getDefault: () => fieldDef.getDefault?.(),
@@ -3677,10 +3683,10 @@ var FetchXmlAggregateQuery = class {
 	_collectAliasesFromBuilder(builder, map) {
 		for (const attr of builder._getEffectiveAttributes()) {
 			const fields = builder._table.fields;
-			const entry = Object.entries(fields).find(([_, f]) => (f.fromDataverseName ?? f.name) === attr.name);
+			const entry = Object.entries(fields).find(([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name);
 			if (entry) {
 				const fieldDef = entry[1];
-				const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+				const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
 				map.set(attr.alias, {
 					field: FieldRef.fromPath(fieldDef, dataverseName),
 					getDefault: () => fieldDef.getDefault?.(),
@@ -3722,7 +3728,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		for (const [key, prop] of Object.entries(this._table.fields)) {
 			const p = prop;
 			if (p.kind === "value" || p.type === "lookupId" || p.type === "file") attrs.push({
-				name: p.name,
+				name: p.logicalName,
 				alias: key
 			});
 		}
@@ -3739,7 +3745,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		for (const [alias, propKey] of Object.entries(selectedMap)) {
 			const fieldDef = this._table.fields[propKey];
 			this._attributes.push({
-				name: fieldDef.name,
+				name: fieldDef.logicalName,
 				alias
 			});
 		}
@@ -3754,7 +3760,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 			groupby: true
 		});
 		else if (value instanceof Aggregation) {
-			const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.name;
+			const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.logicalName;
 			initialAttributes.push({
 				name: fieldName,
 				alias,
@@ -3781,11 +3787,11 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 			let targetTable;
 			if (intersectTable.table1 === this._table) targetTable = intersectTable.table2;
 			else if (intersectTable.table2 === this._table) targetTable = intersectTable.table1;
-			else throw new Error(`Table "${this._table.name}" is not related to intersect table "${intersectTable.name}"`);
+			else throw new Error(`Table "${this._table.entitySetName}" is not related to intersect table "${intersectTable.name}"`);
 			const targetBuilder = new EntityQueryBuilder(targetTable, this._linkAlias);
 			subqueryFn(targetBuilder);
-			const pkName = this._table.primaryKey.property.name;
-			const targetPkName = targetTable.primaryKey.property.name;
+			const pkName = this._table.primaryKey.property.logicalName;
+			const targetPkName = targetTable.primaryKey.property.logicalName;
 			const stubTable = {
 				name: intersectTable.name,
 				fields: {},
@@ -3816,8 +3822,8 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		if (EntityQueryBuilder._isFilterOnlyLinkType(linkType)) {
 			const collector = new FilterCollector(table);
 			subquery(collector);
-			const fromFieldName = table.fields[from].name;
-			const toFieldName = this._table.fields[to].name;
+			const fromFieldName = table.fields[from].logicalName;
+			const toFieldName = this._table.fields[to].logicalName;
 			this._links.push({
 				name: table.logicalName,
 				from: fromFieldName,
@@ -3830,8 +3836,8 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		} else {
 			const nestedBuilder = new EntityQueryBuilder(table, this._linkAlias);
 			subquery(nestedBuilder);
-			const fromFieldName = table.fields[from].name;
-			const toFieldName = this._table.fields[to].name;
+			const fromFieldName = table.fields[from].logicalName;
+			const toFieldName = this._table.fields[to].logicalName;
 			this._links.push({
 				name: table.logicalName,
 				from: fromFieldName,
@@ -4006,7 +4012,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		const aliasInfo = this._buildAliasInfo();
 		if (aliasInfo.size > 0) {
 			const result = {};
-			const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.name] ?? "";
+			const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.logicalName] ?? "";
 			const ctx = {
 				table: this._table,
 				client: this._table.client,
@@ -4044,10 +4050,10 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 	_collectAliases(builder, map) {
 		for (const attr of builder._getEffectiveAttributes()) {
 			const fields = builder._table.fields;
-			const entry = Object.entries(fields).find(([_, f]) => (f.fromDataverseName ?? f.name) === attr.name);
+			const entry = Object.entries(fields).find(([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name);
 			if (entry) {
 				const fieldDef = entry[1];
-				const dataverseName = fieldDef.fromDataverseName ?? fieldDef.name;
+				const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
 				map.set(attr.alias, {
 					field: FieldRef.fromPath(fieldDef, dataverseName),
 					getDefault: () => fieldDef.getDefault?.(),

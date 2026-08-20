@@ -39,7 +39,10 @@ export type TransformContext = {
 }
 
 export abstract class FieldBase<T> {
-  name: string
+  /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
+  schemaName: string
+  /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
+  logicalName: string
   fromDataverseName: string
   toDataverseName: string
   kind!: string
@@ -50,9 +53,10 @@ export abstract class FieldBase<T> {
   #readOnly: boolean
 
   constructor(name: string, defaults: { defaultValue: T; schema: ValidationSchema<T> }, options?: FieldOptions<T>) {
-    this.name = name
-    this.fromDataverseName = name
-    this.toDataverseName = name
+    this.schemaName = name
+    this.logicalName = name.toLowerCase()
+    this.fromDataverseName = this.logicalName
+    this.toDataverseName = this.logicalName
     this.#default = options?.default ?? defaults.defaultValue
     this.#readOnly = options?.readonly ?? false
     this.schema = options?.schema ?? defaults.schema
@@ -359,7 +363,7 @@ export class ImageField extends FieldBase<ImageRef | null> {
           : "application/octet-stream";
     const url = `data:${mimeType};base64,${b64}`;
     if (!ctx) return { url };
-    const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.name);
+    const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.logicalName);
     return { url, fullSizeUrl };
   }
 
@@ -370,9 +374,9 @@ export class ImageField extends FieldBase<ImageRef | null> {
 
   async afterSave(ctx: TransformContext, value: any): Promise<void> {
     if (value?.data === null){
-      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name)
+      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.logicalName)
     }else if (value?.data instanceof Blob){
-      await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, "image.png", value.data)
+      await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.logicalName, "image.png", value.data)
     }
   }
 }
@@ -421,7 +425,7 @@ export class FileField extends FieldBase<FileRef | null> {
 
     return {
       name: value,
-      url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.name),
+      url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.logicalName),
     }
   }
 
@@ -433,10 +437,10 @@ export class FileField extends FieldBase<FileRef | null> {
     if (value?.data instanceof Blob) {
       const fileName = value.name ?? this.getDefault()?.name;
       if (fileName) {
-        await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.name, fileName, value.data);
+        await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.logicalName, fileName, value.data);
       }
     } else if (value?.data === null){
-      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.name)
+      await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.logicalName)
     }
   }
 }
@@ -715,10 +719,10 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
       defaultValue: null,
       schema: v.nullable(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID | null>,
     }, options);
-    this.navigationName = name;
+    this.navigationName = this.schemaName;
     this.#getTable = getTable;
-    this.fromDataverseName = `_${name.toLowerCase()}_value`
-    this.toDataverseName = `${this.name}@odata.bind`
+    this.fromDataverseName = `_${this.logicalName}_value`
+    this.toDataverseName = `${this.logicalName}@odata.bind`
   }
 
   #table: DataverseTable<{ id: PrimaryKeyField }> | undefined;
@@ -726,7 +730,7 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
     if (!this.#table) {
       const table = this.#getTable();
       const { property } = table.primaryKey;
-      this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
+      this.#table = new DataverseTable({ client: table.client, entitySetName: table.entitySetName, logicalName: table.logicalName, fields: { id: property } });
     }
     return this.#table;
   }
@@ -737,7 +741,7 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
     if (typeof value !== "string" || value.length === 0) {
       throw new Error("Lookup IDs must be non-empty strings");
     }
-    return `${this.table.name}(${value})`;
+    return `${this.table.entitySetName}(${value})`;
   }
 }
 
@@ -754,6 +758,8 @@ export class CollectionProperty<
       schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
+    // Navigation properties are referenced by their schema name for $expand/association.
+    this.fromDataverseName = this.schemaName;
   }
 
   #table: DataverseTable<GenericProperties> | undefined;
@@ -779,9 +785,9 @@ export class CollectionProperty<
     await ctx.client.associateRecordToList(
       ctx.table.entitySetName,
       ctx.recordId,
-      this.name,
+      this.schemaName,
       this.table.entitySetName,
-      this.table.primaryKey.property.name,
+      this.table.primaryKey.property.logicalName,
       ids,
     );
   }
@@ -820,6 +826,8 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
       schema: v.array(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID[]>,
     }, options);
     this.#getTable = getTable;
+    // Navigation properties are referenced by their schema name for $expand/association.
+    this.fromDataverseName = this.schemaName;
   }
 
   #table: DataverseTable<{ id: PrimaryKeyField }> | undefined;
@@ -827,13 +835,13 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
     if (!this.#table) {
       const table = this.#getTable();
       const { property } = table.primaryKey;
-      this.#table = new DataverseTable({ client: table.client, entitySetName: table.name, logicalName: table.name, fields: { id: property } });
+      this.#table = new DataverseTable({ client: table.client, entitySetName: table.entitySetName, logicalName: table.logicalName, fields: { id: property } });
     }
     return this.#table;
   }
 
   transformValueFromDataverse(value: any): GUID[] {
-    return Array.from(value ?? []).map((v: any) => v[this.table.fields.id.name]);
+    return Array.from(value ?? []).map((v: any) => v[this.table.fields.id.logicalName]);
   }
 
   transformValueToDataverse(): typeof SKIP {
@@ -845,9 +853,9 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
     await ctx.client.associateRecordToList(
       ctx.table.entitySetName,
       ctx.recordId,
-      this.name,
+      this.schemaName,
       this.table.entitySetName,
-      this.table.primaryKey.property.name,
+      this.table.primaryKey.property.logicalName,
       value as GUID[],
     );
   }
@@ -904,6 +912,8 @@ export class LookupProperty<
       schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
+    // Navigation properties are referenced by their schema name for $expand/association.
+    this.fromDataverseName = this.schemaName;
   }
 
   #table: DataverseTable<GenericProperties> | undefined;
@@ -921,11 +931,11 @@ export class LookupProperty<
 
   async afterSave(ctx: TransformContext, value: any): Promise<void> {
     if (value === null) {
-      await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.name);
+      await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName);
     } else {
       const childId = await this.table.upsertRecord(undefined, value);
       await ctx.client.associateRecord(
-        ctx.table.entitySetName, ctx.recordId, this.name,
+        ctx.table.entitySetName, ctx.recordId, this.schemaName,
         this.table.entitySetName, childId,
       );
     }
