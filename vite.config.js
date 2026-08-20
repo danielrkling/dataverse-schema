@@ -28,29 +28,26 @@ export default defineConfig(({ mode }) => {
     build: {
       lib: {
         entry: {
-          index: path.resolve(__dirname, 'src/index.ts'),
+          "dataverse-schema": path.resolve(__dirname, 'src/index.ts'),
           "tanstack-db": path.resolve(__dirname, 'src/tanstack-db/index.ts')
         },
         formats: ["es"],
-              fileName: (format, entryName) => {
-                        if (entryName === 'tanstack-db') {
-          return 'tanstack-db/index.mjs';
-        }
-        return `${entryName}.mjs`;
-      },
+        // fileName: (format, entryName) => {
+        //   return `${entryName}.mjs`;
+        // },
       },
       rollupOptions: {
-        external: ["@tanstack/db","valibot","dataverse-schema"],
+        external: ["@tanstack/db", "valibot", "dataverse-schema"],
       },
       minify: false,
       target: "esnext",
     },
 
     plugins: [
-    dts({
-      insertTypesEntry: true,
-      tsconfigPath: './tsconfig.json',
-    }),
+      dts({
+        insertTypesEntry: true,
+        tsconfigPath: './tsconfig.json',
+      }),
     ],
   };
 });

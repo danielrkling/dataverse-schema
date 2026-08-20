@@ -1,22 +1,22 @@
 {
   "name": "dataverse-schema",
-  "version": "1.1.5",
+  "version": "2.0.0",
   "description": "A Schema library designed for Microsoft Dataverse to aid in Web API calls",
   "type": "module",
   "files": [
     "dist"
   ],
   "main": "./dist/index.mjs",
-  "module": "dist/index.mjs",
-  "typings": "dist/index.d.ts",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
     },
     "./tanstack-db": {
-      "import": "./dist/tanstack-db.mjs",
-      "types": "./dist/tanstack-db/index.d.ts"
+      "types": "./dist/tanstack-db/index.d.mts",
+      "import": "./dist/tanstack-db/index.mjs"
     }
   },
   "keywords": [
@@ -43,6 +43,7 @@
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.1.0",
     "msw": "^2.14.6",
+    "tsdown": "^0.22.14",
     "vite": "^6.2.6",
     "vite-plugin-dts": "^4.5.3",
     "vitest": "^3.1.1"
@@ -61,7 +62,7 @@
     }
   },
   "scripts": {
-    "build": "vite build && vite build --mode tanstack-db",
+    "build": "tsdown",
     "build:browser-test": "vite build --mode browser-test",
     "dev": "vite"
   }
