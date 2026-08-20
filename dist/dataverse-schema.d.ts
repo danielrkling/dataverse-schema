@@ -318,22 +318,19 @@ export declare class DataverseClient {
         pageSize?: number;
     }): AsyncGenerator<any[]>;
     /**
-     * Creates a record and returns its full representation.
+     * Creates a record and returns its full representation by default.
+     * Pass `returnRepresentation: false` to return only the generated GUID.
      *
      * @example
      * const newAccount = await client.postRecord("accounts",
      *   { name: "New Account", revenue: 50000 })
+     * const id = await client.postRecord("accounts", { name: "New Account" },
+     *   { returnRepresentation: false })
      */
+    postRecord(entitySetName: Name, value: object, options: PostRecordOptions & {
+        returnRepresentation: false;
+    }): Promise<GUID>;
     postRecord(entitySetName: Name, value: object, options?: PostRecordOptions): Promise<any>;
-    /**
-     * Creates a record and returns only its GUID (no Prefer header).
-     *
-     * @example
-     * const id = await client.postRecordGetId("accounts",
-     *   { name: "New Account" })
-     * // id: "00000000-0000-0000-0000-000000000001"
-     */
-    postRecordGetId(entitySetName: Name, value: object, options?: RequestOptions): Promise<GUID>;
     /**
      * Updates an existing record (partial update via PATCH).
      *
@@ -586,7 +583,7 @@ export declare class DataverseClient {
      *
      * @example
      * await client.changeset(async () => {
-     *   await client.postRecordGetId("accounts", { name: "New" });
+     *   await client.postRecord("accounts", { name: "New" }, { returnRepresentation: false });
      *   await client.patchRecord("accounts", "id", { name: "Updated" });
      * })
      */
@@ -2195,7 +2192,9 @@ export declare type PatchRecordOptions = QueryRequestOptions & {
     etag?: string;
 };
 
-export declare type PostRecordOptions = QueryRequestOptions;
+export declare type PostRecordOptions = QueryRequestOptions & {
+    returnRepresentation?: boolean;
+};
 
 /**
  * A single Prefer value — either a raw string or a structured object

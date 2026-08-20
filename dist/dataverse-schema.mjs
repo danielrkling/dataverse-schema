@@ -343,40 +343,19 @@ class DataverseClient {
       options.signal
     );
   }
-  /**
-   * Creates a record and returns its full representation.
-   *
-   * @example
-   * const newAccount = await client.postRecord("accounts",
-   *   { name: "New Account", revenue: 50000 })
-   */
   async postRecord(entitySetName, value, options = {}) {
-    return this.fetch(this._resource(getName(entitySetName), options.query), {
+    const returnRepresentation = options.returnRepresentation !== false;
+    const result = await this.fetch(this._resource(getName(entitySetName), options.query), {
       method: "POST",
-      headers: { Prefer: "return=representation" },
+      ...returnRepresentation ? { headers: { Prefer: "return=representation" } } : {},
       body: JSON.stringify(value),
       signal: options.signal
     });
-  }
-  /**
-   * Creates a record and returns only its GUID (no Prefer header).
-   *
-   * @example
-   * const id = await client.postRecordGetId("accounts",
-   *   { name: "New Account" })
-   * // id: "00000000-0000-0000-0000-000000000001"
-   */
-  async postRecordGetId(entitySetName, value, options) {
-    return this.fetch(getName(entitySetName), {
-      method: "POST",
-      body: JSON.stringify(value),
-      ...options
-    }).then((id) => {
-      if (typeof id !== "string" || !id) {
-        throw new Error("Dataverse did not return a record ID");
-      }
-      return id;
-    });
+    if (returnRepresentation) return result;
+    if (typeof result !== "string" || !result) {
+      throw new Error("Dataverse did not return a record ID");
+    }
+    return result;
   }
   /**
    * Updates an existing record (partial update via PATCH).
@@ -803,7 +782,7 @@ class DataverseClient {
    *
    * @example
    * await client.changeset(async () => {
-   *   await client.postRecordGetId("accounts", { name: "New" });
+   *   await client.postRecord("accounts", { name: "New" }, { returnRepresentation: false });
    *   await client.patchRecord("accounts", "id", { name: "Updated" });
    * })
    */

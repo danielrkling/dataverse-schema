@@ -32,7 +32,9 @@ export type QueryRequestOptions = RequestOptions & { query?: string };
 export type GetRecordOptions = QueryRequestOptions & { etag?: string };
 export type PatchRecordOptions = QueryRequestOptions & { etag?: string };
 export type DeleteRecordOptions = RequestOptions & { etag?: string };
-export type PostRecordOptions = QueryRequestOptions;
+export type PostRecordOptions = QueryRequestOptions & {
+    returnRepresentation?: boolean;
+};
 
 export class DataverseHttpError extends Error {
     constructor(
@@ -350,40 +352,38 @@ export class DataverseClient {
     }
 
     /**
-     * Creates a record and returns its full representation.
+     * Creates a record and returns its full representation by default.
+     * Pass `returnRepresentation: false` to return only the generated GUID.
      *
      * @example
      * const newAccount = await client.postRecord("accounts",
      *   { name: "New Account", revenue: 50000 })
+     * const id = await client.postRecord("accounts", { name: "New Account" },
+     *   { returnRepresentation: false })
      */
+    async postRecord(
+        entitySetName: Name,
+        value: object,
+        options: PostRecordOptions & { returnRepresentation: false },
+    ): Promise<GUID>;
+    async postRecord(
+        entitySetName: Name,
+        value: object,
+        options?: PostRecordOptions,
+    ): Promise<any>;
     async postRecord(entitySetName: Name, value: object, options: PostRecordOptions = {}) {
-        return this.fetch(this._resource(getName(entitySetName), options.query), {
+        const returnRepresentation = options.returnRepresentation !== false;
+        const result = await this.fetch(this._resource(getName(entitySetName), options.query), {
             method: "POST",
-            headers: { Prefer: "return=representation" },
+            ...(returnRepresentation ? { headers: { Prefer: "return=representation" } } : {}),
             body: JSON.stringify(value),
             signal: options.signal,
         });
-    }
-
-    /**
-     * Creates a record and returns only its GUID (no Prefer header).
-     *
-     * @example
-     * const id = await client.postRecordGetId("accounts",
-     *   { name: "New Account" })
-     * // id: "00000000-0000-0000-0000-000000000001"
-     */
-    async postRecordGetId(entitySetName: Name, value: object, options?: RequestOptions): Promise<GUID> {
-        return this.fetch(getName(entitySetName), {
-            method: "POST",
-            body: JSON.stringify(value),
-            ...options,
-        }).then((id) => {
-            if (typeof id !== "string" || !id) {
-                throw new Error("Dataverse did not return a record ID");
-            }
-            return id as GUID;
-        });
+        if (returnRepresentation) return result;
+        if (typeof result !== "string" || !result) {
+            throw new Error("Dataverse did not return a record ID");
+        }
+        return result as GUID;
     }
 
     /**
@@ -906,7 +906,7 @@ export class DataverseClient {
      *
      * @example
      * await client.changeset(async () => {
-     *   await client.postRecordGetId("accounts", { name: "New" });
+     *   await client.postRecord("accounts", { name: "New" }, { returnRepresentation: false });
      *   await client.patchRecord("accounts", "id", { name: "Updated" });
      * })
      */

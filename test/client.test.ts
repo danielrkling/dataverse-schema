@@ -177,8 +177,8 @@ test.skip("postRecord creates a record and returns it with Prefer header", async
   expect(result.accountid).toBeDefined()
 })
 
-test("postRecordGetId creates a record and returns GUID", async () => {
-  const id = await client.postRecordGetId("accounts", { name: "Another Corp" })
+test("postRecord returns GUID when representation is disabled", async () => {
+  const id = await client.postRecord("accounts", { name: "Another Corp" }, { returnRepresentation: false })
   expect(id).toMatch(/^[0-9a-f-]+$/i)
 })
 
@@ -326,7 +326,7 @@ test("batch throws on nested batch", async () => {
 
 test.skip("changeset executes a transactional batch", async () => {
   const result = await client.changeset(async () => {
-    await client.postRecordGetId("accounts", { name: "Changeset Record" })
+    await client.postRecord("accounts", { name: "Changeset Record" }, { returnRepresentation: false })
   })
   expect(result).toBeDefined()
 })
@@ -736,7 +736,7 @@ test("solutionUniqueName header is set when specified", async () => {
       return HttpResponse.json({ accountid: "new-id", name: "Test" })
     }),
   )
-  await solutionClient.postRecordGetId("accounts", { name: "Test" })
+  await solutionClient.postRecord("accounts", { name: "Test" }, { returnRepresentation: false })
   expect(capturedSolution).toBe("mySolution")
 })
 
@@ -752,7 +752,7 @@ test("suppressDuplicateDetection true sends string true", async () => {
       return HttpResponse.json({ accountid: "new-id", name: "Test" })
     }),
   )
-  await dupClient.postRecordGetId("accounts", { name: "Test" })
+  await dupClient.postRecord("accounts", { name: "Test" }, { returnRepresentation: false })
   expect(capturedHeader).toBe("true")
 })
 
@@ -768,7 +768,7 @@ test("suppressDuplicateDetection false sends string false", async () => {
       return HttpResponse.json({ accountid: "new-id", name: "Test" })
     }),
   )
-  await dupClient.postRecordGetId("accounts", { name: "Test" })
+  await dupClient.postRecord("accounts", { name: "Test" }, { returnRepresentation: false })
   expect(capturedHeader).toBe("false")
 })
 
@@ -784,7 +784,7 @@ test("bypassCustomPluginExecution true sends string true", async () => {
       return HttpResponse.json({ accountid: "new-id", name: "Test" })
     }),
   )
-  await pluginClient.postRecordGetId("accounts", { name: "Test" })
+  await pluginClient.postRecord("accounts", { name: "Test" }, { returnRepresentation: false })
   expect(capturedHeader).toBe("true")
 })
 
