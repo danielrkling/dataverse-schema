@@ -711,7 +711,6 @@ export function json<T>(name: string, schema: ValidationSchema<T>, options?: Fie
 export class LookupIdProperty extends FieldBase<GUID | null> {
   kind = "navigation" as const;
   type = "lookupId" as const;
-  navigationName: string;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
@@ -719,10 +718,9 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
       defaultValue: null,
       schema: v.nullable(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID | null>,
     }, options);
-    this.navigationName = this.schemaName;
     this.#getTable = getTable;
     this.fromDataverseName = `_${this.logicalName}_value`
-    this.toDataverseName = `${this.logicalName}@odata.bind`
+    this.toDataverseName = `${this.schemaName}@odata.bind`
   }
 
   #table: DataverseTable<{ id: PrimaryKeyField }> | undefined;
