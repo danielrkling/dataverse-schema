@@ -244,7 +244,7 @@ async function run() {
 
     await test("fetchXml join (link-entity) to parent", async () => {
       const base = fetchXml(TestTable)
-        .select((f) => ({ name: f.name }))
+        .select((f) => ({ name: f.name, datetime: f.datetime, int: f.int }))
         .join("inner", TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name })))
         .filter(`nnsyc200_test_tableid eq ${childId}`)
       // join correctness (raw query preserves the aliased parent column)
