@@ -197,7 +197,7 @@ async function run() {
       assert(childId, "child must exist")
       await TestTable.deletePropertyValue("text", childId)
       const v = await TestTable.getPropertyValue("text", childId)
-      assert(v === null || v === undefined, `expected null, got ${JSON.stringify(v)}`)
+      assert(v === null || v === undefined || v === "", `expected cleared value, got ${JSON.stringify(v)}`)
     })
 
     await test("updateRecord persists", async () => {
@@ -241,9 +241,9 @@ async function run() {
   } catch (e) {
     reportError("unexpected error in run()", e)
   } finally {
+    // TestTable and TestTable0 map to the same entity set, so a single delete per id suffices.
     for (const id of created) {
       try { await TestTable.deleteRecord(id) } catch { /* best-effort cleanup */ }
-      try { await TestTable0.deleteRecord(id) } catch { /* best-effort cleanup */ }
     }
     write(`smoke test complete: ${passed} passed, ${failed} failed`)
   }

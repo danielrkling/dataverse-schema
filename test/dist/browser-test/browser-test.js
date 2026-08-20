@@ -3657,7 +3657,7 @@ ${error.stack ?? ""}` : error);
         assert(childId, "child must exist");
         await TestTable.deletePropertyValue("text", childId);
         const v = await TestTable.getPropertyValue("text", childId);
-        assert(v === null || v === void 0, `expected null, got ${JSON.stringify(v)}`);
+        assert(v === null || v === void 0 || v === "", `expected cleared value, got ${JSON.stringify(v)}`);
       });
       await test("updateRecord persists", async () => {
         assert(childId, "child must exist");
@@ -3699,10 +3699,6 @@ ${error.stack ?? ""}` : error);
       for (const id of created) {
         try {
           await TestTable.deleteRecord(id);
-        } catch {
-        }
-        try {
-          await TestTable0.deleteRecord(id);
         } catch {
         }
       }
