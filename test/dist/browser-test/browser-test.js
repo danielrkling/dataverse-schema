@@ -3883,7 +3883,7 @@ ${error.stack ?? ""}` : error);
         assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`);
       });
       await test("fetchXml join (link-entity) to parent", async () => {
-        const base = fetchXml(TestTable).select((f) => ({ name: f.name })).join("inner", TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter(`nnsyc200_test_tableid eq ${childId}`);
+        const base = fetchXml(TestTable).select((f) => ({ name: f.name, datetime: f.datetime, int: f.int })).join("inner", TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter(`nnsyc200_test_tableid eq ${childId}`);
         const raw = await client.getRecords(TestTable.entitySetName, { query: base.toString() });
         assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join");
         assert(raw[0].parentName === "smoke-parent", `join failed: ${JSON.stringify(raw[0])}`);
