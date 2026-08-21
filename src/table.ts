@@ -124,7 +124,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * const account = await Account.getRecord("acme-1234-abcd");
    * if (account) console.log(account.name);
    */
-  async getRecord(id: DataverseKey, options?: { signal?: AbortSignal }): Promise<Infer<TProperties> | null> {
+  async getRecord(id: DataverseKey, options?: { signal?: AbortSignal; ifNoneMatch?: string }): Promise<Infer<TProperties> | null> {
     return this.client
       .getRecord(this.entitySetName, id, {
         ...options,

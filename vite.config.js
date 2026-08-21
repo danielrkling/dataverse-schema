@@ -5,13 +5,16 @@ import path from "path";
 export default defineConfig(({ mode }) => {
   if (mode === "browser-test") {
     return {
+      define: {
+        __BUILD_STAMP__: JSON.stringify(new Date().toISOString()),
+      },
       build: {
-        outDir: path.resolve(__dirname, "test/dist/browser-test"),
+        outDir: path.resolve(__dirname, "test/browser/dist"),
         emptyOutDir: true,
         lib: {
-          entry: path.resolve(__dirname, "test/browser-smoke.ts"),
+          entry: path.resolve(__dirname, "test/browser/main.ts"),
           formats: ["iife"],
-          name: "DataverseSchemaBrowserTest",
+          name: "DataverseBrowserTests",
           fileName: () => "browser-test.js",
         },
         rollupOptions: {

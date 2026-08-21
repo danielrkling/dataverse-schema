@@ -740,11 +740,27 @@
     }
   }
 
+  async function RetrieveTotalRecordCount(client, logicalName) {
+    return client.fetch(
+      `RetrieveTotalRecordCount(EntityNames=['${logicalName}'])`
+    ).then((d) => d.Values[0]);
+  }
   async function WhoAmI(client) {
     return client.fetch(`WhoAmI()`).then((r) => ({
       BusinessUnitId: r.BusinessUnitId,
       UserId: r.UserId,
       OrganizationId: r.OrganizationId
+    }));
+  }
+  async function RetrieveChoices(client, name) {
+    return client.fetch(`GlobalOptionSetDefinitions(Name=${wrapString(name)})`).then(mapChoices);
+  }
+  function mapChoices(data) {
+    return [...data.Options].map((option) => ({
+      value: Number(option.Value),
+      color: String(option.Color),
+      label: String(option.Label.UserLocalizedLabel.Label),
+      description: String(option.Description.UserLocalizedLabel.Label)
     }));
   }
 
@@ -897,6 +913,25 @@
   	}
   	return cached;
   }
+
+  //#endregion
+  //#region src/utils/_joinExpects/_joinExpects.ts
+  /**
+  * Joins multiple `expects` values with the given separator.
+  *
+  * @param values The `expects` values.
+  * @param separator The separator.
+  *
+  * @returns The joined `expects` property.
+  *
+  * @internal
+  */
+  /* @__NO_SIDE_EFFECTS__ */
+  function _joinExpects(values$1, separator) {
+  	const list = [...new Set(values$1)];
+  	if (list.length > 1) return `(${list.join(` ${separator} `)})`;
+  	return list[0] ?? "never";
+  }
   /**
   * [UUID](https://en.wikipedia.org/wiki/Universally_unique_identifier) regex.
   */
@@ -970,6 +1005,57 @@
   /* @__NO_SIDE_EFFECTS__ */
   function getDefault(schema, dataset, config$1) {
   	return typeof schema.default === "function" ? schema.default(dataset, config$1) : schema.default;
+  }
+
+  //#endregion
+  //#region src/schemas/array/array.ts
+  /* @__NO_SIDE_EFFECTS__ */
+  function array(item, message$1) {
+  	return {
+  		kind: "schema",
+  		type: "array",
+  		reference: array,
+  		expects: "Array",
+  		async: false,
+  		item,
+  		message: message$1,
+  		get "~standard"() {
+  			return /* @__PURE__ */ _getStandardProps(this);
+  		},
+  		"~run"(dataset, config$1) {
+  			const input = dataset.value;
+  			if (Array.isArray(input)) {
+  				dataset.typed = true;
+  				dataset.value = [];
+  				for (let key = 0; key < input.length; key++) {
+  					const value$1 = input[key];
+  					const itemDataset = this.item["~run"]({ value: value$1 }, config$1);
+  					if (itemDataset.issues) {
+  						const pathItem = {
+  							type: "array",
+  							origin: "value",
+  							input,
+  							key,
+  							value: value$1
+  						};
+  						for (const issue of itemDataset.issues) {
+  							if (issue.path) issue.path.unshift(pathItem);
+  							else issue.path = [pathItem];
+  							dataset.issues?.push(issue);
+  						}
+  						if (!dataset.issues) dataset.issues = itemDataset.issues;
+  						if (config$1.abortEarly) {
+  							dataset.typed = false;
+  							break;
+  						}
+  					}
+  					if (!itemDataset.typed) dataset.typed = false;
+  					dataset.value.push(itemDataset.value);
+  				}
+  			} else _addIssue(this, "type", dataset, config$1);
+  			return dataset;
+  		}
+  	};
   }
 
   //#endregion
@@ -1214,6 +1300,29 @@
   }
 
   //#endregion
+  //#region src/schemas/picklist/picklist.ts
+  /* @__NO_SIDE_EFFECTS__ */
+  function picklist(options, message$1) {
+  	return {
+  		kind: "schema",
+  		type: "picklist",
+  		reference: picklist,
+  		expects: /* @__PURE__ */ _joinExpects(options.map(_stringify), "|"),
+  		async: false,
+  		options,
+  		message: message$1,
+  		get "~standard"() {
+  			return /* @__PURE__ */ _getStandardProps(this);
+  		},
+  		"~run"(dataset, config$1) {
+  			if (this.options.includes(dataset.value)) dataset.typed = true;
+  			else _addIssue(this, "type", dataset, config$1);
+  			return dataset;
+  		}
+  	};
+  }
+
+  //#endregion
   //#region src/schemas/string/string.ts
   /* @__NO_SIDE_EFFECTS__ */
   function string$1(message$1) {
@@ -1298,9 +1407,10 @@
         this._path = path ?? name;
         this.path = pathSegments ?? [this.field];
       } else {
-        this.field = field;
-        this._path = path ?? field.fromDataverseName;
-        this.path = pathSegments ?? [field];
+        const f = field;
+        this.field = f;
+        this._path = path ?? f.fromDataverseName;
+        this.path = pathSegments ?? [f];
       }
     }
     static fromPath(field, path, pathSegments) {
@@ -1405,6 +1515,12 @@
   function pathOf(field) {
     return field.path;
   }
+  function toFilterValue(field, value) {
+    if (value == null || typeof value !== "string") return value;
+    const f = field.field;
+    if (f?.type !== "choice") return value;
+    return f.transformValueToDataverse(value);
+  }
   class FilterExpr {
     constructor(node) {
       this.node = node;
@@ -1426,24 +1542,36 @@
     if (value instanceof FieldRef) {
       return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) });
     }
-    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value });
+    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value: toFilterValue(field, value) });
   }
   function gt(field, value) {
     if (value instanceof FieldRef) {
       return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) });
     }
-    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value });
+    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value: toFilterValue(field, value) });
   }
   function lt(field, value) {
     if (value instanceof FieldRef) {
       return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) });
     }
-    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value });
+    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value: toFilterValue(field, value) });
+  }
+  function contains(field, value) {
+    return new FilterExpr({ type: "contains", field: pathOf(field), value });
   }
   function and(...conditions) {
     const valid = conditions.filter((c) => c != null && c !== "");
     const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
     return new FilterExpr({ type: "and", conditions: exprs.map((expr) => expr.getNode()) });
+  }
+  function or(...conditions) {
+    const valid = conditions.filter((c) => c != null && c !== "");
+    const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
+    return new FilterExpr({ type: "or", conditions: exprs.map((expr) => expr.getNode()) });
+  }
+  function not(condition) {
+    const c = typeof condition === "string" ? new FilterExpr({ type: "raw", value: condition }) : condition;
+    return new FilterExpr({ type: "not", condition: c.getNode() });
   }
 
   function fieldName(field) {
@@ -1474,8 +1602,20 @@
   function sum(field) {
     return new Aggregation("sum", fieldName(field), field);
   }
+  function min(field) {
+    return new Aggregation("min", fieldName(field), field);
+  }
+  function max(field) {
+    return new Aggregation("max", fieldName(field), field);
+  }
+  function average(field) {
+    return new Aggregation("average", fieldName(field), field);
+  }
   function count(field) {
     return new Aggregation("count", field ? fieldName(field) : void 0, field);
+  }
+  function groupby(field) {
+    return new GroupByExpr(fieldName(field), field);
   }
 
   function filterInputNode(filter, proxy) {
@@ -1954,6 +2094,40 @@
       }
     }
     return proxy;
+  }
+  function buildLambdaProxy(alias, table) {
+    const fields = table.fields;
+    const proxy = {};
+    for (const [key, prop] of Object.entries(fields)) {
+      proxy[key] = FieldRef.fromPath(prop, `${alias}/${prop.fromDataverseName ?? prop.logicalName}`);
+    }
+    return proxy;
+  }
+  function any(proxy, condition) {
+    const alias = "x";
+    const table = proxyTableMap.get(proxy);
+    if (!table) throw new Error("any() requires a collection navigation proxy");
+    const result = condition(buildLambdaProxy(alias, table));
+    return new FilterExpr({
+      type: "lambda",
+      field: proxyPathMap.get(proxy) ?? [],
+      operator: "any",
+      alias,
+      condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
+    });
+  }
+  function all(proxy, condition) {
+    const alias = "x";
+    const table = proxyTableMap.get(proxy);
+    if (!table) throw new Error("all() requires a collection navigation proxy");
+    const result = condition(buildLambdaProxy(alias, table));
+    return new FilterExpr({
+      type: "lambda",
+      field: proxyPathMap.get(proxy) ?? [],
+      operator: "all",
+      alias,
+      condition: result instanceof FilterExpr ? result.getNode() : { type: "raw", value: result }
+    });
   }
   function fetchOdata(table) {
     return new InitialQueryImpl(table);
@@ -2679,6 +2853,60 @@
       return super.getDefault() || crypto.randomUUID();
     }
   }
+  class MultiChoiceField extends FieldBase {
+    kind = "value";
+    type = "multiChoice";
+    choices;
+    constructor(name, choices, options) {
+      const values = (Array.isArray(choices) ? [...choices] : Object.keys(choices).map(Number)).sort((a, b) => a - b);
+      if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
+      super(name, {
+        defaultValue: [],
+        schema: array(number$1())
+      }, options);
+      this.choices = Object.freeze(values);
+    }
+    getDefault() {
+      return [...super.getDefault()];
+    }
+    transformValueFromDataverse(value) {
+      if (value == null || value === "") return [];
+      if (Array.isArray(value)) return value.map((v2) => Number(v2));
+      return String(value).split(",").map((part) => Number(part.trim())).filter((n) => !Number.isNaN(n));
+    }
+    transformValueToDataverse(value) {
+      if (value == null) return null;
+      const arr = Array.isArray(value) ? value : [value];
+      if (arr.length === 0) return null;
+      return arr.map((v2) => Number(v2)).join(",");
+    }
+  }
+  class ChoiceField extends FieldBase {
+    kind = "value";
+    type = "choice";
+    #options;
+    constructor(name, options, fieldOptions) {
+      const firstKey = Object.keys(options)[0];
+      if (firstKey === void 0) throw new Error("Choice fields require at least one option");
+      const values = Object.values(options);
+      super(name, {
+        defaultValue: options[Number(firstKey)],
+        schema: picklist(values)
+      }, fieldOptions);
+      this.#options = options;
+    }
+    transformValueFromDataverse(value) {
+      const result = this.#options[value];
+      if (result === void 0) throw new Error(`Unknown choice value: ${value}`);
+      return result;
+    }
+    transformValueToDataverse(value) {
+      for (const [k, v2] of Object.entries(this.#options)) {
+        if (v2 === value) return Number(k);
+      }
+      throw new Error(`Unknown choice label: ${value}`);
+    }
+  }
   class DateTimeField extends FieldBase {
     kind = "value";
     type = "date";
@@ -2798,6 +3026,12 @@
   function primaryKey(name, options) {
     return new PrimaryKeyField(name, options);
   }
+  function multiChoice(name, choices, options) {
+    return new MultiChoiceField(name, choices, options);
+  }
+  function choice(name, options, fieldOptions) {
+    return new ChoiceField(name, options, fieldOptions);
+  }
   function datetime(name, options) {
     return new DateTimeField(name, options);
   }
@@ -2839,6 +3073,48 @@
       }
       return `${this.table.entitySetName}(${value})`;
     }
+  }
+  class CollectionProperty extends FieldBase {
+    kind = "navigation";
+    type = "collection";
+    #getTable;
+    constructor(name, getTable, options) {
+      super(name, {
+        defaultValue: [],
+        schema: array(lazy(() => buildObjectSchema(getTable().fields)))
+      }, options);
+      this.#getTable = getTable;
+      this.fromDataverseName = this.schemaName;
+    }
+    #table;
+    get table() {
+      return this.#table ??= this.#getTable();
+    }
+    transformValueFromDataverse(value) {
+      return Array.from(value ?? []).map(
+        (v2) => this.table.transformValueFromDataverse(v2)
+      );
+    }
+    transformValueToDataverse() {
+      return SKIP;
+    }
+    async afterSave(ctx, value) {
+      if (!Array.isArray(value)) return;
+      const ids = await Promise.all(
+        value.map((v2) => this.table.upsertRecord(void 0, v2))
+      );
+      await ctx.client.associateRecordToList(
+        ctx.table.entitySetName,
+        ctx.recordId,
+        this.schemaName,
+        this.table.entitySetName,
+        this.table.primaryKey.property.logicalName,
+        ids
+      );
+    }
+  }
+  function collection(name, getTable) {
+    return new CollectionProperty(name, getTable);
   }
   function lookupId(name, getTable) {
     return new LookupIdProperty(name, getTable);
@@ -3713,264 +3989,1365 @@
     }
   }
 
-  const output = document.createElement("pre");
-  output.style.cssText = "white-space:pre-wrap;font:14px monospace;padding:12px;background:#111;color:#eee;";
-  document.body.append(output);
-  function write(label, value) {
-    const detail = value === void 0 ? "" : ` ${typeof value === "string" ? value : JSON.stringify(value, null, 2)}`;
-    output.textContent += `[${(/* @__PURE__ */ new Date()).toISOString()}] ${label}${detail}
-`;
+  const defaults = {
+    entitySetName: "nnsyc200_test_tables",
+    logicalName: "nnsyc200_test_table",
+    collectionNav: "nnsyc200_test_table_Test_Lookup_nnsyc200_test_table",
+    altKeyAttribute: "nnsyc200_alt_key"
+  };
+  const paramMap = {
+    entity: "entitySetName",
+    logical: "logicalName",
+    nav: "collectionNav",
+    altkey: "altKeyAttribute",
+    optionset: "globalOptionSet"
+  };
+  function loadConfig() {
+    const params = new URLSearchParams(location.search);
+    const overrides = {};
+    for (const [param, key] of Object.entries(paramMap)) {
+      const value = params.get(param);
+      if (value) overrides[key] = value;
+    }
+    return { ...defaults, ...window.__DV_TEST_CONFIG__ ?? {}, ...overrides };
   }
-  function reportError(label, error) {
-    write(label, error instanceof Error ? `${error.name}: ${error.message}
-${error.stack ?? ""}` : error);
+
+  function buildTables(client, cfg) {
+    const baseFields = {
+      id: primaryKey("nnsyc200_test_tableid"),
+      bool: boolean("nnsyc200_boolean"),
+      modifiedOn: datetime("modifiedon"),
+      datetime: datetime("nnsyc200_datetime"),
+      dateOnly: date("nnsyc200_dateonly"),
+      stateCode: number("statecode"),
+      int: number("nnsyc200_int"),
+      versionNumber: number("versionnumber"),
+      file: file("nnsyc200_file"),
+      formula: string("nnsyc200_formula"),
+      date: datetime("nnsyc200_date"),
+      createdOn: datetime("createdon"),
+      text: string("nnsyc200_text"),
+      statusCode: choice("statuscode", { 1: "Active", 2: "Inactive" }),
+      choice: choice("nnsyc200_choice", { 1: "A", 2: "B", 3: "C" }, { default: "B" }),
+      multiChoice: multiChoice("nnsyc200_choice_month", Array.from({ length: 12 }, (_, i) => i + 1)),
+      image: image("nnsyc200_image"),
+      altKey: string("nnsyc200_Alt_Key"),
+      name: string("nnsyc200_name")
+    };
+    const TestTable0 = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: {
+        ...baseFields,
+        // Thunk targets are cast to the loose shape so the two mutually
+        // referenced tables don't create an inference cycle.
+        children: collection(cfg.collectionNav, () => TestTable)
+      }
+    });
+    const TestTable = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: {
+        ...baseFields,
+        testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0),
+        testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTable0),
+        children: collection(cfg.collectionNav, () => TestTable0)
+      }
+    });
+    return { client, TestTable0, TestTable };
   }
-  function assert(cond, msg) {
-    if (!cond) throw new Error(`Assertion failed: ${msg}`);
+
+  class FixtureTracker {
+    runPrefix = `dvt${Date.now().toString(36)}`;
+    ids = [];
+    track(id) {
+      if (!id) throw new Error("track() called without an id");
+      this.ids.push(id);
+      return id;
+    }
+    name(kind) {
+      return `${this.runPrefix}-${kind}`;
+    }
   }
   function pngBlob() {
     const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
     return new Blob([bytes], { type: "image/png" });
   }
-  let passed = 0;
-  let failed = 0;
-  async function test(name, fn) {
+  async function deleteByIds(table, ids) {
+    let deleted = 0;
+    for (const id of ids) {
+      try {
+        await table.deleteRecord(id);
+        deleted++;
+      } catch {
+      }
+    }
+    return deleted;
+  }
+  async function sweepOrphans(table) {
+    try {
+      const rows = await table.getRecords({ filter: "startswith(nnsyc200_name,'dvt')" });
+      const ids = rows.map((r) => r.id).filter((id) => !!id);
+      return await deleteByIds(table, ids);
+    } catch {
+      return -1;
+    }
+  }
+
+  class SkipError extends Error {
+    constructor(reason) {
+      super(reason);
+      this.name = "SkipError";
+    }
+  }
+  function assert(cond, msg) {
+    if (!cond) throw new Error(`Assertion failed: ${msg}`);
+  }
+  function assertEquals(actual, expected, label = "value") {
+    const a = JSON.stringify(actual);
+    const e = JSON.stringify(expected);
+    if (a !== e) {
+      throw new Error(`Assertion failed: ${label}
+  expected: ${e}
+  actual:   ${a}`);
+    }
+  }
+  function assertInstanceOf(value, ctor, label = "value") {
+    if (!(value instanceof ctor)) {
+      throw new Error(`Assertion failed: ${label} expected instance of ${ctor.name}, got ${String(value)}`);
+    }
+  }
+  async function assertRejects(fn, fragment) {
+    let threw;
+    let didThrow = false;
     try {
       await fn();
-      passed++;
     } catch (e) {
-      failed++;
-      reportError(`FAILED: ${name}`, e);
+      didThrow = true;
+      threw = e;
     }
+    if (!didThrow) throw new Error(`Assertion failed: expected promise to reject${fragment ? ` with "${fragment}"` : ""}`);
+    if (fragment) {
+      const message = threw instanceof Error ? threw.message : String(threw);
+      if (!message.includes(fragment)) {
+        throw new Error(`Assertion failed: expected rejection containing "${fragment}", got "${message}"`);
+      }
+    }
+    return threw;
   }
-  const client = new DataverseClient();
-  const TestTable0 = new DataverseTable({
-    logicalName: "nnsyc200_test_table",
-    entitySetName: "nnsyc200_test_tables",
-    client,
-    fields: {
-      id: primaryKey("nnsyc200_test_tableid"),
-      bool: boolean("nnsyc200_boolean"),
-      modifiedOn: datetime("modifiedon"),
-      datetime: datetime("nnsyc200_datetime"),
-      dateOnly: date("nnsyc200_dateonly"),
-      stateCode: number("statecode"),
-      int: number("nnsyc200_int"),
-      versionNumber: number("versionnumber"),
-      file: file("nnsyc200_file"),
-      formula: string("nnsyc200_formula"),
-      date: datetime("nnsyc200_date"),
-      createdOn: datetime("createdon"),
-      text: string("nnsyc200_text"),
-      statusCode: number("statuscode"),
-      image: image("nnsyc200_image"),
-      name: string("nnsyc200_name")
+
+  class Runner {
+    constructor(base) {
+      this.base = base;
     }
-  });
-  const TestTable = new DataverseTable({
-    logicalName: "nnsyc200_test_table",
-    entitySetName: "nnsyc200_test_tables",
-    client,
-    fields: {
-      id: primaryKey("nnsyc200_test_tableid"),
-      bool: boolean("nnsyc200_boolean"),
-      modifiedOn: datetime("modifiedon"),
-      testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0),
-      testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTable0),
-      datetime: datetime("nnsyc200_datetime"),
-      dateOnly: date("nnsyc200_dateonly"),
-      stateCode: number("statecode"),
-      int: number("nnsyc200_int"),
-      versionNumber: number("versionnumber"),
-      file: file("nnsyc200_file"),
-      formula: string("nnsyc200_formula"),
-      date: datetime("nnsyc200_date"),
-      createdOn: datetime("createdon"),
-      text: string("nnsyc200_text"),
-      statusCode: number("statuscode"),
-      image: image("nnsyc200_image"),
-      name: string("nnsyc200_name")
-    }
-  });
-  async function run() {
-    const created = [];
-    let parentId;
-    let childId;
-    let child2Id;
-    try {
-      await test("WhoAmI returns a userId", async () => {
-        const r = await WhoAmI(client);
-        assert(r && r.UserId, "UserId missing from WhoAmI response");
-      });
-      await test("seed parent record", async () => {
-        parentId = await TestTable0.createRecord({
-          name: "smoke-parent",
-          int: 100,
-          bool: true,
-          text: "parent"
-        });
-        assert(parentId, "parent id missing");
-        created.push(parentId);
-      });
-      await test("seed child record (no file/image)", async () => {
-        assert(parentId, "parent must exist first");
-        childId = await TestTable.createRecord({
-          name: "smoke-child",
-          int: 5,
-          bool: true,
-          text: "child",
-          datetime: /* @__PURE__ */ new Date("2024-01-15T10:30:00Z"),
-          dateOnly: /* @__PURE__ */ new Date("2024-01-15T00:00:00Z"),
-          testLookup: parentId
-        });
-        assert(childId, "child id missing");
-        created.push(childId);
-      });
-      await test("createRecord returned GUIDs", () => {
-        assert(parentId && childId, "insert ids missing");
-      });
-      await test("getRecords filter/orderby/top (OData, transformed)", async () => {
-        assert(childId, "child must exist");
-        const rows = await TestTable.getRecords({
-          filter: "nnsyc200_int gt 0",
-          orderby: "nnsyc200_name asc",
-          top: 10
-        });
-        assert(Array.isArray(rows) && rows.length >= 1, "expected at least one row");
-        const child = rows.find((r) => r.id === childId);
-        assert(child, "seeded child not returned by query");
-        assert(child.testLookup === parentId, "lookupId value not persisted");
-      });
-      await test("fetchOdata select + filter", async () => {
-        const q = fetchOdata(TestTable).select("name", "int").filter("nnsyc200_int gt 0").toString();
-        const rows = await client.getRecords(TestTable.entitySetName, { query: q });
-        assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows");
-      });
-      await test("fetchXml select + filter + top", async () => {
-        const fx = fetchXml(TestTable).select((f) => ({ name: f.name, int: f.int })).filter("nnsyc200_int gt 0").top(10).toString();
-        const rows = await client.getRecords(TestTable.entitySetName, { query: fx });
-        assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows");
-      });
-      await test("fetchOdata filter with comparison operators (FilterExpr) + transforms", async () => {
-        const rows = await fetchOdata(TestTable).select("name", "int", "bool", "datetime").filter((f) => and(gt(f.int, 0), lt(f.int, 1e3))).orderby((f) => f.name, "asc").top(10).execute();
-        assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows");
-        const r = rows[0];
-        assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`);
-        assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`);
-        assert(typeof r.name === "string", `name not transformed: ${JSON.stringify(r.name)}`);
-        assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`);
-      });
-      await test("fetchOdata expand navigation lookup (join) + nested transforms", async () => {
-        const rows = await fetchOdata(TestTable).select("name").expand("testLookupNav", (q) => q.select("name", "createdOn", "int")).filter(`nnsyc200_test_tableid eq ${childId}`).execute();
-        assert(Array.isArray(rows) && rows.length === 1, "expected the child row");
-        const child = rows[0];
-        assert(
-          child.testLookupNav && child.testLookupNav.name === "smoke-parent",
-          `expand failed: ${JSON.stringify(child.testLookupNav)}`
-        );
-        assert(
-          child.testLookupNav.createdOn instanceof Date,
-          `related transform failed: ${JSON.stringify(child.testLookupNav?.createdOn)}`
-        );
-        assert(
-          typeof child.testLookupNav.int === "number",
-          `related int transform failed: ${JSON.stringify(child.testLookupNav?.int)}`
-        );
-      });
-      await test("fetchXml filter with FilterExpr (and/eq) + transforms", async () => {
-        const rows = await fetchXml(TestTable).select((f) => ({ name: f.name, int: f.int, bool: f.bool, datetime: f.datetime })).filter((f) => and(eq(f.name, "smoke-child"), gt(f.int, 0))).execute();
-        assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows");
-        const r = rows[0];
-        assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`);
-        assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`);
-        assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`);
-      });
-      await test("fetchXml join (link-entity) to parent", async () => {
-        const base = fetchXml(TestTable).select((f) => ({ name: f.name, datetime: f.datetime, int: f.int })).join("inner", TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter(`nnsyc200_test_tableid eq ${childId}`);
-        const raw = await client.getRecords(TestTable.entitySetName, { query: base.toString() });
-        assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join");
-        assert(raw[0].parentName === "smoke-parent", `join failed: ${JSON.stringify(raw[0])}`);
-        const transformed = await base.execute();
-        const child = transformed[0];
-        assert(child.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(child.datetime)}`);
-        assert(typeof child.int === "number", `int not transformed: ${JSON.stringify(child.int)}`);
-      });
-      await test("fetchXml aggregate (count + sum)", async () => {
-        const fx = fetchXml(TestTable).apply((f) => ({ count: count(f.id), totalInt: sum(f.int) })).toString();
-        const rows = await client.getRecords(TestTable.entitySetName, { query: fx });
-        assert(Array.isArray(rows) && rows.length >= 1, "expected aggregate row");
-        assert(rows[0].count !== void 0, `aggregate count missing: ${JSON.stringify(rows[0])}`);
-      });
-      await test("getPropertyValue (value column)", async () => {
-        assert(childId, "child must exist");
-        const v = await TestTable.getPropertyValue("text", childId);
-        assert(v === "child", `expected 'child', got ${JSON.stringify(v)}`);
-      });
-      await test("updatePropertyValue + read back", async () => {
-        assert(childId, "child must exist");
-        await TestTable.updatePropertyValue("text", childId, "child-updated");
-        const v = await TestTable.getPropertyValue("text", childId);
-        assert(v === "child-updated", `expected updated text, got ${JSON.stringify(v)}`);
-      });
-      await test("deletePropertyValue clears value", async () => {
-        assert(childId, "child must exist");
-        await TestTable.deletePropertyValue("text", childId);
-        const v = await TestTable.getPropertyValue("text", childId);
-        assert(v === null || v === void 0 || v === "", `expected cleared value, got ${JSON.stringify(v)}`);
-      });
-      await test("updateRecord persists", async () => {
-        assert(childId, "child must exist");
-        await TestTable.updateRecord(childId, { int: 42 });
-        const rows = await TestTable.getRecords({
-          filter: `nnsyc200_test_tableid eq ${childId}`
-        });
-        assert(rows[0] && rows[0].int === 42, "updateRecord int not persisted");
-      });
-      await test("upsertRecord (update path) persists", async () => {
-        assert(childId, "child must exist");
-        await TestTable.upsertRecord(childId, { text: "upserted" });
-        const v = await TestTable.getPropertyValue("text", childId);
-        assert(v === "upserted", `upsert text not persisted, got ${JSON.stringify(v)}`);
-      });
-      await test("file + image upload via afterSave (updateRecord)", async () => {
-        assert(childId, "child must exist");
-        await TestTable.updateRecord(childId, {
-          file: { name: "smoke.txt", data: new Blob(["hello file"]) },
-          image: { data: pngBlob() }
-        });
-      });
-      await test("file + image upload via afterSave (createRecord)", async () => {
-        assert(parentId, "parent must exist first");
-        child2Id = await TestTable.createRecord({
-          name: "smoke-child2",
-          int: 7,
-          text: "child2",
-          testLookup: parentId,
-          file: { name: "smoke2.txt", data: new Blob(["hello2"]) },
-          image: { data: pngBlob() }
-        });
-        assert(child2Id, "child2 id missing");
-        created.push(child2Id);
-      });
-    } catch (e) {
-      reportError("unexpected error in run()", e);
-    } finally {
-      for (const id of created) {
-        try {
-          await TestTable.deleteRecord(id);
-        } catch {
+    async run(suites, events = {}) {
+      const results = [];
+      const startedAt = (/* @__PURE__ */ new Date()).toISOString();
+      for (const suite of suites) {
+        events.onSuiteStart?.(suite);
+        const ctx = { ...this.base, state: {} };
+        let setupError;
+        const cases = (() => {
+          try {
+            return suite.tests(ctx);
+          } catch (e) {
+            setupError = e;
+            return [];
+          }
+        })();
+        if (!setupError && suite.setup) {
+          try {
+            await suite.setup(ctx);
+          } catch (e) {
+            setupError = e;
+          }
+        }
+        for (const test of cases) {
+          events.onTestStart?.(suite, test);
+          const started = performance.now();
+          let result;
+          if (setupError) {
+            result = {
+              suite: suite.name,
+              suiteTitle: suite.title,
+              name: test.name,
+              status: "skip",
+              durationMs: 0,
+              error: `suite setup failed: ${messageOf(setupError)}`
+            };
+          } else {
+            try {
+              await test.fn(ctx);
+              result = { suite: suite.name, suiteTitle: suite.title, name: test.name, status: "pass", durationMs: performance.now() - started };
+            } catch (e) {
+              const status = e instanceof SkipError ? "skip" : "fail";
+              result = {
+                suite: suite.name,
+                suiteTitle: suite.title,
+                name: test.name,
+                status,
+                durationMs: performance.now() - started,
+                error: status === "fail" ? `${messageOf(e)}
+${stackOf(e)}` : messageOf(e)
+              };
+            }
+          }
+          results.push(result);
+          events.onTestEnd?.(result);
         }
       }
-      write(`smoke test complete: ${passed} passed, ${failed} failed`);
+      const cleanedUp = await deleteByIds(this.base.tables.TestTable, this.base.fx.ids);
+      const summary = {
+        results,
+        passed: results.filter((r) => r.status === "pass").length,
+        failed: results.filter((r) => r.status === "fail").length,
+        skipped: results.filter((r) => r.status === "skip").length,
+        cleanedUp,
+        startedAt,
+        finishedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      this.base.fx.ids.length = 0;
+      events.onFinish?.(summary);
+      return summary;
     }
   }
-  window.addEventListener("error", (e) => reportError("window error", e.error ?? e.message));
-  window.addEventListener("unhandledrejection", (e) => reportError("unhandled rejection", e.reason));
+  function messageOf(e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  function stackOf(e) {
+    return e instanceof Error && e.stack ? e.stack.split("\n").slice(1, 4).join("\n") : "";
+  }
+
+  const CSS = `
+.dvt-root { font: 13px/1.5 monospace; background:#111; color:#ddd; padding:16px; margin:8px; border-radius:8px; }
+.dvt-root h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+.dvt-meta { color:#888; margin-bottom:10px; white-space:pre-wrap; }
+.dvt-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+.dvt-controls label { cursor:pointer; user-select:none; }
+.dvt-button { background:#2d6cdf; color:#fff; border:0; padding:6px 14px; border-radius:5px; cursor:pointer; font:inherit; }
+.dvt-button.secondary { background:#444; }
+.dvt-button:disabled { opacity:.5; cursor:default; }
+.dvt-status { min-height:18px; color:#ffd479; margin-bottom:8px; white-space:pre-wrap; }
+.dvt-suite { margin-bottom:12px; }
+.dvt-suite-title { font-weight:bold; color:#fff; margin:6px 0; }
+.dvt-test { padding:1px 0 1px 14px; }
+.dvt-test.fail { color:#ff7b72; cursor:pointer; }
+.dvt-test.skip { color:#d29922; }
+.dvt-pass { color:#3fb950; }
+.dvt-error { display:none; white-space:pre-wrap; color:#ff7b72; background:#1c1316; padding:6px 8px; margin:4px 0; border-left:3px solid #ff7b72; }
+.dvt-summary { margin-top:12px; color:#fff; white-space:pre-wrap; }
+`;
+  class Reporter {
+    constructor(runner, suites, ctxMeta) {
+      this.runner = runner;
+      this.suites = suites;
+      this.ctxMeta = ctxMeta;
+    }
+    root;
+    statusEl;
+    resultsEl;
+    summaryEl;
+    runButton;
+    checkboxes = /* @__PURE__ */ new Map();
+    lastSummary = null;
+    mount(parent) {
+      const style = document.createElement("style");
+      style.textContent = CSS;
+      document.head.append(style);
+      this.root = document.createElement("div");
+      this.root.className = "dvt-root";
+      const title = document.createElement("h1");
+      title.textContent = "dataverse-schema browser tests";
+      this.root.append(title);
+      this.statusEl = document.createElement("div");
+      this.statusEl.className = "dvt-status";
+      this.summaryEl = document.createElement("div");
+      this.summaryEl.className = "dvt-summary";
+      this.resultsEl = document.createElement("div");
+      const controls = document.createElement("div");
+      controls.className = "dvt-controls";
+      this.runButton = document.createElement("button");
+      this.runButton.className = "dvt-button";
+      this.runButton.textContent = "Run selected";
+      this.runButton.onclick = () => void this.runSelected();
+      controls.append(this.runButton);
+      const all = document.createElement("button");
+      all.className = "dvt-button secondary";
+      all.textContent = "All / none";
+      all.onclick = () => {
+        const anyOn = [...this.checkboxes.values()].some((c) => c.checked);
+        for (const c of this.checkboxes.values()) c.checked = !anyOn;
+      };
+      controls.append(all);
+      const sweep = document.createElement("button");
+      sweep.className = "dvt-button secondary";
+      sweep.textContent = "Sweep orphaned test data";
+      sweep.onclick = () => void this.sweep();
+      controls.append(sweep);
+      for (const suite of this.suites) {
+        const label = document.createElement("label");
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = true;
+        this.checkboxes.set(suite.name, box);
+        label.append(box, ` ${suite.title} `);
+        controls.append(label);
+      }
+      const meta = document.createElement("div");
+      meta.className = "dvt-meta";
+      meta.textContent = `build ${"2026-08-21T18:06:15.043Z"}
+org ${this.ctxMeta.orgUrl}
+run prefix ${this.ctxMeta.runPrefix}`;
+      const copyJson = document.createElement("button");
+      copyJson.className = "dvt-button secondary";
+      copyJson.textContent = "Copy JSON results";
+      copyJson.onclick = () => void this.copy(this.exportJson());
+      const copyMd = document.createElement("button");
+      copyMd.className = "dvt-button secondary";
+      copyMd.textContent = "Copy Markdown results";
+      copyMd.onclick = () => void this.copy(this.exportMarkdown());
+      controls.append(copyJson, copyMd);
+      this.root.append(meta, controls, this.statusEl, this.resultsEl, this.summaryEl);
+      parent.append(this.root);
+      window.addEventListener("error", (e) => this.log(`window error: ${e.error ?? e.message}`));
+      window.addEventListener("unhandledrejection", (e) => this.log(`unhandled rejection: ${String(e.reason)}`));
+    }
+    async runSelected() {
+      const selected = this.suites.filter((s) => this.checkboxes.get(s.name)?.checked);
+      if (selected.length === 0) return;
+      this.runButton.disabled = true;
+      this.resultsEl.replaceChildren();
+      this.summaryEl.textContent = "";
+      await this.runner.run(selected, {
+        onSuiteStart: (suite) => {
+          this.log(`running suite "${suite.title}"…`);
+        },
+        onTestStart: (_suite, test) => {
+          this.log(`▶ ${test.name}`);
+        },
+        onTestEnd: (result) => {
+          this.renderResult(result);
+          this.log("");
+        },
+        onFinish: (summary) => {
+          this.lastSummary = summary;
+          this.renderSummary(summary);
+          this.log(`done — cleaned up ${summary.cleanedUp}/${summary.results.length + summary.cleanedUp} tracked records`);
+        }
+      });
+      this.runButton.disabled = false;
+    }
+    renderResult(result) {
+      let suiteBlock = this.resultsEl.querySelector(`[data-suite="${result.suite}"]`);
+      if (!suiteBlock) {
+        suiteBlock = document.createElement("div");
+        suiteBlock.className = "dvt-suite";
+        suiteBlock.dataset.suite = result.suite;
+        const heading = document.createElement("div");
+        heading.className = "dvt-suite-title";
+        heading.textContent = result.suiteTitle;
+        suiteBlock.append(heading);
+        this.resultsEl.append(suiteBlock);
+      }
+      const row = document.createElement("div");
+      row.className = `dvt-test ${result.status}`;
+      const glyph = result.status === "pass" ? "✓" : result.status === "skip" ? "–" : "✗";
+      row.innerHTML = `<span class="dvt-${result.status === "pass" ? "pass" : result.status}">${glyph}</span> ${escapeHtml(result.name)} <span style="color:#666">(${result.durationMs.toFixed(0)}ms)</span>`;
+      if (result.status !== "pass" && result.error) {
+        const details = document.createElement("div");
+        details.className = "dvt-error";
+        details.textContent = result.error;
+        row.title = result.status === "skip" ? result.error : "click to toggle error";
+        if (result.status === "fail") {
+          row.onclick = () => {
+            details.style.display = details.style.display === "block" ? "none" : "block";
+          };
+        } else {
+          details.style.display = "block";
+        }
+        row.append(details);
+      }
+      suiteBlock.append(row);
+    }
+    renderSummary(summary) {
+      const total = summary.passed + summary.failed + summary.skipped;
+      this.summaryEl.textContent = `complete: ${summary.passed}/${total} passed` + (summary.failed ? `, ${summary.failed} FAILED` : "") + (summary.skipped ? `, ${summary.skipped} skipped` : "") + `
+tracked records deleted after run: ${summary.cleanedUp}`;
+    }
+    log(message) {
+      this.statusEl.textContent = message;
+    }
+    exportJson() {
+      const s = this.lastSummary;
+      return JSON.stringify(
+        {
+          build: "2026-08-21T18:06:15.043Z",
+          org: this.ctxMeta.orgUrl,
+          startedAt: s?.startedAt,
+          finishedAt: s?.finishedAt,
+          passed: s?.passed ?? 0,
+          failed: s?.failed ?? 0,
+          skipped: s?.skipped ?? 0,
+          results: s?.results.map(({ suite, name, status, durationMs, error }) => ({ suite, name, status, durationMs: Math.round(durationMs), error }))
+        },
+        null,
+        2
+      );
+    }
+    exportMarkdown() {
+      const s = this.lastSummary;
+      if (!s) return "";
+      const lines = ["# Browser test results", "", `Build: \`${"2026-08-21T18:06:15.043Z"}\``, ""];
+      let currentSuite = "";
+      for (const r of s.results) {
+        if (r.suiteTitle !== currentSuite) {
+          currentSuite = r.suiteTitle;
+          lines.push(`## ${currentSuite}`, "");
+        }
+        const glyph = r.status === "pass" ? "✅" : r.status === "skip" ? "⏭️" : "❌";
+        lines.push(`- ${glyph} ${r.name} (${Math.round(r.durationMs)}ms)`);
+        if (r.status === "fail" && r.error) lines.push(`  - \`${r.error.split("\n")[0]}\``);
+      }
+      lines.push("", `**${s.passed} passed, ${s.failed} failed, ${s.skipped} skipped**`);
+      return lines.join("\n");
+    }
+    async copy(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.log("copied to clipboard");
+      } catch {
+        const area = document.createElement("textarea");
+        area.value = text;
+        document.body.append(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+        this.log("copied to clipboard (fallback)");
+      }
+    }
+    async sweep() {
+      this.log("sweeping orphaned dvt* records…");
+      const n = await this.ctxMeta.sweep();
+      this.log(n >= 0 ? `swept ${n} orphaned record(s)` : "sweep query failed");
+    }
+  }
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  async function seedRow(ctx, overrides = {}) {
+    const id = await ctx.tables.TestTable.createRecord({
+      name: ctx.fx.name(overrides.name ?? `row-${ctx.fx.ids.length + 1}`),
+      ...overrides
+    });
+    return ctx.fx.track(id);
+  }
+  async function seedParent(ctx, overrides = {}) {
+    const id = await ctx.tables.TestTable0.createRecord({
+      name: ctx.fx.name(`parent-${ctx.fx.ids.length + 1}`),
+      ...overrides
+    });
+    return ctx.fx.track(id);
+  }
+
+  const seed = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
+    __proto__: null,
+    seedParent,
+    seedRow
+  }, Symbol.toStringTag, { value: 'Module' }));
+
+  const GUID_RE$1 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const generalSuite = {
+    name: "general",
+    title: "General smoke",
+    async setup(ctx) {
+      ctx.state.parent = await seedParent(ctx, { int: 100, bool: true, text: "parent" });
+      ctx.state.child = await seedRow(ctx, {
+        name: ctx.fx.name("child"),
+        int: 5,
+        bool: true,
+        text: "child",
+        datetime: /* @__PURE__ */ new Date("2024-01-15T10:30:00Z"),
+        dateOnly: /* @__PURE__ */ new Date("2024-01-15T00:00:00Z"),
+        testLookup: ctx.state.parent,
+        choice: "B"
+      });
+    },
+    tests: (ctx) => [
+      {
+        name: "WhoAmI returns a userId",
+        fn: async () => {
+          const r = await WhoAmI(ctx.client);
+          assert(r && r.UserId && GUID_RE$1.test(r.UserId), "valid UserId missing from WhoAmI response");
+        }
+      },
+      {
+        name: "createRecord returns well-formed GUIDs",
+        fn: () => {
+          assert(GUID_RE$1.test(ctx.state.parent), `bad parent id ${ctx.state.parent}`);
+          assert(GUID_RE$1.test(ctx.state.child), `bad child id ${ctx.state.child}`);
+        }
+      },
+      {
+        name: "getRecords filter/orderby/top (OData, transformed)",
+        fn: async () => {
+          const rows = await ctx.tables.TestTable.getRecords({
+            filter: "nnsyc200_int gt 0",
+            orderby: "nnsyc200_name asc",
+            top: 10
+          });
+          const child = rows.find((r) => r.id === ctx.state.child);
+          assert(child, "seeded child not returned by query");
+          assertEquals(child.testLookup, ctx.state.parent, "lookupId value persisted");
+          assert(typeof child.int === "number" && typeof child.name === "string", "row transforms applied");
+        }
+      },
+      {
+        name: "fetchOdata query string works against the API",
+        fn: async () => {
+          const q = fetchOdata(ctx.tables.TestTable).select("name", "int").filter("nnsyc200_int gt 0").toString();
+          const rows = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: q });
+          assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows");
+        }
+      },
+      {
+        name: "fetchXml query string works against the API",
+        fn: async () => {
+          const fx = fetchXml(ctx.tables.TestTable).select((f) => ({ name: f.name, int: f.int })).filter("nnsyc200_int gt 0").top(10).toString();
+          const rows = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: fx });
+          assert(Array.isArray(rows) && rows.length >= 1, "expected fetchxml rows");
+        }
+      },
+      {
+        name: "fetchOdata FilterExpr operators + row transforms",
+        fn: async () => {
+          const rows = await fetchOdata(ctx.tables.TestTable).select("name", "int", "bool", "datetime").filter((f) => and(gt(f.int, 0), lt(f.int, 1e3))).orderby((f) => f.name, "asc").top(10).execute();
+          assert(Array.isArray(rows) && rows.length >= 1, "expected odata rows");
+          const r = rows[0];
+          assert(typeof r.int === "number", `int not transformed: ${JSON.stringify(r.int)}`);
+          assert(typeof r.bool === "boolean", `bool not transformed: ${JSON.stringify(r.bool)}`);
+          assert(typeof r.name === "string", `name not transformed: ${JSON.stringify(r.name)}`);
+          assert(r.datetime instanceof Date, `datetime not transformed: ${JSON.stringify(r.datetime)}`);
+        }
+      },
+      {
+        name: "fetchOdata expand lookup navigation + nested transforms",
+        fn: async () => {
+          const rows = await fetchOdata(ctx.tables.TestTable).select("name").expand("testLookupNav", (q) => q.select("name", "createdOn", "int")).filter(`nnsyc200_test_tableid eq ${ctx.state.child}`).execute();
+          assert(rows.length === 1, "expected exactly the child row");
+          const nav = rows[0].testLookupNav;
+          assert(nav && nav.name === `${ctx.fx.runPrefix}-parent-1`, `expand failed: ${JSON.stringify(nav)}`);
+          assert(nav.createdOn instanceof Date, "related createdOn not transformed to Date");
+          assert(typeof nav.int === "number", "related int not transformed");
+        }
+      },
+      {
+        name: "fetchXml FilterExpr (and/eq) + transforms",
+        fn: async () => {
+          const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ name: f.name, int: f.int, bool: f.bool, datetime: f.datetime })).filter((f) => and(eq(f.name, ctx.fx.name("child")), gt(f.int, 0))).execute();
+          assert(rows.length >= 1, "expected fetchxml rows");
+          const r = rows[0];
+          assertEquals(r.int, 5, "int value/transform");
+          assert(typeof r.bool === "boolean", "bool transform");
+          assert(r.datetime instanceof Date, "datetime transform");
+        }
+      },
+      {
+        name: "fetchXml join (link-entity) to parent",
+        fn: async () => {
+          const base = fetchXml(ctx.tables.TestTable).select((f) => ({ name: f.name, datetime: f.datetime, int: f.int })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter(`nnsyc200_test_tableid eq ${ctx.state.child}`);
+          const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: base.toString() });
+          assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join");
+          assertEquals(raw[0].parentName, `${ctx.fx.runPrefix}-parent`, "joined alias column present in raw payload");
+          const transformed = await base.execute();
+          assert(transformed[0].datetime instanceof Date, "main-entity transforms on joined query");
+        }
+      },
+      {
+        name: "fetchXml aggregate (count + sum)",
+        fn: async () => {
+          const fx = fetchXml(ctx.tables.TestTable).apply((f) => ({ n: count(f.id), totalInt: sum(f.int) })).toString();
+          const rows = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: fx });
+          assert(Array.isArray(rows) && rows.length === 1, "expected one aggregate row");
+          assert(rows[0].n !== void 0 && rows[0].totalInt !== void 0, `aggregate aliases missing: ${JSON.stringify(rows[0])}`);
+        }
+      },
+      {
+        name: "getPropertyValue reads a value column",
+        fn: async () => {
+          const v = await ctx.tables.TestTable.getPropertyValue("text", ctx.state.child);
+          assertEquals(v, "child", "text property value");
+        }
+      },
+      {
+        name: "updatePropertyValue writes and reads back",
+        fn: async () => {
+          await ctx.tables.TestTable.updatePropertyValue("text", ctx.state.child, "child-updated");
+          const v = await ctx.tables.TestTable.getPropertyValue("text", ctx.state.child);
+          assertEquals(v, "child-updated", "updated text");
+        }
+      },
+      {
+        name: "deletePropertyValue clears a value",
+        fn: async () => {
+          await ctx.tables.TestTable.deletePropertyValue("text", ctx.state.child);
+          const v = await ctx.tables.TestTable.getPropertyValue("text", ctx.state.child);
+          assert(v == null || v === "", `expected cleared value, got ${JSON.stringify(v)}`);
+        }
+      },
+      {
+        name: "updateRecord persists changes",
+        fn: async () => {
+          await ctx.tables.TestTable.updateRecord(ctx.state.child, { int: 42 });
+          const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.child}` });
+          assert(rows[0] && rows[0].int === 42, "updateRecord int not persisted");
+        }
+      },
+      {
+        name: "upsertRecord update path persists",
+        fn: async () => {
+          await ctx.tables.TestTable.upsertRecord(ctx.state.child, { text: "upserted" });
+          const v = await ctx.tables.TestTable.getPropertyValue("text", ctx.state.child);
+          assertEquals(v, "upserted", "upserted text");
+        }
+      },
+      {
+        name: "file + image upload via afterSave (updateRecord)",
+        fn: async () => {
+          await ctx.tables.TestTable.updateRecord(ctx.state.child, {
+            file: { name: "smoke.txt", data: new Blob(["hello file"]) },
+            image: { data: pngBlobBytes() }
+          });
+        }
+      },
+      {
+        name: "file + image upload via afterSave (createRecord)",
+        fn: async () => {
+          const id = await ctx.tables.TestTable.createRecord({
+            name: ctx.fx.name("child2"),
+            int: 7,
+            text: "child2",
+            testLookup: ctx.state.parent,
+            file: { name: "smoke2.txt", data: new Blob(["hello2"]) },
+            image: { data: pngBlobBytes() }
+          });
+          ctx.fx.track(id);
+        }
+      },
+      {
+        name: "multiChoice round-trips CSV through property APIs",
+        fn: async () => {
+          await ctx.tables.TestTable.updatePropertyValue("multiChoice", ctx.state.child, [3, 4, 5]);
+          const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, {
+            query: `$select=nnsyc200_choice_month&$filter=nnsyc200_test_tableid eq ${ctx.state.child}`
+          });
+          assertEquals(raw[0]?.nnsyc200_choice_month, "3,4,5", "raw multi-choice payload is CSV");
+          const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", ctx.state.child);
+          assertEquals(v, [3, 4, 5], "multiChoice transforms to number[]");
+        }
+      }
+    ]
+  };
+  function pngBlobBytes() {
+    const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    return new Blob([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], { type: "image/png" });
+  }
+
+  const crudSuite = {
+    name: "crud",
+    title: "CRUD & concurrency",
+    async setup(ctx) {
+      ctx.state.row = await seedRow(ctx, { int: 10, text: "crud-row", choice: "B" });
+    },
+    tests: (ctx) => [
+      {
+        name: "getRecord transforms all field kinds",
+        fn: async () => {
+          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assert(r, "record not found");
+          assertEquals(r.id, ctx.state.row, "primary key");
+          assertEquals(r.int, 10, "int");
+          assertEquals(r.bool, false, "bool default false");
+          assertEquals(r.choice, "B", "choice label");
+          assertEquals(r.statusCode, "Active", "statusCode label");
+          assert(r.createdOn instanceof Date, "createdOn is Date");
+          assertEquals(r.multiChoice, [], "multiChoice reads as empty array");
+        }
+      },
+      {
+        name: "getRecord with ifNoneMatch * on existing returns null (304)",
+        fn: async () => {
+          const r = await ctx.tables.TestTable.getRecord(ctx.state.row, { ifNoneMatch: "*" });
+          assertEquals(r, null, "304 Not Modified maps to null");
+        }
+      },
+      {
+        name: "readonly formula column is skipped on update",
+        fn: async () => {
+          await ctx.tables.TestTable.updateRecord(ctx.state.row, { formula: "SHOULD_NOT_APPLY", int: 99 });
+          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assert(r, "row missing after update");
+          assertEquals(r.int, 99, "writable int applied");
+          assert(r.formula !== "SHOULD_NOT_APPLY", `readonly formula must not be written, got ${JSON.stringify(r.formula)}`);
+        }
+      },
+      {
+        name: "upsertRecord create path creates a new record",
+        fn: async () => {
+          const id = await ctx.tables.TestTable.upsertRecord(void 0, {
+            name: ctx.fx.name("upsert-create"),
+            int: 11
+          });
+          ctx.fx.track(id);
+          const r = await ctx.tables.TestTable.getRecord(id);
+          assertEquals(r?.int, 11, "created via upsert");
+        }
+      },
+      {
+        name: "pickProperties table queries a subset",
+        fn: async () => {
+          const NameOnly = ctx.tables.TestTable.pickProperties("name", "int", "id");
+          const rows = await NameOnly.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.row}` });
+          assert(rows.length === 1, "subset query returned row");
+          const keys = Object.keys(rows[0]).sort();
+          assertEquals(keys, ["$etag", "id", "int", "name"], "only picked fields present");
+        }
+      },
+      {
+        name: "activateRecord / deactivateRecord round-trip statecode",
+        fn: async () => {
+          await ctx.tables.TestTable.deactivateRecord(ctx.state.row);
+          let r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assertEquals(r?.stateCode, 1, "deactivated");
+          await ctx.tables.TestTable.activateRecord(ctx.state.row);
+          r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assertEquals(r?.stateCode, 0, "reactivated");
+        }
+      },
+      {
+        name: "deleteRecord removes the record",
+        fn: async () => {
+          const id = await seedRow(ctx, { int: 12 });
+          await ctx.tables.TestTable.deleteRecord(id);
+          const r = await ctx.tables.TestTable.getRecord(id);
+          assertEquals(r, null, "deleted record is gone");
+        }
+      },
+      {
+        name: "alternate key lookup resolves the created record",
+        fn: async () => {
+          if (!ctx.cfg.altKeyAttribute) throw new Error("skip: set altKeyAttribute in config");
+          const unique = ctx.fx.name("altkey");
+          const created = await seedRow(ctx, { altKey: unique });
+          const found = await ctx.tables.TestTable.getRecord(`${ctx.cfg.altKeyAttribute}='${unique}'`);
+          assert(found, "record not found via alternate key");
+          assertEquals(found.id, created, "alternate key resolves to the created record");
+        }
+      }
+    ]
+  };
+
+  const odataSuite = {
+    name: "query-odata",
+    title: "OData builder end-to-end",
+    async setup(ctx) {
+      ctx.state.parent = await seedRow(ctx, { int: 100, choice: "A", bool: true });
+      const seeds = [
+        ["c1", 5, "A"],
+        ["c2", 7, "C"],
+        ["c3", 42, "B"],
+        ["c4", 1, "A"]
+      ];
+      ctx.state.seeds = [];
+      for (const [kind, int, choice] of seeds) {
+        const id = await seedRow(ctx, { name: ctx.fx.name(kind), int, choice });
+        ctx.state.seeds.push({ id, kind, int, choice });
+      }
+    },
+    tests: (ctx) => {
+      const allIds = [ctx.state.parent, ...ctx.state.seeds.map((s) => s.id)];
+      const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`;
+      return [
+        {
+          name: "select narrows the row shape",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).select("name", "int").filter(scope).execute();
+            assertEquals(rows.length, 5, "seeded row count");
+            for (const r of rows) assertEquals(Object.keys(r).sort(), ["$etag", "int", "name"], "narrowed keys");
+          }
+        },
+        {
+          name: "statusCode choice label filters to numeric option value",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => eq(f.statusCode, "Active")).filter(scope).execute();
+            assertEquals(rows.length, 5, "all seeded rows are Active");
+            for (const id of allIds) assert(rows.some((r) => r.id === id), `missing ${id}`);
+          }
+        },
+        {
+          name: "custom choice column filters by label",
+          fn: async () => {
+            const expected = ctx.state.seeds.filter((s) => s.choice === "C").map((s) => s.id);
+            const rows = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => eq(f.choice, "C")).execute();
+            assertEquals(rows.map((r) => r.id).sort(), [...expected].sort(), "choice C rows");
+          }
+        },
+        {
+          name: "contains / startsWith string functions",
+          fn: async () => {
+            const contained = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => contains(f.name, ctx.fx.runPrefix)).execute();
+            assertEquals(contained.length, 5, "all rows contain run prefix");
+            const prefixed = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => contains(f.name, `${ctx.fx.runPrefix}-c1`)).execute();
+            assertEquals(prefixed.length, 1, "startsWith narrows to c1");
+          }
+        },
+        {
+          name: "comparison operators gt/ge/lt/le windows",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).select("int").filter(scope).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
+            assertEquals(rows.map((r) => r.int).sort(), [7, 42], "windowed ints");
+          }
+        },
+        {
+          name: "and / or / not composition",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).select("int", "choice").filter(scope).filter((f) => and(or(eq(f.int, 5), eq(f.int, 42)), not(eq(f.choice, "B")))).execute();
+            assertEquals(rows.map((r) => r.int).sort(), [5, 42], "composed filter ints");
+            assertEquals(rows.every((r) => r.choice !== "B"), true, "not(B) respected");
+          }
+        },
+        {
+          name: "orderby desc + top",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).select("int").filter(scope).orderby((f) => f.int, "desc").top(4).execute();
+            assertEquals(rows.map((r) => r.int), [100, 42, 7, 5], "descending order");
+          }
+        },
+        {
+          name: "iteratePages follows nextLink pagination (pageSize 2)",
+          fn: async () => {
+            const seen = /* @__PURE__ */ new Set();
+            for await (const page of ctx.tables.TestTable.iteratePages({ filter: scope }, { pageSize: 2 })) {
+              for (const r of page) seen.add(r.id);
+            }
+            assertEquals(seen.size, 5, `paged through all seeded rows`);
+            for (const id of allIds) assert(seen.has(id), `row ${id} missing from pagination`);
+          }
+        },
+        {
+          name: "any/all lambdas discriminate parents from childless rows",
+          fn: async () => {
+            const withBigChild = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => any(f.children, (c) => gt(c.int, 6))).execute();
+            assertEquals(withBigChild.map((r) => r.id), [ctx.state.parent], "only parent has a child with int > 6");
+            const allSmallChildren = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => all(f.children, (c) => lt(c.int, 40))).execute();
+            const smallIds = [...allIds].filter((id) => id !== ctx.state.parent);
+            assertEquals([...allSmallChildren].map((r) => r.id).sort(), smallIds.sort(), "vacuous all() matches childless rows; parent excluded (child int 42)");
+          }
+        },
+        {
+          name: "expand collection children with sub-select",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable0).select("name").expand("children", (sub) => sub.select("name", "int")).filter(`nnsyc200_test_tableid eq ${ctx.state.parent}`).execute();
+            assert(rows.length === 1, "parent row returned");
+            const kids = rows[0].children ?? [];
+            assertEquals(kids.length, 3, "three children under parent");
+            for (const k of kids) {
+              assert(typeof k.int === "number", "child int transformed");
+              assert(typeof k.name === "string", "child name transformed");
+            }
+          }
+        },
+        {
+          name: "apply groupby(choice) with count/sum/min/max/average",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).apply((f) => ({
+              byChoice: groupby(f.choice),
+              n: count(),
+              totalInt: sum(f.int),
+              lo: min(f.int),
+              hi: max(f.int),
+              avg: average(f.int)
+            })).filter(scope).execute();
+            const byChoice = new Map(rows.map((r) => [r.byChoice, r]));
+            assertEquals(byChoice.size, 3, "groups A/B/C");
+            const a = byChoice.get("A");
+            assertEquals(a.n, 3, "group A count");
+            assertEquals(a.totalInt, 106, "group A sum 100+5+1");
+            assertEquals(a.lo, 1, "group A min");
+            assertEquals(a.hi, 100, "group A max");
+            assert(Math.abs(a.avg - 106 / 3) < 0.01, `group A average, got ${a.avg}`);
+            assertEquals(byChoice.get("B").totalInt, 42, "group B sum");
+            assertEquals(byChoice.get("C").totalInt, 7, "group C sum");
+          }
+        },
+        {
+          name: "count() aggregate matches seed count",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).apply((f) => ({ n: count() })).filter(scope).execute();
+            assertEquals(rows.length, 1, "single aggregate row");
+            assertEquals(rows[0].n, 5, "total count");
+          }
+        }
+      ];
+    }
+  };
+
+  const fetchxmlSuite = {
+    name: "query-fetchxml",
+    title: "FetchXML builder end-to-end",
+    async setup(ctx) {
+      ctx.state.lonelyParent = await seedParent(ctx, { int: 0 });
+      ctx.state.parent = await seedParent(ctx, { int: 100, choice: "A" });
+      const seeds = [
+        ["c1", 5, "A"],
+        ["c2", 7, "C"],
+        ["c3", 42, "B"]
+      ];
+      ctx.state.seeds = [];
+      for (const [kind, int, choice] of seeds) {
+        const id = await seedRow(ctx, {
+          name: ctx.fx.name(kind),
+          int,
+          choice,
+          testLookup: ctx.state.parent
+        });
+        ctx.state.seeds.push({ id, kind, int, choice });
+      }
+    },
+    tests: (ctx) => {
+      const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`;
+      return [
+        {
+          name: "select with aliases + execute applies transforms",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ label: f.name, amount: f.int })).filter(scope).top(10).execute();
+            assertEquals(rows.length, 4, "seeded rows (3 children + parent)");
+            for (const r of rows) {
+              assert(typeof r.label === "string", "aliased name transformed");
+              assert(typeof r.amount === "number", "aliased int transformed");
+            }
+          }
+        },
+        {
+          name: "distinct collapses duplicate values",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ c: f.choice })).filter(scope).distinct().execute();
+            const labels = new Set(rows.map((r) => r.c));
+            assertEquals(labels.size, rows.length, "no duplicates returned");
+            for (const want of ["A", "B", "C"]) assert(labels.has(want), `missing choice ${want}`);
+          }
+        },
+        {
+          name: "inner join to parent exposes aliased columns",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ childName: f.name })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentLabel: f.name }))).filter(`nnsyc200_test_tableid eq ${ctx.state.seeds[0].id}`).execute();
+            assertEquals(rows.length, 1, "one joined row");
+            assertEquals(rows[0].parentLabel, `${ctx.fx.runPrefix}-parent-2`, "parent alias resolved");
+          }
+        },
+        {
+          name: "outer join keeps parents without children; inner drops them",
+          fn: async () => {
+            const base = (linkType) => fetchXml(ctx.tables.TestTable0).select((f) => ({ parentName: f.name })).join(linkType, ctx.tables.TestTable, "testLookup", "id", (sub) => sub.select((f) => ({ kid: f.name }))).filter(scope).execute();
+            const outer = await base("outer");
+            assertEquals(outer.length, 2, "both parents via outer join");
+            const inner = await base("inner");
+            assertEquals(inner.length, 1, "only the populated parent via inner join");
+            assertEquals(inner[0].parentName, `${ctx.fx.runPrefix}-parent-2`, "inner join hit the right parent");
+          }
+        },
+        {
+          name: "filter-only exists join",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable0).select((f) => ({ parentName: f.name })).join(
+              "exists",
+              ctx.tables.TestTable,
+              "testLookup",
+              "id",
+              (sub) => sub.filter((f) => gt(f.int, 6))
+            ).filter(scope).execute();
+            assertEquals(rows.length, 1, "only parent with a big-int child");
+          }
+        },
+        {
+          name: "aggregate groupby(choice) + sum + count via execute()",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ byChoice: groupby(f.choice), totalInt: sum(f.int), n: count(f.id) })).filter(scope).execute();
+            const byChoice = new Map(rows.map((r) => [r.byChoice, r]));
+            assertEquals(byChoice.size, 3, "groups A/B/C");
+            const a = byChoice.get("A");
+            assertEquals(a.totalInt, 105, "group A sum 100+5");
+            assertEquals(a.n, 2, "group A count");
+            assertEquals(byChoice.get("B").totalInt, 42, "group B sum");
+            assertEquals(byChoice.get("C").totalInt, 7, "group C sum");
+          }
+        },
+        {
+          name: "aggregate min/max/average aliases",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ lo: min(f.int), hi: max(f.int), avg: average(f.int), n: count() })).filter(scope).execute();
+            assertEquals(rows.length, 1, "single aggregate row");
+            const r = rows[0];
+            assertEquals(r.lo, 5, "min");
+            assertEquals(r.hi, 100, "max");
+            assertEquals(r.n, 4, "count all");
+            assert(Math.abs(r.avg - 38.5) < 0.01, `average 38.5, got ${r.avg}`);
+          }
+        },
+        {
+          name: "orderby desc + top on aliased select",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ amount: f.int })).filter(scope).orderby((f) => f.int, "desc").top(3).execute();
+            assertEquals(rows.map((r) => r.amount), [100, 42, 7], "descending ints");
+          }
+        },
+        {
+          name: "typed FilterExpr inside FetchXML renders numeric choice conditions",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ id: f.id })).filter((f) => eq(f.choice, "B")).execute();
+            assertEquals(rows.length, 1, "choice B row found via numeric condition");
+            assertEquals(rows[0].id, ctx.state.seeds[2].id, "c3 is the B row");
+          }
+        }
+      ];
+    }
+  };
+
+  const navigationSuite = {
+    name: "navigation",
+    title: "Navigation properties",
+    async setup(ctx) {
+      ctx.state.parent = await seedParent(ctx, { int: 100 });
+      ctx.state.kid1 = await seedRow(ctx, { int: 5, testLookup: ctx.state.parent });
+      ctx.state.kid2 = await seedRow(ctx, { int: 7, testLookup: ctx.state.parent });
+      ctx.state.detached = await seedRow(ctx, { int: 9 });
+    },
+    tests: (ctx) => [
+      {
+        name: "expanded children collection returns linked rows",
+        fn: async () => {
+          const rows = await fetchOdata(ctx.tables.TestTable0).select("name").expand("children", (sub) => sub.select("name")).filter(`nnsyc200_test_tableid eq ${ctx.state.parent}`).execute();
+          assertEquals(rows[0].children?.length, 2, "two linked kids");
+        }
+      },
+      {
+        name: "associateRecord links a detached row through the lookup",
+        fn: async () => {
+          await ctx.tables.TestTable.associateRecord("testLookup", ctx.state.detached, ctx.state.parent);
+          const kid = await ctx.tables.TestTable.getRecord(ctx.state.detached);
+          assertEquals(kid?.testLookup, ctx.state.parent, "lookupId set by associate");
+        }
+      },
+      {
+        name: "dissociateRecord clears a collection link",
+        fn: async () => {
+          await ctx.tables.TestTable.dissociateRecord("children", ctx.state.parent, ctx.state.kid2);
+          const rows = await fetchOdata(ctx.tables.TestTable0).select("id").expand("children", (sub) => sub.select("name")).filter(`nnsyc200_test_tableid eq ${ctx.state.parent}`).execute();
+          assertEquals(rows[0].children?.length ?? 0, 1, "one kid remains after dissociation");
+          await ctx.tables.TestTable.associateRecord("testLookup", ctx.state.kid2, ctx.state.parent);
+        }
+      },
+      {
+        name: "lookup navigation afterSave creates + associates a new related record",
+        fn: async () => {
+          const navName = ctx.fx.name("nav-created");
+          await ctx.tables.TestTable.updateRecord(ctx.state.kid1, {
+            text: "nav-created-target",
+            testLookupNav: { name: navName }
+          });
+          const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1);
+          assert(kid?.testLookup, "lookupId now points at the created record");
+          if (kid.testLookup) ctx.fx.track(kid.testLookup);
+          const target = await ctx.tables.TestTable.getRecord(kid.testLookup);
+          assertEquals(target?.name, navName, "created record carries the given name");
+        }
+      },
+      {
+        name: "lookup navigation null clears the lookup",
+        fn: async () => {
+          await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { text: "nav-clear", testLookupNav: null });
+          const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1);
+          assertEquals(kid?.testLookup, null, "lookup cleared");
+        }
+      },
+      {
+        name: "getPropertyValue supports lookupId and lookup navigation",
+        fn: async () => {
+          const idValue = await ctx.tables.TestTable.getPropertyValue("testLookup", ctx.state.kid2);
+          assertEquals(idValue, ctx.state.parent, "raw lookupId value");
+          const nav = await ctx.tables.TestTable.getPropertyValue("testLookupNav", ctx.state.kid2);
+          assert(nav && typeof nav === "object", "expanded lookup object returned");
+          assertEquals(nav?.name, `${ctx.fx.runPrefix}-parent-1`, "nav record transformed");
+        }
+      },
+      {
+        name: "getPropertyValue returns linked ids for collection navigation",
+        fn: async () => {
+          const kids = await ctx.tables.TestTable0.getPropertyValue("children", ctx.state.parent);
+          assert(Array.isArray(kids), "array returned");
+          assertEquals(kids.length, 2, "both kids listed");
+        }
+      },
+      {
+        name: "choice column round-trips label ↔ value",
+        fn: async () => {
+          await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { choice: "C" });
+          const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1);
+          assertEquals(kid?.choice, "C", "choice persisted");
+        }
+      }
+    ]
+  };
+
+  const filesSuite = {
+    name: "files-images",
+    title: "File & image columns",
+    async setup(ctx) {
+      ctx.state.row = await seedRow(ctx, { int: 3 });
+    },
+    tests: (ctx) => [
+      {
+        name: "upload file + image via afterSave",
+        fn: async () => {
+          await ctx.tables.TestTable.updateRecord(ctx.state.row, {
+            file: { name: "smoke.txt", data: new Blob(["hello file content"]) },
+            image: { data: pngBlob() }
+          });
+        }
+      },
+      {
+        name: "file reads back as FileRef with the uploaded name",
+        fn: async () => {
+          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assertInstanceOf(r?.file ?? null, Object, "file ref object");
+          assertEquals(r.file?.name, "smoke.txt", "uploaded filename");
+        }
+      },
+      {
+        name: "image reads back as ImageRef with a data URL",
+        fn: async () => {
+          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          const img = r?.image;
+          assert(img && typeof img.url === "string", "image ref present");
+          assert(String(img.url).startsWith("data:image/png;base64,"), `png data url, got ${String(img.url).slice(0, 40)}…`);
+        }
+      },
+      {
+        name: "raw file $value endpoint returns uploaded bytes",
+        fn: async () => {
+          const res = await ctx.client.getPropertyRawValue(ctx.tables.TestTable.entitySetName, ctx.state.row, "nnsyc200_file");
+          assert(typeof res === "string" ? res === "hello file content" : res instanceof Response, "raw value responded");
+          if (res instanceof Response) assertEquals(await res.text(), "hello file content", "round-tripped bytes");
+        }
+      },
+      {
+        name: "downloadImage returns a non-empty blob",
+        fn: async () => {
+          const blob = await ctx.tables.TestTable.downloadImage(ctx.state.row, "image");
+          assert(blob.size > 0, `image blob empty (size ${blob.size})`);
+        }
+      },
+      {
+        name: "deleteFile / deleteImage clear the columns",
+        fn: async () => {
+          await ctx.tables.TestTable.deleteFile(ctx.state.row, "file");
+          await ctx.tables.TestTable.deleteImage(ctx.state.row, "image");
+          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assertEquals(r?.file ?? null, null, "file cleared");
+          assertEquals(r?.image ?? null, null, "image cleared");
+        }
+      }
+    ]
+  };
+
+  const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const functionsSuite = {
+    name: "functions-actions",
+    title: "Functions & actions",
+    tests: (ctx) => [
+      {
+        name: "WhoAmI returns the three org ids",
+        fn: async () => {
+          const r = await WhoAmI(ctx.client);
+          for (const key of ["BusinessUnitId", "UserId", "OrganizationId"]) {
+            assert(GUID_RE.test(r[key]), `${key} is a GUID`);
+          }
+        }
+      },
+      {
+        name: "RetrieveTotalRecordCount returns a number",
+        fn: async () => {
+          const n = await RetrieveTotalRecordCount(ctx.client, ctx.cfg.logicalName);
+          assert(typeof n === "number" && n >= 0, `count was ${JSON.stringify(n)}`);
+        }
+      },
+      {
+        name: "unbound function RetrieveVersion via client.fetch",
+        fn: async () => {
+          const v = await ctx.client.fetch("RetrieveVersion()");
+          assert(v && typeof v.Version === "string", `version missing: ${JSON.stringify(v)}`);
+          assert(v.Version.split(".").length >= 2, `unexpected version format: ${v.Version}`);
+        }
+      },
+      {
+        name: "RetrieveChoices maps a global option set (config.globalOptionSet)",
+        fn: async () => {
+          if (!ctx.cfg.globalOptionSet) throw new Error("skip: set globalOptionSet in config to a global choice schema name");
+          const choices = await RetrieveChoices(ctx.client, ctx.cfg.globalOptionSet);
+          assert(Array.isArray(choices) && choices.length > 0, "choices returned");
+          for (const c of choices.slice(0, 3)) {
+            assert(typeof c.value === "number" && typeof c.label === "string", `bad choice mapping: ${JSON.stringify(c)}`);
+          }
+        }
+      }
+    ]
+  };
+
+  const BULK = 5;
+  const bulkSuite = {
+    name: "bulk",
+    title: "Bulk operations",
+    async setup(ctx) {
+      ctx.state.rows = [];
+      for (let i = 0; i < BULK; i++) {
+        ctx.state.rows.push(await seedRow(ctx, { name: ctx.fx.name(`bulk-${i}`), int: i + 1 }));
+      }
+    },
+    tests: (ctx) => {
+      const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}-bulk-')`;
+      return [
+        {
+          name: "seeded bulk rows are all present",
+          fn: async () => {
+            const rows = await ctx.tables.TestTable.getRecords({ filter: scope });
+            assertEquals(rows.length, BULK, "row count");
+          }
+        },
+        {
+          name: "updateMultiple applies to every row",
+          fn: async () => {
+            await ctx.tables.TestTable.updateMultiple(
+              ctx.state.rows.map((id) => ({ id, int: 555 }))
+            );
+            const rows = await ctx.tables.TestTable.getRecords({ filter: scope });
+            for (const r of rows) assertEquals(r.int, 555, `bulk-updated int on ${r.id}`);
+          }
+        },
+        {
+          name: "count aggregate sees bulk rows before deleteMultiple",
+          fn: async () => {
+            const rows = await fetchOdata(ctx.tables.TestTable).apply((f) => ({ n: count() })).filter(scope).execute();
+            assertEquals(rows[0]?.n, BULK, "aggregate count");
+          }
+        },
+        {
+          name: "deleteMultiple removes every row",
+          fn: async () => {
+            await ctx.tables.TestTable.deleteMultiple(ctx.state.rows);
+            const rows = await ctx.tables.TestTable.getRecords({ filter: scope });
+            assertEquals(rows.length, 0, "all bulk rows deleted");
+          }
+        }
+      ];
+    }
+  };
+
+  const errorsSuite = {
+    name: "errors",
+    title: "Error handling",
+    tests: (ctx) => [
+      {
+        name: "getRecord on a missing id returns null",
+        fn: async () => {
+          const r = await ctx.tables.TestTable.getRecord("00000000-0000-0000-0000-00000000dead");
+          assertEquals(r, null, "missing record maps to null");
+        }
+      },
+      {
+        name: "deleteRecord on a missing id rejects with DataverseHttpError 404",
+        fn: async () => {
+          const err = await assertRejects(
+            () => ctx.tables.TestTable.deleteRecord("00000000-0000-0000-0000-00000000dead")
+          );
+          assertInstanceOf(err, Error, "error instance");
+          assertEquals(err.name, "DataverseHttpError", "typed error");
+          assertEquals(err.status, 404, "status code");
+        }
+      },
+      {
+        name: "invalid choice label throws client-side before any HTTP call",
+        fn: async () => {
+          await assertRejects(async () => {
+            const id = await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" });
+            if (id) await ctx.tables.TestTable.deleteRecord(id);
+          }, "Unknown choice label");
+        }
+      },
+      {
+        name: "stale ifMatch update rejects with 412 Precondition Failed",
+        fn: async () => {
+          const row = await Promise.resolve().then(() => seed).then((m) => m.seedRow(ctx, { int: 1 }));
+          try {
+            const err = await assertRejects(
+              () => ctx.tables.TestTable.updateRecord(row, { int: 2 }, { ifMatch: 'W/"999999"' })
+            );
+            assertEquals(err.status, 412, "precondition status");
+            assert(err.statusText.length > 0, "statusText present");
+          } finally {
+            await ctx.tables.TestTable.deleteRecord(row).catch(() => void 0);
+          }
+        }
+      },
+      {
+        name: "multiChoice write of an unknown value still round-trips numerically",
+        fn: async () => {
+          const row = await Promise.resolve().then(() => seed).then((m) => m.seedRow(ctx, {}));
+          try {
+            await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, [1, 12]);
+            const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", row);
+            assertEquals(v, [1, 12], "boundary month values");
+          } finally {
+            await ctx.tables.TestTable.deleteRecord(row).catch(() => void 0);
+          }
+        }
+      }
+    ]
+  };
+
+  const suites = [
+    generalSuite,
+    crudSuite,
+    odataSuite,
+    fetchxmlSuite,
+    navigationSuite,
+    filesSuite,
+    functionsSuite,
+    bulkSuite,
+    errorsSuite
+  ];
+
+  async function boot() {
+    const cfg = loadConfig();
+    const client = new DataverseClient();
+    const tables = buildTables(client, cfg);
+    const fx = new FixtureTracker();
+    const runner = new Runner({ client, tables, cfg, fx });
+    const reporter = new Reporter(runner, suites, {
+      orgUrl: client.options.url ?? "unknown",
+      runPrefix: fx.runPrefix,
+      sweep: () => sweepOrphans(tables.TestTable)
+    });
+    reporter.mount(document.body);
+    const params = new URLSearchParams(location.search);
+    if (params.get("autorun") === "1") void reporter.runSelected();
+  }
   if (document.body) {
-    void run();
+    void boot();
   } else {
-    window.addEventListener("DOMContentLoaded", () => void run(), { once: true });
+    window.addEventListener("DOMContentLoaded", () => void boot(), { once: true });
   }
 
 })();

@@ -13,8 +13,8 @@ npm run build
 # Dev server (vite)
 npm run dev
 
-# Build the browser smoke-test bundle (vite, mode=browser-test)
-npm run build:browser-test
+# Build the browser integration-test bundle (vite, mode=browser-test)
+npm run build:browser-test   # → test/browser/dist/browser-test.js (see test/browser/README.md)
 
 # Run all tests (vitest)
 npm test
@@ -42,11 +42,11 @@ There is no linter or formatter configured. Do not add linting unless the user e
 - **Framework**: Vitest (no dedicated config file; uses defaults)
 - **Environment**: Node by default. Files that need DOM APIs opt in with a `// @vitest-environment jsdom` docblock (e.g. `test/util.test.ts` for FileReader/location); files that must NOT see browser globals use `// @vitest-environment node` (e.g. `test/client.test.ts`)
 - **No HTTP mocking**: unit tests never hit the network — they exercise pure logic only (field transforms, query builders, AST serialization, URL builders). The MSW setup that existed earlier has been removed
-- **Test file naming**: `*.test.ts` in the `test/` directory (plus `test/browser-smoke.ts`)
+- **Test file naming**: `*.test.ts` in the `test/` directory
 - **Test structure**: Flat `test()` blocks (no `describe()` wrappers). Tests are organized by section using `// --- Section Name ---` comments
 - **Type tests**: `expectTypeOf` assertions live in `*typecheck*.test.ts` files. They are compile-time only and are verified via `npm run test:types` (vitest `--typecheck` mode). Compile-error assertions use `// @ts-expect-error` wrapped in never-invoked closures so they don't execute at runtime
 - **Some tests are skipped** with `test.skip` — do not un-skip them without understanding why they were skipped
-- **Browser smoke test**: `test/browser-smoke.ts` is bundled by `npm run build:browser-test` into `test/dist/browser-test/browser-test.js` for manual real-environment checks
+- **Browser integration tests**: live-org tests live in `test/browser/` and are bundled by `npm run build:browser-test` into `test/browser/dist/browser-test.js`, which is loaded inside a Dataverse page via a raw-GitHub `<script>` snippet. See `test/browser/README.md`. These are NOT vitest tests — they use a small custom runner with suites in `test/browser/suites/`
 
 ## Code Structure
 
@@ -94,7 +94,11 @@ test/
   types-typecheck.test.ts      — Type-level checks for Infer/types/table algebra
   odata-typecheck.test.ts      — Type-level checks for OData builder inference
   fetchXml-typecheck.test.ts   — Type-level checks for FetchXML builder
-  browser-smoke.ts             — Manual browser smoke-test entry (bundled by build:browser-test)
+  browser/                     — Live-org integration harness (see test/browser/README.md)
+    main.ts                    — Entry: config → tables → suites → reporter UI
+    harness/                   — runner, reporter, assert, fixtures, tables, config
+    suites/                    — general, crud, query-odata, query-fetchxml, navigation, files-images, functions-actions, bulk, errors
+    dist/browser-test.js       — Committed bundle loaded via raw-GitHub <script> snippet
 ```
 
 ## Code Style Guidelines

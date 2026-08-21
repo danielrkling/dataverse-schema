@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import * as v from "valibot"
 import {
   string, nullableString, number, nullableNumber, boolean, nullableBoolean, primaryKey,
-  datetime, nullableDateTime, date, nullableDate, list, image, file, formatted,
+  datetime, nullableDateTime, date, nullableDate, list, image, file, formatted, multiChoice,
   collection, collectionIds, lookupId, lookup, DataverseTable,
   choice, nullableChoice,
 } from "../src"
@@ -386,4 +386,48 @@ test("validation works with valibot pipe", () => {
 
   const result3 = v.safeParse(f.schema, "Alice")
   expect(result3.success).toBe(true)
+})
+
+test("multiChoice reads CSV strings as number arrays", () => {
+  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  expect(f.type).toBe("multiChoice")
+  expect(f.kind).toBe("value")
+  expect(f.fromDataverseName).toBe("nnsyc200_months")
+  expect(f.transformValueFromDataverse("3,4,5")).toEqual([3, 4, 5])
+  expect(f.transformValueFromDataverse("3, 4")).toEqual([3, 4])
+  expect(f.transformValueFromDataverse(null)).toEqual([])
+  expect(f.transformValueFromDataverse(undefined)).toEqual([])
+  expect(f.transformValueFromDataverse("")).toEqual([])
+})
+
+test("multiChoice writes number arrays as CSV", () => {
+  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  expect(f.transformValueToDataverse([3, 4, 5])).toBe("3,4,5")
+  expect(f.transformValueToDataverse(7)).toBe("7")
+})
+
+test("multiChoice writes null/empty as null to clear the column", () => {
+  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  expect(f.transformValueToDataverse(null)).toBeNull()
+  expect(f.transformValueToDataverse(undefined)).toBeNull()
+  expect(f.transformValueToDataverse([])).toBeNull()
+})
+
+test("multiChoice accepts Record value-to-label definitions", () => {
+  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
+  expect(f.choices).toEqual([1, 2])
+})
+
+test("multiChoice schema validates parsed arrays", () => {
+  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  expect(v.parse(f.schema, [1, 2])).toEqual([1, 2])
+  expect(() => v.parse(f.schema, ["nope"] as any)).toThrow()
+})
+
+test("multiChoice getDefault returns independent empty arrays", () => {
+  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  const a = f.getDefault()
+  const b = f.getDefault()
+  expect(a).toEqual([])
+  expect(a).not.toBe(b)
 })

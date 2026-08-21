@@ -193,6 +193,56 @@ export class ListField<T extends string | number> extends FieldBase<T | null> {
   }
 }
 
+/**
+ * Field for Dataverse multi-select choice (MultiSelectPicklist) columns.
+ *
+ * The Web API stores these as a comma-delimited string of option values
+ * (e.g. `"3,4,5"`). This field transforms that string to a `number[]` when
+ * reading and back to a CSV string when writing. An empty selection reads as
+ * `[]` and writes as `null` (which clears the column).
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   months: multiChoice("nnsyc200_months", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+ * });
+ * // Infer<typeof table>["months"] → number[]
+ */
+export class MultiChoiceField extends FieldBase<number[]> {
+  kind = "value" as const;
+  type = "multiChoice" as const;
+  readonly choices: readonly number[];
+
+  constructor(name: string, choices: Array<number> | Record<number, string>, options?: FieldOptions<number[]>) {
+    const values = (Array.isArray(choices) ? [...choices] : Object.keys(choices).map(Number)).sort((a, b) => a - b);
+    if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
+    super(name, {
+      defaultValue: [] as number[],
+      schema: v.array(v.number()) as unknown as ValidationSchema<number[]>,
+    }, options);
+    this.choices = Object.freeze(values) as readonly number[];
+  }
+
+  getDefault(): number[] {
+    return [...super.getDefault()];
+  }
+
+  transformValueFromDataverse(value: any): number[] {
+    if (value == null || value === "") return [];
+    if (Array.isArray(value)) return value.map((v) => Number(v));
+    return String(value)
+      .split(",")
+      .map((part) => Number(part.trim()))
+      .filter((n) => !Number.isNaN(n));
+  }
+
+  transformValueToDataverse(value: any): string | null {
+    if (value == null) return null;
+    const arr = Array.isArray(value) ? value : [value];
+    if (arr.length === 0) return null;
+    return arr.map((v) => Number(v)).join(",");
+  }
+}
+
 export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
   kind = "value" as const;
   type = "choice" as const;
@@ -573,6 +623,24 @@ export function primaryKey(name: string, options?: FieldOptions<GUID>) {
  */
 export function list<T extends string | number>(name: string, list: Array<T>, options?: FieldOptions<T | null>) {
   return new ListField<T>(name, list, options);
+}
+
+/**
+ * Creates a multi-select choice column definition (MultiSelectPicklist).
+ * Reads the Dataverse CSV format (`"3,4,5"`) as a `number[]` and writes
+ * arrays back as CSV. An empty selection writes `null` (clears the column).
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param choices The allowed numeric option values (or a value→label map).
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   months: multiChoice("nnsyc200_months", [1, 2, 3]),
+ * });
+ * // Infer<typeof table>["months"] → number[]
+ */
+export function multiChoice(name: string, choices: Array<number> | Record<number, string>, options?: FieldOptions<number[]>) {
+  return new MultiChoiceField(name, choices, options);
 }
 
 /**

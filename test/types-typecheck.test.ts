@@ -5,7 +5,7 @@ import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
   primaryKey, PrimaryKeyField, string, nullableString, number, nullableNumber, boolean, nullableBoolean,
   datetime, nullableDateTime, date, nullableDate, list, choice, nullableChoice,
-  json, formatted, file, image, lookup, collection, lookupId, collectionIds,
+  json, formatted, file, image, multiChoice, lookup, collection, lookupId, collectionIds,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -46,6 +46,7 @@ const Account = new DataverseTable({
     priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" } as const),
     label: formatted("statuscode"),
     doc: file("document"),
+    months: multiChoice("nnsyc200_choice_month", Array.from({ length: 12 }, (_, i) => i + 1)),
     pic: image("entityimage"),
     primaryContact: lookup("primarycontactid", () => Contact),
     contacts: collection("account_contacts", () => Contact),
@@ -107,6 +108,13 @@ test("Infer resolves the full record type", () => {
   expectTypeOf<R["label"]>().toEqualTypeOf<string | null>()
   expectTypeOf<R["contactId"]>().toEqualTypeOf<GUID | null>()
   expectTypeOf<R["contactIds"]>().toEqualTypeOf<GUID[]>()
+})
+
+test("multiChoice infers number[]", () => {
+  type R = Infer<typeof Account>
+  expectTypeOf<R["months"]>().toEqualTypeOf<number[]>()
+  const f = multiChoice("m", [1, 2])
+  expectTypeOf(f.getDefault()).toEqualTypeOf<number[]>()
 })
 
 test("navigation properties infer as related record or null / arrays", () => {
