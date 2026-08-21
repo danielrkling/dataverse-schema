@@ -1,7 +1,7 @@
 import { DataverseTable } from "../../table"
 import { GenericProperties, Infer } from "../../types"
 import { LookupProperty, CollectionProperty } from "../../fields"
-import { Etag } from "../../util"
+import { ETAG } from "../../util"
 import { FilterExpr, FieldRef } from "../filter/expr"
 import { Aggregation, GroupByExpr, average, count, groupby, max, min, sum } from "../shared/aggregation"
 import { filterInputNode } from "../filter/input"
@@ -209,7 +209,7 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
     for (const [alias, field] of Object.entries(this._aliasFields)) {
       if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias])
     }
-    r[Etag] = v["@odata.etag"]
+    r[ETAG] = v["@odata.etag"]
     delete r["@odata.etag"]
     return r as TResult
   }
@@ -426,7 +426,7 @@ class ODataQuery<T extends GenericProperties> {
         result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table)
       }
     }
-    result[Etag] = value["@odata.etag"]
+    result[ETAG] = value["@odata.etag"]
     return result
   }
 

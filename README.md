@@ -1,8 +1,6 @@
 # Dataverse Web API TypeScript Library
 
-A strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. Provides schema definitions, type inference, query builders (OData + FetchXML), validation, and CRUD operations.
-
-For real-environment browser checks, see [Browser Smoke Testing](./BROWSER-SMOKE-TESTING.md).
+A strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. Provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations.
 
 ## Installation
 
@@ -13,31 +11,55 @@ npm i dataverse-schema
 ## Quick Start
 
 ```typescript
-import { DataverseClient, table, primaryKey, string, number, boolean, date, list, lookup, lookupId, collection, collectionIds, Infer } from "dataverse-schema";
+import {
+  DataverseClient,
+  DataverseTable,
+  primaryKey,
+  string,
+  number,
+  boolean,
+  date,
+  list,
+  lookup,
+  lookupId,
+  collection,
+  collectionIds,
+  Infer,
+} from "dataverse-schema";
 
 // 1. Create a client
 const client = new DataverseClient({ url: "https://org.crm.dynamics.com" });
 
 // 2. Define your table schema
-const Address = table(client, "addresses", {
-  id: primaryKey("addressid"),
-  street: string("street_Address"),
-  zip: number("zip_code"),
+const Address = new DataverseTable({
+  client,
+  entitySetName: "addresses",
+  logicalName: "address",
+  fields: {
+    id: primaryKey("addressid"),
+    street: string("street_Address"),
+    zip: number("zip_code"),
+  },
 });
 type AddressType = Infer<typeof Address>;
 // { id: GUID; street: string | null; zip: number | null }
 
-const Person = table(client, "people", {
-  pk: primaryKey("personid"),
-  name: string("fullname"),
-  age: number("person_age"),
-  active: boolean("active"),
-  dob: date("person_dob"),
-  gender: list("gender", ["M", "F"] as const),
-  primaryAddressId: lookupId("person_Address", () => Address),
-  primaryAddress: lookup("person_Address", () => Address),
-  addressIds: collectionIds("person_Address_person", () => Address),
-  addresses: collection("person_Address_person", () => Address),
+const Person = new DataverseTable({
+  client,
+  entitySetName: "people",
+  logicalName: "person",
+  fields: {
+    pk: primaryKey("personid"),
+    name: string("fullname"),
+    age: number("person_age"),
+    active: boolean("active"),
+    dob: date("person_dob"),
+    gender: list("gender", ["M", "F"] as const),
+    primaryAddressId: lookupId("person_Address", () => Address),
+    primaryAddress: lookup("person_Address", () => Address),
+    addressIds: collectionIds("person_Address_person", () => Address),
+    addresses: collection("person_Address_person", () => Address),
+  },
 });
 type PersonType = Infer<typeof Person>;
 // {
@@ -45,7 +67,7 @@ type PersonType = Infer<typeof Person>;
 //   name: string | null;
 //   age: number | null;
 //   active: boolean;
-//   dob: Date | null;
+//   dob: Date;
 //   gender: "M" | "F" | null;
 //   primaryAddressId: GUID | null;
 //   primaryAddress: AddressType | null;
@@ -99,8 +121,8 @@ const client = new DataverseClient({
 ## CRUD Operations
 
 ```typescript
-// Insert
-const newId = await Person.insertRecord({ name: "Jane", age: 30 });
+// Insert (returns the new record GUID)
+const newId = await Person.createRecord({ name: "Jane", age: 30 });
 
 // Read (single)
 const person = await Person.getRecord(newId);
@@ -112,11 +134,15 @@ const results = await Person.getRecords({ filter: "age gt 20", top: 10 });
 await Person.updateRecord(newId, { name: "Jane Updated" });
 
 // Upsert (creates or updates based on primary key presence)
-await Person.upsertRecord({ name: "New Person" });           // INSERT
-await Person.upsertRecord({ pk: newId, name: "Updated" });   // UPDATE
+await Person.upsertRecord(undefined, { name: "New Person" });      // INSERT
+await Person.upsertRecord(newId, { name: "Updated" });             // UPDATE
 
 // Delete
 await Person.deleteRecord(newId);
+
+// Optimistic concurrency & signals (updateRecord defaults ifMatch to "*")
+await Person.updateRecord(newId, { name: "Jane Updated" }, { ifMatch: 'W/"123456"' });
+await Person.deleteRecord(newId, { ifMatch: 'W/"123456"', signal: controller.signal });
 
 // Property-level operations
 await Person.updatePropertyValue("age", newId, 25);
@@ -163,7 +189,7 @@ All filter operators:
 
 Logical: `and`, `or`, `not`
 
-Aggregation: `apply`, `groupby`, `average`, `sum`, `min`, `max`, `count`
+Aggregation: `groupby`, `average`, `sum`, `min`, `max`, `count`
 
 Lambda: `any`, `all`
 
@@ -182,7 +208,6 @@ const results = await fetchOdata(Person)
   ))
   .orderby((f) => f.name)
   .top(100)
-  .includeCount()
   .execute();
 ```
 
@@ -192,16 +217,16 @@ const results = await fetchOdata(Person)
 import { fetchOdata, groupby, sum, average, count } from "dataverse-schema";
 
 const results = await fetchOdata(Person)
-  .apply(v => ({
+  .apply((v) => ({
     city: groupby(v.city),
     totalAge: sum(v.age),
     avgAge: average(v.age),
   }))
-  .filter(f => gt(f.age, 18))
-  .orderby(r => r.totalAge, "desc")
+  .filter((f) => gt(f.age, 18))
+  .orderby((r) => r.totalAge, "desc")
   .top(10)
   .execute();
-// results: Array<{ city: string; totalAge: number; avgAge: number; [Etag]: symbol }>
+// results: Array<{ city: string; totalAge: number; avgAge: number }>
 ```
 
 ### Option 3: FetchXML Builder
@@ -212,22 +237,19 @@ import { fetchXml, and, or, eq, gt, compare } from "dataverse-schema";
 // Basic query with typed filter functions
 const results = await fetchXml(Person)
   .select((f) => ({ full_name: f.name, person_age: f.age }))
-  .where((f) => gt(f.age, 21))
-  .innerJoin(Address, "id", "primaryAddressId", (q) =>
-    q.select((f) => ({ street: f.street })).where((f) => eq(f.zip, 98052))
-  )
-  .orderby((f) => f.fullname, "desc")
+  .filter((f) => gt(f.age, 21))
+  .orderby((f) => f.name, "desc")
   .top(50)
   .execute();
 
 // FetchXML aggregation with apply()
 const aggResults = await fetchXml(Person)
-  .apply(v => ({
+  .apply((v) => ({
     city: groupby(v.city),
     totalAge: sum(v.age),
   }))
-  .where(f => gt(f.age, 0))
-  .orderby(f => f.city)
+  .filter((f) => gt(f.age, 0))
+  .orderby((f) => f.city)
   .execute();
 
 // With execute options
@@ -235,6 +257,8 @@ const results2 = await fetchXml(Person)
   .select((f) => ({ name: f.name }))
   .execute({ useRawOrderBy: true, aggregateLimit: 50000 });
 ```
+
+Joins are supported through `.join(linkType, tableOrIntersect, subquery)` where `linkType` is one of `"inner"`, `"outer"`, `"any"`, `"not any"`, `"all"`, `"not all"`, `"exists"`, `"in"`, or `"matchfirstrowusingcrossapply"`.
 
 ### FetchXML Conditions
 
@@ -255,7 +279,7 @@ endsWith(field, value)   // string ends with
 // Field-to-field comparison
 compare(field, operator, otherField)
 
-// All produce FilterExpr objects that serialize to FetchXML via toFetchXml():
+// All produce FilterExpr objects that serialize to FetchXML via the builder:
 // eq(f.statuscode, 1) → '<condition attribute="statuscode" operator="eq" value="1" />'
 // compare(f.field1, "eq", f.field2) → '<condition attribute="field1" operator="eq" valueof="field2" />'
 
@@ -266,19 +290,17 @@ or(eq(statuscode, 0), eq(statuscode, 1))
 
 ### FetchXML Raw Strings
 
-For operators not covered by the typed functions (e.g. `between`, `in`, `eq-userid`), or for cross-entity alias references, raw XML strings can be passed to `where()`:
+For operators not covered by the typed functions (e.g. `between`, `in`, `eq-userid`), or for cross-entity alias references, raw XML strings can be passed to `.filter()`:
 
 ```typescript
-.where(`<condition attribute="numberofemployees" operator="between"><value>6</value><value>20</value></condition>`)
+.filter(`<condition attribute="numberofemployees" operator="between"><value>6</value><value>20</value></condition>`)
 
-.where(`<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
+.filter(`<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
   <filter type='and'>
     <condition attribute='name' operator='eq' value='Contoso' />
   </filter>
 </link-entity>`)
 ```
-
-The `condition()`, `conditionCompare()`, `filterAnd()`, and `filterOr()` legacy helpers have been removed. Use the typed filter functions (`eq`, `compare`, `and`, `or`) instead.
 
 ### FetchXML Execute Options
 
@@ -292,14 +314,19 @@ The `condition()`, `conditionCompare()`, `filterAnd()`, and `filterOr()` legacy 
 
 ### FetchXML Auto-Selection
 
-When `select()` is not called, the builder automatically includes all value fields (`string`, `number`, `boolean`, etc.), lookup ID fields, and file fields. Each result row includes an `Etag` symbol property (import `Etag` from `dataverse-schema`) for optimistic concurrency.
+When `select()` is not called, the builder automatically includes all value fields (`string`, `number`, `boolean`, etc.), lookup ID fields, and file fields. Each result row includes an `ETAG` property (the string key `"$etag"`) for optimistic concurrency:
+
+```typescript
+import { ETAG } from "dataverse-schema";
+const etag = record[ETAG];
+```
 
 ### Filter-Only Link Types
 
 Link types `any`, `not any`, `all`, `not all`, `exists`, and `in` only render filters inside `<link-entity>` — they skip `<attribute>` and `<order>` elements:
 
 ```typescript
-fetchXml(Contact).where(f => or(
+fetchXml(Contact).filter((f) => or(
   eq(f.statecode, "1"),
   `<link-entity name='account' from='primarycontactid' to='contactid' link-type='any'>
     <filter type='and'>
@@ -311,61 +338,51 @@ fetchXml(Contact).where(f => or(
 
 ## Validation
 
-All fields and tables implement the [Standard Schema V1](https://github.com/standard-schema/standard-schema) specification.
+All fields and tables carry a [valibot](https://valibot.dev/) schema. Field factories apply a sensible default schema (e.g. `number()` → `v.number()`, `string()` → `v.string()`) that you can override with the `schema` option.
 
 ```typescript
-import { required, pattern, email, numeric, integer, minValue, maxValue, minLength, maxLength } from "dataverse-schema";
+import * as v from "valibot";
+import { string, DataverseTable, ValidationSchema } from "dataverse-schema";
 
-const nameField = string("fullname")
-  .check(required())
-  .check(minLength(2))
-  .check(maxLength(100));
+const nameField = string("fullname", {
+  schema: v.pipe(v.string(), v.minLength(2), v.maxLength(100)),
+});
 
-// Get issues array
-const issues = nameField.getIssues(null);
-// [{ message: "Required", path: [] }]
+// Access the compiled schema
+const schema: ValidationSchema<string> = nameField.schema;
 
-// Validate (Standard Schema V1 compliant)
-const result = nameField.validate("");
-// { issues: [{ message: "Required", path: [] }] }
-// or { value: "Alice" }
+// Validate a value with valibot
+import { safeParse } from "valibot";
+const result = safeParse(nameField.schema, "");
+// result.issues[0].message describes the failure when unsuccessful
 
-// Parse (throws on invalid)
-const value = nameField.parse("Alice");
+// Table-level validation
+const Person = new DataverseTable({
+  client,
+  entitySetName: "people",
+  logicalName: "person",
+  fields: { /* ... */ },
+  schema: v.object({ name: v.string(), age: v.number() }),
+});
 
-// Field-level validation
-const validation = Person.validate({ name: 123 });
-// { issues: [{ message: "Not of type string", path: ["name"] }] }
+// Access the compiled table schema
+const tableSchema = Person.getSchema();
 ```
 
-### Built-in Validators
-
-| Validator | Description |
-|-----------|-------------|
-| `required()` | Value must not be null or undefined |
-| `pattern(regex, msg?)` | Must match regex |
-| `email()` | Must be valid email format |
-| `numeric()` | Must be a number |
-| `integer()` | Must be an integer |
-| `minValue(n)` | Must be >= n |
-| `maxValue(n)` | Must be <= n |
-| `minLength(n)` | Length must be >= n |
-| `maxLength(n)` | Length must be <= n |
-| `isType(type)` | Must be of given typeof |
-| `isTypeOrNull(type)` | Must be of given type or null |
+Use `v.parse` / `v.safeParse` (from `valibot`) against `field.schema` or `table.getSchema()` to validate values. Validation errors surface as valibot issues.
 
 ## Batching
 
 ```typescript
 await client.batch(async () => {
-  await Person.upsertRecord({ name: "Alice", age: 30 });
-  await Person.upsertRecord({ name: "Bob", age: 25 });
+  await Person.upsertRecord(undefined, { name: "Alice", age: 30 });
+  await Person.upsertRecord(undefined, { name: "Bob", age: 25 });
 });
 
 // Transactional changeset
 await client.changeset(async () => {
-  await Person.insertRecord({ name: "Charlie" });
-  await Address.insertRecord({ street: "123 Main" });
+  await Person.createRecord({ name: "Charlie" });
+  await Address.createRecord({ street: "123 Main" });
 });
 ```
 
@@ -393,24 +410,35 @@ const PersonNameOnly = Person.pickProperties("name");
 | `number(name)` | `number` | `0` | Numeric field |
 | `nullableNumber(name)` | `number \| null` | `null` | Nullable number |
 | `boolean(name)` | `boolean` | `false` | Boolean field |
+| `nullableBoolean(name)` | `boolean \| null` | `null` | Nullable boolean |
 | `primaryKey(name)` | `GUID` | `crypto.randomUUID()` | Auto-generated UUID |
-| `date(name)` | `Date \| null` | `null` | Date-only (no time) |
+| `date(name)` | `Date` | `new Date()` (zeroed) | Date-only (no time) |
 | `datetime(name)` | `Date` | `new Date()` | Date/time |
 | `nullableDate(name)` | `Date \| null` | `null` | Nullable date-only |
 | `nullableDateTime(name)` | `Date \| null` | `null` | Nullable date/time |
-| `list(name, values)` | `T \| null` | `null` | Choice/picklist |
-| `image(name)` | `string \| null` | `null` | Base64 image |
-| `file(name)` | `string` | `""` | File name (read-only) |
+| `list(name, values)` | `T \| null` | `null` | Choice/picklist (array of allowed values) |
+| `choice(name, options)` | `T[keyof T]` (label) | first option | Choice/picklist (number→label map) |
+| `nullableChoice(name, options)` | `T[keyof T] \| null` | `null` | Nullable choice |
+| `json(name, schema)` | `T` | per schema | JSON column validated by a valibot schema |
 | `formatted(name)` | `string \| null` | `null` | Formatted value (read-only) |
+| `image(name)` | `ImageRef \| null` | `null` | Image (read-only; `url`, `fullSizeUrl`, `data`) |
+| `file(name)` | `FileRef \| null` | `null` | File name (read-only; `name`, `url`, `data`) |
 | `lookupId(name, getTable)` | `GUID \| null` | `null` | Lookup reference only |
 | `lookup(name, getTable)` | `T \| null` | `null` | Lookup with expanded data |
 | `collectionIds(name, getTable)` | `GUID[]` | `[]` | Collection of references |
 | `collection(name, getTable)` | `T[]` | `[]` | Collection with expanded data |
 
+`ImageRef` and `FileRef` shapes:
+
+```typescript
+type ImageRef = { readonly url?: string; readonly fullSizeUrl?: string; data?: Blob | null };
+type FileRef = { name: string; url?: string; data?: Blob | null };
+```
+
 ## Dataverse Functions
 
 ```typescript
-import { WhoAmI, RetrieveTotalRecordCount, RetrieveAadUserRoles, RetrieveChoices } from "dataverse-schema";
+import { WhoAmI, RetrieveTotalRecordCount, RetrieveAadUserRoles, RetrieveChoices, mapChoices } from "dataverse-schema";
 
 const whoami = await WhoAmI(client);
 // { BusinessUnitId: GUID, UserId: GUID, OrganizationId: GUID }
@@ -420,13 +448,30 @@ const count = await RetrieveTotalRecordCount(client, "account");
 const roles = await RetrieveAadUserRoles(client, "aad-user-id");
 
 const choices = await RetrieveChoices(client, "gender");
-// [{ value: 1, color: null, label: { UserLocalizedLabel: { Label: "Male" } }, description: ... }]
+// [{ value: number; color: string; label: string; description: string }]
+```
+
+## @tanstack/db Integration
+
+A separate entry point provides `@tanstack/db` collection options and an offline sync store.
+
+```typescript
+import { dataverseCollectionOptions, DataverseSyncDB, MutationPersistenceError } from "dataverse-schema/tanstack-db";
+
+// Live collection backed by Dataverse
+const collection = new Collection({
+  ...dataverseCollectionOptions(Person),
+  // ... @tanstack/db config
+});
+
+// Offline-first collection with an IndexedDB mutation queue
+const syncDb = new DataverseSyncDB({ databaseName: "offline" });
 ```
 
 ## Utilities
 
 ```typescript
-import { xml, toBase64, base64ImageToURL, getImageUrl, mapChoices, Etag, mergeRecords, parseDateOnly, toDateOnly } from "dataverse-schema";
+import { xml, toBase64, base64ImageToURL, getImageUrl, mapChoices, ETAG, mergeRecords, parseDateOnly, toDateOnly } from "dataverse-schema";
 
 // XML template tag
 const xmlString = xml`<fetch><entity name="account" /></fetch>`;

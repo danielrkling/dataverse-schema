@@ -7,7 +7,12 @@ export type DataverseCollectionConfig<T extends GenericProperties> = {
     table: DataverseTable<T>;
     syncInterval?: number;
     readOnlyWhenOffline?: boolean;
-} & Omit<CollectionConfig<Infer<T>>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
+    // NOTE: The passthrough options use `any` for the row type on purpose.
+    // Referencing `Infer<T>` here breaks generic inference of `T` from `table`
+    // (TypeScript collapses `T` to `never` when the table is widened to
+    // `DataverseTable<GenericProperties>`), which in turn made the resulting
+    // collection query resolve to `never[]`.
+} & Omit<CollectionConfig<any>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
 
 export interface DataverseCollectionUtils<T extends GenericProperties> extends UtilsRecord {
     forceSync: () => Promise<void>;
@@ -29,7 +34,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
     const defaultOnInsert: InsertMutationFn<Infer<T>> = async ({ transaction }) => {
         const results: (string | number)[] = [];
         for (const mutation of transaction.mutations) {
-            const guid = await table.insertRecord(mutation.modified);
+            const guid = await table.createRecord(mutation.modified);
             results.push(guid);
         }
         return results;

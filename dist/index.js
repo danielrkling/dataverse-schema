@@ -3145,17 +3145,15 @@ function json(name, schema, options) {
 var LookupIdProperty = class extends FieldBase {
 	kind = "navigation";
 	type = "lookupId";
-	navigationName;
 	#getTable;
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: null,
 			schema: v.nullable(NON_EMPTY_STRING_SCHEMA)
 		}, options);
-		this.navigationName = this.schemaName;
 		this.#getTable = getTable;
 		this.fromDataverseName = `_${this.logicalName}_value`;
-		this.toDataverseName = `${this.logicalName}@odata.bind`;
+		this.toDataverseName = `${this.schemaName}@odata.bind`;
 	}
 	#table;
 	get table() {

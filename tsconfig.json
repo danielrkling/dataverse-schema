@@ -23,5 +23,5 @@
       "dataverse-schema": ["./src/index.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src","test"]
 }

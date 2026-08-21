@@ -1,8 +1,8 @@
 import { DataverseClient } from "./client";
 import { DataverseRecord, Primitive } from "./types";
 
-//we want Etag to stil be serializable
-export const Etag = "$etag";
+//we want ETAG to stil be serializable
+export const ETAG = "$etag";
 
 // --- OData value helpers ---
 
@@ -95,26 +95,26 @@ export function expand(values: string | ExpandObject): string {
     .join(",");
 }
 
-export function attachEtag<T>(v: T): T {
+export function attachETag<T>(v: T): T {
   if (v && typeof v === "object")
-  (v as any)[Etag] = (v as any)["@odata.etag"];
+  (v as any)[ETAG] = (v as any)["@odata.etag"];
   return v;
 }
 
 export function getEtag(v: any): string | undefined {
-  return v?.[Etag];
+  return v?.[ETAG];
 }
 
 /**
  * Retains references to previous recrods if ETag value is unchanged
- * 
- * @param prevRecords 
- * @param newRecords 
- * @returns 
+ *
+ * @param prevRecords
+ * @param newRecords
+ * @returns
  */
 export function mergeRecords<T>(prevRecords: T[], newRecords: T[]): T[] {
-  const prevMap = new Map(prevRecords.map((v) => [(v as any)[Etag], v]));
-  return newRecords.map((v) => prevMap.get((v as any)[Etag]) ?? v);
+  const prevMap = new Map(prevRecords.map((v) => [(v as any)[ETAG], v]));
+  return newRecords.map((v) => prevMap.get((v as any)[ETAG]) ?? v);
 }
 
 

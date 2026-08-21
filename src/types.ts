@@ -23,7 +23,7 @@ import {
 import { DateField } from "./fields";
 import { FieldBase } from "./fields";
 import { DataverseTable } from "./table";
-import { Etag } from "./util";
+import { ETAG } from "./util";
 
 export type Primitive = string | number | boolean | null;
 /**

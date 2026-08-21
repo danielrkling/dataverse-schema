@@ -1121,7 +1121,6 @@ declare class LookupIdProperty extends FieldBase<GUID | null> {
   #private;
   kind: "navigation";
   type: "lookupId";
-  navigationName: string;
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>);
   get table(): DataverseTable<{
     id: PrimaryKeyField;

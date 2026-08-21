@@ -15,10 +15,16 @@ import {
   Infer,
   NarrowKeysByValue,
 } from "./types";
-import { Etag } from "./util";
+import { ETAG } from "./util";
 
 export type TableRequestOptions = {
   pageSize?: number;
+  signal?: AbortSignal;
+};
+
+export type MutationOptions = {
+  ifMatch?: string;
+  ifNoneMatch?: string;
   signal?: AbortSignal;
 };
 
@@ -370,14 +376,14 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * @param value The record data (partial — primary key is auto-generated).
    *
    * @example
-   * const newId = await Person.insertRecord({ name: "John", age: 30 });
+   * const newId = await Person.createRecord({ name: "John", age: 30 });
    */
-  async insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID> {
+  async createRecord(value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID> {
     const pkName = this.primaryKey.property.logicalName;
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
-      { query: selectQuery(pkName) },
+      { query: selectQuery(pkName), signal: options?.signal },
     );
     const guid = record?.[pkName] as GUID;
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
@@ -386,38 +392,40 @@ export class DataverseTable<TProperties extends GenericProperties> {
   }
 
   /**
-   * Updates an existing record by ID. Supports optimistic concurrency via etag.
+   * Updates an existing record by ID. Supports optimistic concurrency via the
+   * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+   * to `"*"`, which updates the record only if it already exists.
    *
    * @param id The record's primary key.
    * @param value The fields to update (partial record data).
-   * @param etag Optional etag for conditional updates (If-Match header).
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
    *
    * @example
    * await Person.updateRecord("some-guid", { name: "Jane" });
-   * // With etag:
-   * await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
+   * // Conditional update:
+   * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
    */
-  async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
+  async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID> {
     if (!id) throw new Error("No ID provided")
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
     await this.client.patchRecord(
       this.entitySetName,
       id,
       await this.transformValueToDataverse(value, ctx),
-      { etag },
+      { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal },
     );
     await this._afterSave(ctx, value);
     return id as GUID;
   }
 
   /**
-   * Creates or updates a record. If `id` is provided the record is updated;
-   * otherwise a new record is created. Navigation properties (collections, lookups)
-   * are also synced through nested upserts.
+   * Creates or updates a record. If `id` is provided the record is updated via
+   * PATCH; otherwise a new record is created via POST. Navigation properties
+   * (collections, lookups) are also synced through nested upserts.
    *
    * @param id The GUID of an existing record, or `undefined` to create new.
    * @param value The record data (partial for updates).
-   * @param etag Optional etag for conditional upsert.
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
    *
    * @example
    * // Create
@@ -425,7 +433,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * // Update
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
-  async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID> {
+  async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID> {
     const pkName = this.primaryKey.property.logicalName;
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: "" };
 
@@ -436,13 +444,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
         this.entitySetName,
         id,
         transformed,
-        { query: selectQuery(pkName), etag },
+        { query: selectQuery(pkName), ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal },
       );
     } else {
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        { query: selectQuery(pkName) },
+        { query: selectQuery(pkName), signal: options?.signal },
       );
       id = record[pkName] as GUID;
       ctx.recordId = id;
@@ -453,16 +461,17 @@ export class DataverseTable<TProperties extends GenericProperties> {
   }
 
   /**
-   * Deletes a record by its primary key. Supports optimistic concurrency via etag.
+   * Deletes a record by its primary key. Supports optimistic concurrency via the
+   * `ifMatch` option (If-Match header).
    *
    * @param id The primary key of the record to delete.
-   * @param etag Optional etag for conditional deletion.
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
    *
    * @example
    * await Person.deleteRecord("some-guid");
    */
-  async deleteRecord(id: DataverseKey, etag?: string): Promise<GUID> {
-    return this.client.deleteRecord(this.entitySetName, id, { etag });
+  async deleteRecord(id: DataverseKey, options?: MutationOptions): Promise<GUID> {
+    return this.client.deleteRecord(this.entitySetName, id, { ifMatch: options?.ifMatch, signal: options?.signal });
   }
 
   /**
@@ -618,7 +627,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       const raw = value[property.fromDataverseName];
       result[key] = property.transformValueFromDataverse(raw, ctx);
     }
-    result[Etag] = value["@odata.etag"];
+    result[ETAG] = value["@odata.etag"];
     return result as Infer<TProperties>;
   }
 

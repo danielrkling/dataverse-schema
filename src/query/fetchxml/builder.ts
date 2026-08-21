@@ -5,7 +5,7 @@ import { Aggregation, GroupByExpr } from "../shared/aggregation";
 import { renderFilterInput } from "../filter/input";
 import { buildFlatFieldProxy } from "../shared/proxy";
 import type { FieldBase } from "../../fields";
-import { Etag } from "../../util";
+import { ETAG } from "../../util";
 import {
     FetchXmlAggregateAst,
     FetchXmlAttributeAst,
@@ -591,7 +591,7 @@ export class FetchXmlAggregateQuery<
                     result[alias] = info.getDefault();
                 }
             }
-            result[Etag] = v["@odata.etag"];
+            result[ETAG] = v["@odata.etag"];
             return result as TResult;
         }
         return this._table.transformValueFromDataverse(v) as TResult;
@@ -1208,7 +1208,7 @@ export class EntityQueryBuilder<
                     result[alias] = info.getDefault();
                 }
             }
-            result[Etag] = v["@odata.etag"];
+            result[ETAG] = v["@odata.etag"];
             return result as TResult;
         }
         return this._table.transformValueFromDataverse(v) as TResult;

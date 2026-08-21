@@ -367,7 +367,7 @@ export class ImageField extends FieldBase<ImageRef | null> {
     return { url, fullSizeUrl };
   }
 
-  //When using conditional operations (If-Match: Etag) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
+  //When using conditional operations (If-Match) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
   async transformValueToDataverse(value: ImageRef | null): Promise<string | null | typeof SKIP> {
     return SKIP
   }

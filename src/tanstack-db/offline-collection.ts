@@ -20,7 +20,7 @@ export type QueuedMutation = {
     timestamp: number;
     sequence: number;
     attempts: number;
-    etag?: string;
+    ifMatch?: string;
     lastAttemptAt?: number;
     nextAttemptAt?: number;
     error?: any
@@ -78,7 +78,7 @@ export class DataverseSyncDB {
             timestamp: mutation.createdAt.valueOf(),
             sequence: this.sequence++,
             attempts: 0,
-            etag: getEtag(mutation.modified),
+            ifMatch: getEtag(mutation.modified),
         };
     }
 
@@ -171,11 +171,11 @@ export class DataverseSyncDB {
 
                 try {
                     if (mutation.type === "insert") {
-                        await table.insertRecord(mutation.value);
+                        await table.createRecord(mutation.value);
                     } else if (mutation.type === "update") {
-                        await table.updateRecord(mutation.key, mutation.value, mutation.etag);
+                        await table.updateRecord(mutation.key, mutation.value, { ifMatch: mutation.ifMatch });
                     } else if (mutation.type === "delete") {
-                        await table.deleteRecord(mutation.key, mutation.etag);
+                        await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
                     }
 
                     await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);

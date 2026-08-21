@@ -129,7 +129,7 @@ async function run() {
 
     // --- Seed (assume the table starts empty) ---
     await test("seed parent record", async () => {
-      parentId = await TestTable0.insertRecord({
+      parentId = await TestTable0.createRecord({
         name: "smoke-parent",
         int: 100,
         bool: true,
@@ -141,7 +141,7 @@ async function run() {
 
     await test("seed child record (no file/image)", async () => {
       assert(parentId, "parent must exist first")
-      childId = await TestTable.insertRecord({
+      childId = await TestTable.createRecord({
         name: "smoke-child",
         int: 5,
         bool: true,
@@ -154,7 +154,7 @@ async function run() {
       created.push(childId)
     })
 
-    await test("insertRecord returned GUIDs", () => {
+    await test("createRecord returned GUIDs", () => {
       assert(parentId && childId, "insert ids missing")
     })
 
@@ -312,9 +312,9 @@ async function run() {
       })
     })
 
-    await test("file + image upload via afterSave (insertRecord)", async () => {
+    await test("file + image upload via afterSave (createRecord)", async () => {
       assert(parentId, "parent must exist first")
-      child2Id = await TestTable.insertRecord({
+      child2Id = await TestTable.createRecord({
         name: "smoke-child2",
         int: 7,
         text: "child2",

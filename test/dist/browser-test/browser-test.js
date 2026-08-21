@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const Etag = "$etag";
+  const ETAG = "$etag";
   const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
   const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
   function wrapString(value) {
@@ -196,7 +196,7 @@
       try {
         const resource = this._resource(`${getName(entitySetName)}(${id})`, options.query);
         return await this.fetch(resource, {
-          ...options.etag ? { headers: { "If-None-Match": options.etag } } : {},
+          ...options.ifNoneMatch ? { headers: { "If-None-Match": options.ifNoneMatch } } : {},
           signal: options.signal
         });
       } catch (error) {
@@ -282,7 +282,8 @@
      */
     async patchRecord(entitySetName, id, value, options = {}) {
       const extraHeaders = { Prefer: "return=representation" };
-      if (options.etag) extraHeaders["If-Match"] = options.etag;
+      if (options.ifMatch) extraHeaders["If-Match"] = options.ifMatch;
+      if (options.ifNoneMatch) extraHeaders["If-None-Match"] = options.ifNoneMatch;
       return this.fetch(this._resource(`${getName(entitySetName)}(${id})`, options.query), {
         method: "PATCH",
         headers: extraHeaders,
@@ -299,7 +300,7 @@
      */
     async deleteRecord(entitySetName, id, options = {}) {
       const request = { method: "DELETE", signal: options.signal };
-      if (options.etag) request.headers = { "If-Match": options.etag };
+      if (options.ifMatch) request.headers = { "If-Match": options.ifMatch };
       await this.fetch(`${getName(entitySetName)}(${id})`, request);
       return id;
     }
@@ -316,7 +317,7 @@
         body: JSON.stringify({ value }),
         signal: options.signal
       };
-      if (options.etag) request.headers = { "If-Match": options.etag };
+      if (options.ifMatch) request.headers = { "If-Match": options.ifMatch };
       await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, request);
       return id;
     }
@@ -1645,7 +1646,7 @@
       for (const [alias, field] of Object.entries(this._aliasFields)) {
         if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
       }
-      r[Etag] = v["@odata.etag"];
+      r[ETAG] = v["@odata.etag"];
       delete r["@odata.etag"];
       return r;
     }
@@ -1812,7 +1813,7 @@
           result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
         }
       }
-      result[Etag] = value["@odata.etag"];
+      result[ETAG] = value["@odata.etag"];
       return result;
     }
     _transformRow(value) {
@@ -2229,14 +2230,14 @@
      * @param value The record data (partial — primary key is auto-generated).
      *
      * @example
-     * const newId = await Person.insertRecord({ name: "John", age: 30 });
+     * const newId = await Person.createRecord({ name: "John", age: 30 });
      */
-    async insertRecord(value) {
+    async createRecord(value, options) {
       const pkName = this.primaryKey.property.logicalName;
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        { query: selectQuery(pkName) }
+        { query: selectQuery(pkName), signal: options?.signal }
       );
       const guid = record?.[pkName];
       const ctx = { table: this, client: this.client, recordId: guid };
@@ -2244,37 +2245,39 @@
       return guid;
     }
     /**
-     * Updates an existing record by ID. Supports optimistic concurrency via etag.
+     * Updates an existing record by ID. Supports optimistic concurrency via the
+     * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+     * to `"*"`, which updates the record only if it already exists.
      *
      * @param id The record's primary key.
      * @param value The fields to update (partial record data).
-     * @param etag Optional etag for conditional updates (If-Match header).
+     * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
      *
      * @example
      * await Person.updateRecord("some-guid", { name: "Jane" });
-     * // With etag:
-     * await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
+     * // Conditional update:
+     * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
      */
-    async updateRecord(id, value, etag) {
+    async updateRecord(id, value, options) {
       if (!id) throw new Error("No ID provided");
       const ctx = { table: this, client: this.client, recordId: id };
       await this.client.patchRecord(
         this.entitySetName,
         id,
         await this.transformValueToDataverse(value, ctx),
-        { etag }
+        { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal }
       );
       await this._afterSave(ctx, value);
       return id;
     }
     /**
-     * Creates or updates a record. If `id` is provided the record is updated;
-     * otherwise a new record is created. Navigation properties (collections, lookups)
-     * are also synced through nested upserts.
+     * Creates or updates a record. If `id` is provided the record is updated via
+     * PATCH; otherwise a new record is created via POST. Navigation properties
+     * (collections, lookups) are also synced through nested upserts.
      *
      * @param id The GUID of an existing record, or `undefined` to create new.
      * @param value The record data (partial for updates).
-     * @param etag Optional etag for conditional upsert.
+     * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
      *
      * @example
      * // Create
@@ -2282,7 +2285,7 @@
      * // Update
      * await Person.upsertRecord(existingId, { name: "Jane" });
      */
-    async upsertRecord(id, value, etag) {
+    async upsertRecord(id, value, options) {
       const pkName = this.primaryKey.property.logicalName;
       const ctx = { table: this, client: this.client, recordId: "" };
       if (id) {
@@ -2292,13 +2295,13 @@
           this.entitySetName,
           id,
           transformed,
-          { query: selectQuery(pkName), etag }
+          { query: selectQuery(pkName), ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal }
         );
       } else {
         const record = await this.client.postRecord(
           this.entitySetName,
           await this.transformValueToDataverse(value),
-          { query: selectQuery(pkName) }
+          { query: selectQuery(pkName), signal: options?.signal }
         );
         id = record[pkName];
         ctx.recordId = id;
@@ -2307,16 +2310,17 @@
       return id;
     }
     /**
-     * Deletes a record by its primary key. Supports optimistic concurrency via etag.
+     * Deletes a record by its primary key. Supports optimistic concurrency via the
+     * `ifMatch` option (If-Match header).
      *
      * @param id The primary key of the record to delete.
-     * @param etag Optional etag for conditional deletion.
+     * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
      *
      * @example
      * await Person.deleteRecord("some-guid");
      */
-    async deleteRecord(id, etag) {
-      return this.client.deleteRecord(this.entitySetName, id, { etag });
+    async deleteRecord(id, options) {
+      return this.client.deleteRecord(this.entitySetName, id, { ifMatch: options?.ifMatch, signal: options?.signal });
     }
     /**
      * Activates a record by setting its `statecode` to 0.
@@ -2458,7 +2462,7 @@
         const raw = value[property.fromDataverseName];
         result[key] = property.transformValueFromDataverse(raw, ctx);
       }
-      result[Etag] = value["@odata.etag"];
+      result[ETAG] = value["@odata.etag"];
       return result;
     }
     async transformValueToDataverse(value, ctx) {
@@ -2734,7 +2738,7 @@
       const fullSizeUrl = ctx.client.getImageFullSizeURL(ctx.table.entitySetName, ctx.recordId, this.logicalName);
       return { url, fullSizeUrl };
     }
-    //When using conditional operations (If-Match: Etag) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
+    //When using conditional operations (If-Match) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
     async transformValueToDataverse(value) {
       return SKIP;
     }
@@ -3117,7 +3121,7 @@
             result[alias] = info.getDefault();
           }
         }
-        result[Etag] = v["@odata.etag"];
+        result[ETAG] = v["@odata.etag"];
         return result;
       }
       return this._table.transformValueFromDataverse(v);
@@ -3583,7 +3587,7 @@
             result[alias] = info.getDefault();
           }
         }
-        result[Etag] = v["@odata.etag"];
+        result[ETAG] = v["@odata.etag"];
         return result;
       }
       return this._table.transformValueFromDataverse(v);
@@ -3800,7 +3804,7 @@ ${error.stack ?? ""}` : error);
         assert(r && r.UserId, "UserId missing from WhoAmI response");
       });
       await test("seed parent record", async () => {
-        parentId = await TestTable0.insertRecord({
+        parentId = await TestTable0.createRecord({
           name: "smoke-parent",
           int: 100,
           bool: true,
@@ -3811,7 +3815,7 @@ ${error.stack ?? ""}` : error);
       });
       await test("seed child record (no file/image)", async () => {
         assert(parentId, "parent must exist first");
-        childId = await TestTable.insertRecord({
+        childId = await TestTable.createRecord({
           name: "smoke-child",
           int: 5,
           bool: true,
@@ -3823,7 +3827,7 @@ ${error.stack ?? ""}` : error);
         assert(childId, "child id missing");
         created.push(childId);
       });
-      await test("insertRecord returned GUIDs", () => {
+      await test("createRecord returned GUIDs", () => {
         assert(parentId && childId, "insert ids missing");
       });
       await test("getRecords filter/orderby/top (OData, transformed)", async () => {
@@ -3936,9 +3940,9 @@ ${error.stack ?? ""}` : error);
           image: { data: pngBlob() }
         });
       });
-      await test("file + image upload via afterSave (insertRecord)", async () => {
+      await test("file + image upload via afterSave (createRecord)", async () => {
         assert(parentId, "parent must exist first");
-        child2Id = await TestTable.insertRecord({
+        child2Id = await TestTable.createRecord({
           name: "smoke-child2",
           int: 7,
           text: "child2",

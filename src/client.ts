@@ -29,9 +29,9 @@ export type PreferOption =
 
 export type RequestOptions = { signal?: AbortSignal };
 export type QueryRequestOptions = RequestOptions & { query?: string };
-export type GetRecordOptions = QueryRequestOptions & { etag?: string };
-export type PatchRecordOptions = QueryRequestOptions & { etag?: string };
-export type DeleteRecordOptions = RequestOptions & { etag?: string };
+export type GetRecordOptions = QueryRequestOptions & { ifNoneMatch?: string };
+export type PatchRecordOptions = QueryRequestOptions & { ifMatch?: string; ifNoneMatch?: string };
+export type DeleteRecordOptions = RequestOptions & { ifMatch?: string };
 export type PostRecordOptions = QueryRequestOptions & {
     returnRepresentation?: boolean;
 };
@@ -275,7 +275,7 @@ export class DataverseClient {
         try {
             const resource = this._resource(`${getName(entitySetName)}(${id})`, options.query);
             return await this.fetch(resource, {
-                ...(options.etag ? { headers: { "If-None-Match": options.etag } as Record<string, string> } : {}),
+                ...(options.ifNoneMatch ? { headers: { "If-None-Match": options.ifNoneMatch } as Record<string, string> } : {}),
                 signal: options.signal,
             });
         } catch (error: any) {
@@ -400,7 +400,8 @@ export class DataverseClient {
         options: PatchRecordOptions = {},
     ) {
         const extraHeaders: Record<string, string> = { Prefer: "return=representation" };
-        if (options.etag) extraHeaders["If-Match"] = options.etag;
+        if (options.ifMatch) extraHeaders["If-Match"] = options.ifMatch;
+        if (options.ifNoneMatch) extraHeaders["If-None-Match"] = options.ifNoneMatch;
         return this.fetch(this._resource(`${getName(entitySetName)}(${id})`, options.query), {
             method: "PATCH",
             headers: extraHeaders,
@@ -418,7 +419,7 @@ export class DataverseClient {
      */
     async deleteRecord(entitySetName: Name, id: string, options: DeleteRecordOptions = {}): Promise<GUID> {
         const request: RequestInit = { method: "DELETE", signal: options.signal };
-        if (options.etag) request.headers = { "If-Match": options.etag } as Record<string, string>;
+        if (options.ifMatch) request.headers = { "If-Match": options.ifMatch } as Record<string, string>;
         await this.fetch(`${getName(entitySetName)}(${id})`, request);
         return id as GUID;
     }
@@ -435,14 +436,14 @@ export class DataverseClient {
         id: string,
         propertyName: Name,
         value: any,
-        options: RequestOptions & { etag?: string } = {},
+        options: RequestOptions & { ifMatch?: string } = {},
     ): Promise<GUID> {
         const request: RequestInit = {
             method: "PUT",
             body: JSON.stringify({ value }),
             signal: options.signal,
         };
-        if (options.etag) request.headers = { "If-Match": options.etag } as Record<string, string>;
+        if (options.ifMatch) request.headers = { "If-Match": options.ifMatch } as Record<string, string>;
         await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, request);
         return id as GUID;
     }
