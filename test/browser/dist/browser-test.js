@@ -123,7 +123,13 @@
       if (isJson) {
         const data = await response.json();
         if (data.error) {
-          throw data.error;
+          throw new DataverseHttpError(
+            `${response.status} ${data.error.message ?? response.statusText}`,
+            response.status,
+            response.statusText,
+            data.error,
+            response
+          );
         }
         if (!response.ok) {
           throw new DataverseHttpError(
@@ -743,7 +749,13 @@
   async function RetrieveTotalRecordCount(client, logicalName) {
     return client.fetch(
       `RetrieveTotalRecordCount(EntityNames=['${logicalName}'])`
-    ).then((d) => d.Values[0]);
+    ).then((d) => {
+      const collection = d?.Values ?? d?.EntityNameCountCollection ?? [];
+      const entry = collection[0];
+      if (entry == null) return 0;
+      if (typeof entry === "number") return entry;
+      return Number(entry.Count ?? entry.count ?? entry.Value ?? 0);
+    });
   }
   async function WhoAmI(client) {
     return client.fetch(`WhoAmI()`).then((r) => ({
@@ -2136,6 +2148,7 @@
     if (depth > 3) return;
     for (const [key, prop] of Object.entries(table.fields)) {
       if (prop.kind !== "navigation" || prop.type === "lookupId" || prop.type === "collectionIds") continue;
+      if (depth > 0 && prop.type === "collection") continue;
       query.expand(key, (sub) => {
         sub.select();
         expandAll(sub, prop.table, depth + 1);
@@ -2307,7 +2320,8 @@
     async getPropertyValue(key, id, queryOptions) {
       const prop = this.fields[key];
       if (prop.kind === "value" || prop.type === "lookupId") {
-        return this.client.getPropertyValue(this.entitySetName, id, prop.logicalName).then((v2) => prop.transformValueFromDataverse(v2));
+        const propertyName = prop.type === "lookupId" ? prop.fromDataverseName : prop.logicalName;
+        return this.client.getPropertyValue(this.entitySetName, id, propertyName).then((v2) => prop.transformValueFromDataverse(v2));
       }
       if (prop.type === "collection" || prop.type === "collectionIds") {
         return this.client.getAssociatedRecords(
@@ -2817,6 +2831,7 @@
       super(name, { defaultValue: false, schema: boolean$1() }, options);
     }
     transformValueFromDataverse(value) {
+      if (typeof value === "string") return value.toLowerCase() === "true";
       return value ?? false;
     }
   }
@@ -2827,6 +2842,10 @@
       super(name, { defaultValue: 0, schema: number$1() }, options);
     }
     transformValueFromDataverse(value) {
+      if (typeof value === "string") {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : 0;
+      }
       return value ?? 0;
     }
   }
@@ -3442,7 +3461,7 @@
           map.set(attr.alias, {
             field: FieldRef.fromPath(fieldDef, dataverseName),
             getDefault: () => fieldDef.getDefault?.(),
-            name: dataverseName
+            name: attr.alias
           });
         } else {
           map.set(attr.alias, {
@@ -3523,7 +3542,7 @@
           map.set(attr.alias, {
             field: FieldRef.fromPath(fieldDef, dataverseName),
             getDefault: () => fieldDef.getDefault?.(),
-            name: dataverseName
+            name: attr.alias
           });
         } else {
           map.set(attr.alias, {
@@ -3908,7 +3927,7 @@
           map.set(attr.alias, {
             field: FieldRef.fromPath(fieldDef, dataverseName),
             getDefault: () => fieldDef.getDefault?.(),
-            name: dataverseName
+            name: attr.alias
           });
         } else {
           map.set(attr.alias, {
@@ -4215,7 +4234,12 @@ ${stackOf(e)}` : messageOf(e)
     }
   }
   function messageOf(e) {
-    return e instanceof Error ? e.message : String(e);
+    if (e instanceof Error) return e.message;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
+    }
   }
   function stackOf(e) {
     return e instanceof Error && e.stack ? e.stack.split("\n").slice(1, 4).join("\n") : "";
@@ -4298,7 +4322,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-21T18:06:15.043Z"}
+      meta.textContent = `build ${"2026-08-21T18:29:26.605Z"}
 org ${this.ctxMeta.orgUrl}
 run prefix ${this.ctxMeta.runPrefix}`;
       const copyJson = document.createElement("button");
@@ -4384,7 +4408,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-21T18:06:15.043Z",
+          build: "2026-08-21T18:29:26.605Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4400,7 +4424,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     exportMarkdown() {
       const s = this.lastSummary;
       if (!s) return "";
-      const lines = ["# Browser test results", "", `Build: \`${"2026-08-21T18:06:15.043Z"}\``, ""];
+      const lines = ["# Browser test results", "", `Build: \`${"2026-08-21T18:29:26.605Z"}\``, ""];
       let currentSuite = "";
       for (const r of s.results) {
         if (r.suiteTitle !== currentSuite) {
