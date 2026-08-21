@@ -2144,22 +2144,9 @@
   function fetchOdata(table) {
     return new InitialQueryImpl(table);
   }
-  function expandAll(query, table, depth) {
-    if (depth > 3) return;
-    for (const [key, prop] of Object.entries(table.fields)) {
-      if (prop.kind !== "navigation" || prop.type === "lookupId" || prop.type === "collectionIds") continue;
-      if (depth > 0 && prop.type === "collection") continue;
-      query.expand(key, (sub) => {
-        sub.select();
-        expandAll(sub, prop.table, depth + 1);
-        return sub;
-      });
-    }
-  }
   function buildTableQueryAst(table, options) {
     const query = new ODataQuery(table);
     query.select();
-    expandAll(query, table, 0);
     if (options?.filter) query.filter(options.filter);
     if (options?.top !== void 0) query.top(options.top);
     if (typeof options?.orderby === "string") {
@@ -4085,8 +4072,16 @@
   }
 
   class FixtureTracker {
-    runPrefix = `dvt${Date.now().toString(36)}`;
+    sessionPrefix = `dvt${Date.now().toString(36)}`;
+    runIndex = 0;
     ids = [];
+    beginRun() {
+      this.runIndex++;
+      this.ids.length = 0;
+    }
+    get runPrefix() {
+      return `${this.sessionPrefix}-r${this.runIndex}`;
+    }
     track(id) {
       if (!id) throw new Error("track() called without an id");
       this.ids.push(id);
@@ -4171,6 +4166,7 @@
     async run(suites, events = {}) {
       const results = [];
       const startedAt = (/* @__PURE__ */ new Date()).toISOString();
+      this.base.fx.beginRun();
       for (const suite of suites) {
         events.onSuiteStart?.(suite);
         const ctx = { ...this.base, state: {} };
@@ -4328,7 +4324,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-21T19:39:38.536Z"}
+      meta.textContent = `build ${"2026-08-21T19:47:55.322Z"}
 org ${this.ctxMeta.orgUrl}
 run prefix ${this.ctxMeta.runPrefix}`;
       const copyJson = document.createElement("button");
@@ -4351,6 +4347,9 @@ run prefix ${this.ctxMeta.runPrefix}`;
       this.runButton.disabled = true;
       this.resultsEl.replaceChildren();
       this.summaryEl.textContent = "";
+      this.log("sweeping stale dvt* records from earlier runs…");
+      const swept = await this.ctxMeta.sweep();
+      if (swept > 0) this.log(`swept ${swept} stale record(s)`);
       await this.runner.run(selected, {
         onSuiteStart: (suite) => {
           this.log(`running suite "${suite.title}"…`);
@@ -4414,7 +4413,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-21T19:39:38.536Z",
+          build: "2026-08-21T19:47:55.322Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4433,7 +4432,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-21T19:39:38.536Z"}\``,
+        `Build: \`${"2026-08-21T19:47:55.322Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4990,10 +4989,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const base = (linkType) => fetchXml(ctx.tables.TestTable0).select((f) => ({ parentName: f.name })).join(linkType, ctx.tables.TestTable, "testLookup", "id", (sub) => sub.select((f) => ({ kid: f.name }))).filter(scope).execute();
             const outer = await base("outer");
-            assertEquals(outer.length, 2, "both parents via outer join");
+            assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)");
+            const outerNames = new Set(outer.map((r) => r.parentName));
+            assertEquals([...outerNames].sort(), [`${ctx.fx.runPrefix}-parent-1`, `${ctx.fx.runPrefix}-parent-2`], "both parents present via outer join");
             const inner = await base("inner");
-            assertEquals(inner.length, 1, "only the populated parent via inner join");
-            assertEquals(inner[0].parentName, `${ctx.fx.runPrefix}-parent-2`, "inner join hit the right parent");
+            assertEquals(inner.length, 3, "populated parent repeated per child");
+            assertEquals(inner.every((r) => r.parentName === `${ctx.fx.runPrefix}-parent-2`), true, "inner join hit the right parent");
           }
         },
         {
@@ -5057,7 +5058,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     name: "navigation",
     title: "Navigation properties",
     async setup(ctx) {
-      ctx.state.parent = await seedParent(ctx, { int: 100 });
+      ctx.state.parentName = ctx.fx.name("nav-parent");
+      ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100 });
       ctx.state.kid1 = await seedRow(ctx, { int: 5, testLookup: ctx.state.parent });
       ctx.state.kid2 = await seedRow(ctx, { int: 7, testLookup: ctx.state.parent });
       ctx.state.detached = await seedRow(ctx, { int: 9 });
@@ -5077,7 +5079,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           assertEquals(idValue, ctx.state.parent, "raw lookupId value");
           const nav = await ctx.tables.TestTable.getPropertyValue("testLookupNav", ctx.state.kid2);
           assert(nav && typeof nav === "object", "expanded lookup object returned");
-          assertEquals(nav?.name, `${ctx.fx.runPrefix}-parent-1`, "nav record transformed");
+          assertEquals(nav?.name, ctx.state.parentName, "nav record transformed");
         }
       },
       {
