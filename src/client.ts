@@ -181,7 +181,13 @@ export class DataverseClient {
         if (isJson) {
             const data = await response.json();
             if (data.error) {
-                throw data.error;
+                throw new DataverseHttpError(
+                    `${response.status} ${data.error.message ?? response.statusText}`,
+                    response.status,
+                    response.statusText,
+                    data.error,
+                    response,
+                );
             }
             if (!response.ok) {
                 throw new DataverseHttpError(

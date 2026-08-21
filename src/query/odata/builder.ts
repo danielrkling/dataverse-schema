@@ -653,25 +653,12 @@ export type ODataTableQueryOptions = {
   top?: number
 }
 
-function expandAll(query: any, table: DataverseTable<any>, depth: number): void {
-  if (depth > 3) return
-  for (const [key, prop] of Object.entries(table.fields) as [string, any][]) {
-    if (prop.kind !== "navigation" || prop.type === "lookupId" || prop.type === "collectionIds") continue
-    query.expand(key, (sub: any) => {
-      sub.select()
-      expandAll(sub, prop.table, depth + 1)
-      return sub
-    })
-  }
-}
-
 export function buildTableQueryAst<T extends GenericProperties>(
   table: DataverseTable<T>,
   options?: ODataTableQueryOptions,
 ): ODataSelectAst {
   const query = new ODataQuery(table)
   query.select()
-  expandAll(query, table, 0)
 
   if (options?.filter) query.filter(options.filter)
   if (options?.top !== undefined) query.top(options.top)

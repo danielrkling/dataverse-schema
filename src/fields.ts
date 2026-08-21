@@ -97,6 +97,7 @@ export class BooleanField extends FieldBase<boolean> {
   }
 
   transformValueFromDataverse(value: any): boolean {
+    if (typeof value === "string") return value.toLowerCase() === "true";
     return value ?? false;
   }
 }
@@ -112,6 +113,7 @@ export class NullableBooleanField extends FieldBase<boolean | null> {
   }
 
   transformValueFromDataverse(value: any): boolean | null {
+    if (typeof value === "string") return value.toLowerCase() === "true";
     return value ?? null;
   }
 }
@@ -124,6 +126,10 @@ export class NumberField extends FieldBase<number> {
   }
 
   transformValueFromDataverse(value: any): number {
+    if (typeof value === "string") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    }
     return value ?? 0;
   }
 }
@@ -136,6 +142,10 @@ export class NullableNumberField extends FieldBase<number | null> {
   }
 
   transformValueFromDataverse(value: any): number | null {
+    if (typeof value === "string") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    }
     return value ?? null;
   }
 }
@@ -260,7 +270,7 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
 
   transformValueFromDataverse(value: any): T[keyof T] {
     const result = this.#options[value as keyof T];
-    if (result === undefined) throw new Error(`Unknown choice value: ${value}`);
+    if (result === undefined) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
     return result;
   }
 
@@ -289,7 +299,7 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
   transformValueFromDataverse(value: any): T[keyof T] | null {
     if (value === null) return null;
     const result = this.#options[value as keyof T];
-    if (result === undefined) throw new Error(`Unknown choice value: ${value}`);
+    if (result === undefined) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
     return result;
   }
 

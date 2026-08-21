@@ -1,4 +1,4 @@
-import { fetchXml, eq, gt, groupby, sum, count, min, max, average } from "../../../src"
+import { fetchXml, eq, gt, and, groupby, sum, count, min, max, average } from "../../../src"
 import { Suite } from "../harness/runner"
 import { assert, assertEquals } from "../harness/assert"
 import { seedParent, seedRow } from "../harness/seed"
@@ -36,7 +36,7 @@ export const fetchxmlSuite: Suite = {
             .filter(scope)
             .top(10)
             .execute()
-          assertEquals(rows.length, 4, "seeded rows (3 children + parent)")
+          assertEquals(rows.length, 5, "prefixed rows (3 children + 2 parents)")
           for (const r of rows) {
             assert(typeof r.label === "string", "aliased name transformed")
             assert(typeof r.amount === "number", "aliased int transformed")
@@ -78,10 +78,12 @@ export const fetchxmlSuite: Suite = {
               .filter(scope)
               .execute()
           const outer = await base("outer")
-          assertEquals(outer.length, 2, "both parents via outer join")
+          assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)")
+          const outerNames = new Set(outer.map((r) => r.parentName))
+          assertEquals([...outerNames].sort(), [`${ctx.fx.runPrefix}-parent-1`, `${ctx.fx.runPrefix}-parent-2`], "both parents present via outer join")
           const inner = await base("inner")
-          assertEquals(inner.length, 1, "only the populated parent via inner join")
-          assertEquals(inner[0].parentName, `${ctx.fx.runPrefix}-parent-2`, "inner join hit the right parent")
+          assertEquals(inner.length, 3, "populated parent repeated per child")
+          assertEquals(inner.every((r) => r.parentName === `${ctx.fx.runPrefix}-parent-2`), true, "inner join hit the right parent")
         },
       },
       {
@@ -122,10 +124,10 @@ export const fetchxmlSuite: Suite = {
             .execute()
           assertEquals(rows.length, 1, "single aggregate row")
           const r = rows[0]
-          assertEquals(r.lo, 5, "min")
+          assertEquals(r.lo, 0, "min includes lonely parent")
           assertEquals(r.hi, 100, "max")
-          assertEquals(r.n, 4, "count all")
-          assert(Math.abs(r.avg - 38.5) < 0.01, `average 38.5, got ${r.avg}`)
+          assertEquals(r.n, 5, "count all prefixed rows")
+          assert(Math.abs(r.avg - 154 / 5) < 0.01, `average ${154 / 5}, got ${r.avg}`)
         },
       },
       {
@@ -144,11 +146,11 @@ export const fetchxmlSuite: Suite = {
         name: "typed FilterExpr inside FetchXML renders numeric choice conditions",
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
-            .select((f) => ({ id: f.id }))
-            .filter((f) => eq(f.choice, "B"))
+            .select((f) => ({ id: f.id, int: f.int }))
+            .filter((f) => and(eq(f.choice, "B"), gt(f.int, 10)))
             .execute()
-          assertEquals(rows.length, 1, "choice B row found via numeric condition")
-          assertEquals(rows[0].id, ctx.state.seeds[2].id, "c3 is the B row")
+          assertEquals(rows.length, 1, "choice B row above int 10")
+          assertEquals(rows[0].id, ctx.state.seeds[2].id, "c3 is the only such row")
         },
       },
     ]

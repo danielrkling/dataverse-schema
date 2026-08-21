@@ -40,7 +40,7 @@ export const generalSuite: Suite = {
       name: "getRecords filter/orderby/top (OData, transformed)",
       fn: async () => {
         const rows = await ctx.tables.TestTable.getRecords({
-          filter: "nnsyc200_int gt 0",
+          filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`,
           orderby: "nnsyc200_name asc",
           top: 10,
         })

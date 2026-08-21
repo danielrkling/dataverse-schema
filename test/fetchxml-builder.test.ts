@@ -186,7 +186,7 @@ test("aggregate toAst exposes attributes and links", () => {
   expect(ast.kind).toBe("xml-aggregate")
   expect(ast.attributes).toEqual([
     { name: "statuscode", alias: "byStatus", groupby: true },
-    { name: "revenue", alias: "avg", aggregate: "average" },
+    { name: "revenue", alias: "avg", aggregate: "avg" },
   ])
   expect(ast.filters).toEqual(["revenue gt 1"])
 })
@@ -196,4 +196,10 @@ test("aggregate toAst exposes attributes and links", () => {
 test("toString encodes the xml as a fetchXml query parameter", () => {
   const q = fetchXml(Account).select(f => ({ n: f.name }))
   expect(q.toString()).toBe(`fetchXml=${encodeURIComponent(q.toXml())}`)
+})
+
+test("average aggregates serialize as FetchXML avg", () => {
+  const q = fetchXml(Account)
+    .apply(f => ({ mean: average(f.revenue), byStatus: groupby(f.status) }))
+  expect(q.toXml()).toContain(`<attribute name="revenue" alias="mean" aggregate='avg' />`)
 })

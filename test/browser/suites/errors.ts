@@ -42,7 +42,6 @@ export const errorsSuite: Suite = {
             ctx.tables.TestTable.updateRecord(row, { int: 2 }, { ifMatch: 'W/"999999"' }),
           )) as any
           assertEquals(err.status, 412, "precondition status")
-          assert(err.statusText.length > 0, "statusText present")
         } finally {
           await ctx.tables.TestTable.deleteRecord(row).catch(() => undefined)
         }

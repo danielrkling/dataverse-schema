@@ -32,7 +32,13 @@ export async function RetrieveTotalRecordCount(
 ): Promise<number> {
   return client.fetch(
     `RetrieveTotalRecordCount(EntityNames=['${logicalName}'])`
-  ).then((d) => d.Values[0]);
+  ).then((d) => {
+    const collection = d?.Values ?? d?.EntityNameCountCollection ?? [];
+    const entry = collection[0];
+    if (entry == null) return 0;
+    if (typeof entry === "number") return entry;
+    return Number(entry.Count ?? entry.count ?? entry.Value ?? 0);
+  });
 }
 
 

@@ -644,7 +644,7 @@ export class FetchXmlAggregateQuery<
                 map.set(attr.alias, {
                     field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
-                    name: dataverseName,
+                    name: attr.alias,
                 });
             } else {
                 map.set(attr.alias, {
@@ -749,7 +749,7 @@ export class FetchXmlAggregateQuery<
                 map.set(attr.alias, {
                     field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
-                    name: dataverseName,
+                    name: attr.alias,
                 });
             } else {
                 map.set(attr.alias, {
@@ -844,7 +844,8 @@ export class EntityQueryBuilder<
                 initialAttributes.push({ name: value.field, alias, groupby: true });
             } else if (value instanceof Aggregation) {
                 const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.logicalName;
-                initialAttributes.push({ name: fieldName, alias, aggregate: value.operation });
+                const operation = value.operation === "average" ? "avg" : value.operation;
+                initialAttributes.push({ name: fieldName, alias, aggregate: operation });
             }
         }
 
@@ -1261,7 +1262,7 @@ export class EntityQueryBuilder<
                 map.set(attr.alias, {
                     field: FieldRef.fromPath(fieldDef, dataverseName),
                     getDefault: () => fieldDef.getDefault?.(),
-                    name: dataverseName,
+                    name: attr.alias,
                 });
             } else {
                 map.set(attr.alias, {

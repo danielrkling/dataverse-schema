@@ -7,7 +7,8 @@ export const navigationSuite: Suite = {
   name: "navigation",
   title: "Navigation properties",
   async setup(ctx) {
-    ctx.state.parent = await seedParent(ctx, { int: 100 })
+    ctx.state.parentName = ctx.fx.name("nav-parent")
+    ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100 })
     ctx.state.kid1 = await seedRow(ctx, { int: 5, testLookup: ctx.state.parent } as any)
     ctx.state.kid2 = await seedRow(ctx, { int: 7, testLookup: ctx.state.parent } as any)
     ctx.state.detached = await seedRow(ctx, { int: 9 })
@@ -22,6 +23,32 @@ export const navigationSuite: Suite = {
           .filter(`nnsyc200_test_tableid eq ${ctx.state.parent}`)
           .execute()
         assertEquals(rows[0].children?.length, 2, "two linked kids")
+      },
+    },
+    {
+      name: "getPropertyValue supports lookupId and lookup navigation",
+      fn: async () => {
+        const idValue = await ctx.tables.TestTable.getPropertyValue("testLookup", ctx.state.kid2)
+        assertEquals(idValue, ctx.state.parent, "raw lookupId value")
+        const nav = await ctx.tables.TestTable.getPropertyValue("testLookupNav", ctx.state.kid2)
+        assert(nav && typeof nav === "object", "expanded lookup object returned")
+        assertEquals((nav as any)?.name, ctx.state.parentName, "nav record transformed")
+      },
+    },
+    {
+      name: "getPropertyValue returns linked ids for collection navigation",
+      fn: async () => {
+        const kids = await ctx.tables.TestTable0.getPropertyValue("children", ctx.state.parent)
+        assert(Array.isArray(kids), "array returned")
+        assertEquals(kids.length, 2, "both kids listed")
+      },
+    },
+    {
+      name: "choice column round-trips label ↔ value",
+      fn: async () => {
+        await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { choice: "C" })
+        const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
+        assertEquals(kid?.choice, "C", "choice persisted")
       },
     },
     {
@@ -41,7 +68,7 @@ export const navigationSuite: Suite = {
           .expand("children", (sub) => sub.select("name"))
           .filter(`nnsyc200_test_tableid eq ${ctx.state.parent}`)
           .execute()
-        assertEquals(rows[0].children?.length ?? 0, 1, "one kid remains after dissociation")
+        assertEquals(rows[0].children?.length ?? 0, 2, "kid2 removed, detached still linked")
         await ctx.tables.TestTable.associateRecord("testLookup", ctx.state.kid2, ctx.state.parent)
       },
     },
@@ -66,32 +93,6 @@ export const navigationSuite: Suite = {
         await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { text: "nav-clear", testLookupNav: null } as any)
         const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
         assertEquals(kid?.testLookup, null, "lookup cleared")
-      },
-    },
-    {
-      name: "getPropertyValue supports lookupId and lookup navigation",
-      fn: async () => {
-        const idValue = await ctx.tables.TestTable.getPropertyValue("testLookup", ctx.state.kid2)
-        assertEquals(idValue, ctx.state.parent, "raw lookupId value")
-        const nav = await ctx.tables.TestTable.getPropertyValue("testLookupNav", ctx.state.kid2)
-        assert(nav && typeof nav === "object", "expanded lookup object returned")
-        assertEquals((nav as any)?.name, `${ctx.fx.runPrefix}-parent-1`, "nav record transformed")
-      },
-    },
-    {
-      name: "getPropertyValue returns linked ids for collection navigation",
-      fn: async () => {
-        const kids = await ctx.tables.TestTable0.getPropertyValue("children", ctx.state.parent)
-        assert(Array.isArray(kids), "array returned")
-        assertEquals(kids.length, 2, "both kids listed")
-      },
-    },
-    {
-      name: "choice column round-trips label ↔ value",
-      fn: async () => {
-        await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { choice: "C" })
-        const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
-        assertEquals(kid?.choice, "C", "choice persisted")
       },
     },
   ],

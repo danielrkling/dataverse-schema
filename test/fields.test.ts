@@ -431,3 +431,25 @@ test("multiChoice getDefault returns independent empty arrays", () => {
   expect(a).toEqual([])
   expect(a).not.toBe(b)
 })
+
+test("number field coerces stringly values from FetchXML responses", () => {
+  const f = number("age")
+  expect(f.transformValueFromDataverse("42")).toBe(42)
+  expect(f.transformValueFromDataverse("38.5")).toBe(38.5)
+  expect(f.transformValueFromDataverse("junk")).toBe(0)
+  expect(f.transformValueFromDataverse(null)).toBe(0)
+})
+
+test("nullable number coerces strings and preserves null", () => {
+  const f = nullableNumber("score")
+  expect(f.transformValueFromDataverse("7")).toBe(7)
+  expect(f.transformValueFromDataverse("junk")).toBeNull()
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("boolean field coerces stringly true/false", () => {
+  expect(boolean("active").transformValueFromDataverse("true")).toBe(true)
+  expect(boolean("active").transformValueFromDataverse("False")).toBe(false)
+  expect(nullableBoolean("flag").transformValueFromDataverse("true")).toBe(true)
+  expect(nullableBoolean("flag").transformValueFromDataverse(null)).toBeNull()
+})

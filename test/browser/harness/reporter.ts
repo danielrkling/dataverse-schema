@@ -116,6 +116,10 @@ export class Reporter {
     this.resultsEl.replaceChildren()
     this.summaryEl.textContent = ""
 
+    this.log("sweeping stale dvt* records from earlier runs…")
+    const swept = await this.ctxMeta.sweep()
+    if (swept > 0) this.log(`swept ${swept} stale record(s)`)
+
     await this.runner.run(selected, {
       onSuiteStart: (suite) => {
         this.log(`running suite "${suite.title}"…`)
@@ -205,7 +209,14 @@ export class Reporter {
   private exportMarkdown(): string {
     const s = this.lastSummary
     if (!s) return ""
-    const lines = ["# Browser test results", "", `Build: \`${__BUILD_STAMP__}\``, ""]
+    const lines = [
+      "# Browser test results",
+      "",
+      `Build: \`${__BUILD_STAMP__}\``,
+      `Org: ${this.ctxMeta.orgUrl}`,
+      `Run window: ${s.startedAt} → ${s.finishedAt}`,
+      "",
+    ]
     let currentSuite = ""
     for (const r of s.results) {
       if (r.suiteTitle !== currentSuite) {
@@ -213,8 +224,11 @@ export class Reporter {
         lines.push(`## ${currentSuite}`, "")
       }
       const glyph = r.status === "pass" ? "✅" : r.status === "skip" ? "⏭️" : "❌"
-      lines.push(`- ${glyph} ${r.name} (${Math.round(r.durationMs)}ms)`)
-      if (r.status === "fail" && r.error) lines.push(`  - \`${r.error.split("\n")[0]}\``)
+      lines.push(`- ${glyph} **${r.name}** (${Math.round(r.durationMs)}ms)`)
+      if (r.error) {
+        const body = r.error.split("\n").map((l) => `  > ${l}`).join("\n")
+        lines.push(body)
+      }
     }
     lines.push("", `**${s.passed} passed, ${s.failed} failed, ${s.skipped} skipped**`)
     return lines.join("\n")

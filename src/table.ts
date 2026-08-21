@@ -1,5 +1,5 @@
 import * as v from "valibot"
-import { DataverseClient } from "./client";
+import { DataverseClient, DataverseHttpError } from "./client";
 import { buildTableQueryAst, ODataTableQueryOptions } from "./query/odata/builder";
 import { serializeODataSelect } from "./query/odata/ast";
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField, ImageField } from "./fields";
@@ -130,7 +130,11 @@ export class DataverseTable<TProperties extends GenericProperties> {
         ...options,
         query: tableQuery(this as unknown as DataverseTable<GenericProperties>),
       })
-      .then((v) => this.transformValueFromDataverse(v));
+      .then((v) => this.transformValueFromDataverse(v))
+      .catch((err: unknown) => {
+        if (err instanceof DataverseHttpError && err.status === 404) return null;
+        throw err;
+      });
   }
 
   getAlternateKeys(value: Partial<Infer<TProperties>>): AlternateKey {
@@ -237,8 +241,9 @@ export class DataverseTable<TProperties extends GenericProperties> {
   ): Promise<Infer<TProperties[TKey]>> {
     const prop = this.fields[key];
     if (prop.kind === "value" || prop.type === "lookupId") {
+      const propertyName = prop.type === "lookupId" ? (prop as LookupIdProperty).fromDataverseName : prop.logicalName;
       return this.client
-        .getPropertyValue(this.entitySetName, id, prop.logicalName)
+        .getPropertyValue(this.entitySetName, id, propertyName)
         .then((v) => prop.transformValueFromDataverse(v)) as Infer<
         TProperties[TKey]
       >;
@@ -328,7 +333,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       return this.client.associateRecord(
         this.entitySetName,
         id,
-        prop.type === "collection" || prop.type === "lookup" ? prop.schemaName : prop.logicalName,
+        prop.schemaName,
         prop.table.entitySetName,
         childId,
       );
@@ -364,7 +369,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   >(key: TKey, id: DataverseKey, childId?: GUID): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
-      return this.client.dissociateRecord(this.entitySetName, id, prop.type === "collection" || prop.type === "lookup" ? prop.schemaName : prop.logicalName, childId);
+      return this.client.dissociateRecord(this.entitySetName, id, prop.schemaName, childId);
     } else {
       throw new Error("Can only dissociate navigation properties");
     }
@@ -570,10 +575,11 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * ]);
    */
   async createMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
-    return this.client.createMultiple(
-      this.entitySetName,
-      await Promise.all(records.map((r) => this.transformValueToDataverse(r))),
-    );
+    const targets = await Promise.all(records.map(async (r) => ({
+      "@odata.type": `Microsoft.Dynamics.CRM.${this.logicalName}`,
+      ...(await this.transformValueToDataverse(r)),
+    })));
+    return this.client.createMultiple(this.entitySetName, targets);
   }
 
   /**
@@ -588,10 +594,11 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * ]);
    */
   async updateMultiple(records: Partial<Infer<TProperties>>[]): Promise<any> {
-    return this.client.updateMultiple(
-      this.entitySetName,
-      await Promise.all(records.map((r) => this.transformValueToDataverse(r))),
-    );
+    const targets = await Promise.all(records.map(async (r) => ({
+      "@odata.type": `Microsoft.Dynamics.CRM.${this.logicalName}`,
+      ...(await this.transformValueToDataverse(r)),
+    })));
+    return this.client.updateMultiple(this.entitySetName, targets);
   }
 
   /**

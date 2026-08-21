@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseClient, primaryKey, string, number, choice,
   lookup, collection, fetchOdata, any, all, eq, ne, gt, and, FieldRef,
-  groupby, sum, count, average, min, max,
+  groupby, sum, count, average, min, max, buildTableQueryAst,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -217,4 +217,32 @@ test("collection expand inside a collection expand is rejected", () => {
 
 test("unknown orderby field throws", () => {
   expect(() => fetchOdata(Account).select("name").orderby("bogus_field")).toThrow("Unknown query field: bogus_field")
+})
+
+// --- buildTableQueryAst (default table query) ---
+
+test("default table query stays flat regardless of navigation properties", () => {
+  const Task = new DataverseTable({
+    client, entitySetName: "tasks", logicalName: "task",
+    fields: { id: primaryKey("taskid"), subject: string("subject") },
+  })
+  const Child: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "children", logicalName: "child",
+    fields: {
+      id: primaryKey("childid"),
+      parent: lookup("parent_link", () => Parent as any),
+      tasks: collection("child_tasks", () => Task),
+    },
+  })
+  const Parent: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "parents", logicalName: "parent",
+    fields: {
+      id: primaryKey("parentid"),
+      children: collection("parent_children", () => Child as any),
+    },
+  })
+
+  const ast = buildTableQueryAst(Parent)
+  expect(ast.select!.length).toBeGreaterThan(0)
+  expect(ast.expands ?? []).toHaveLength(0)
 })

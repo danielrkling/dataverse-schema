@@ -1,8 +1,18 @@
 import { GUID, DataverseTable } from "../../../src"
 
 export class FixtureTracker {
-  readonly runPrefix = `dvt${Date.now().toString(36)}`
+  readonly sessionPrefix = `dvt${Date.now().toString(36)}`
+  private runIndex = 0
   readonly ids: GUID[] = []
+
+  beginRun(): void {
+    this.runIndex++
+    this.ids.length = 0
+  }
+
+  get runPrefix(): string {
+    return `${this.sessionPrefix}-r${this.runIndex}`
+  }
 
   track(id: GUID | undefined | null): GUID {
     if (!id) throw new Error("track() called without an id")

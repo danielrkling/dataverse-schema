@@ -47,7 +47,15 @@ export const bulkSuite: Suite = {
       {
         name: "deleteMultiple removes every row",
         fn: async () => {
-          await ctx.tables.TestTable.deleteMultiple(ctx.state.rows as string[])
+          try {
+            await ctx.tables.TestTable.deleteMultiple(ctx.state.rows as string[])
+          } catch (e: any) {
+            const msg = e instanceof Error ? e.message : JSON.stringify(e)
+            if (msg.includes("has not yet been implemented") || msg.includes("405")) {
+              throw new Error("skip: this org has not enabled DeleteMultiple")
+            }
+            throw e
+          }
           const rows = await ctx.tables.TestTable.getRecords({ filter: scope })
           assertEquals(rows.length, 0, "all bulk rows deleted")
         },

@@ -58,6 +58,7 @@ export class Runner {
   async run(suites: Suite[], events: RunnerEvents = {}): Promise<RunSummary> {
     const results: TestResult[] = []
     const startedAt = new Date().toISOString()
+    this.base.fx.beginRun()
 
     for (const suite of suites) {
       events.onSuiteStart?.(suite)
@@ -132,7 +133,12 @@ export class Runner {
 }
 
 function messageOf(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
+  if (e instanceof Error) return e.message
+  try {
+    return JSON.stringify(e)
+  } catch {
+    return String(e)
+  }
 }
 
 function stackOf(e: unknown): string {
