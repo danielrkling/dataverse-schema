@@ -63,6 +63,10 @@
   "scripts": {
     "build": "tsdown",
     "build:browser-test": "vite build --mode browser-test",
-    "dev": "vite"
+    "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "test:types": "vitest run --typecheck --typecheck.include=\"test/*typecheck*.test.ts\""
   }
 }

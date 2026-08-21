@@ -7,7 +7,7 @@ export class FieldRef<T = any, K extends string = string, F extends FieldBase<T>
   private readonly _path: string
 
   constructor(
-    field: F,
+    field: F | string,
     path?: string,
     pathSegments?: readonly QueryProperty[],
   ) {
@@ -26,9 +26,10 @@ export class FieldRef<T = any, K extends string = string, F extends FieldBase<T>
       this._path = path ?? name
       this.path = pathSegments ?? [this.field]
     } else {
-      this.field = field
-      this._path = path ?? field.fromDataverseName
-      this.path = pathSegments ?? [field]
+      const f = field as F
+      this.field = f
+      this._path = path ?? f.fromDataverseName
+      this.path = pathSegments ?? [f]
     }
   }
 

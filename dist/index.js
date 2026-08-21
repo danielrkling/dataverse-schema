@@ -1,7 +1,7 @@
 import * as v from "valibot";
 
 //#region src/util.ts
-const Etag = "$etag";
+const ETAG = "$etag";
 const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
 const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
 function isNonEmptyString(value) {
@@ -54,22 +54,22 @@ function expand(values) {
 		return `${name}(${expandParts.join(";")})`;
 	}).join(",");
 }
-function attachEtag(v) {
-	if (v && typeof v === "object") v[Etag] = v["@odata.etag"];
+function attachETag(v) {
+	if (v && typeof v === "object") v[ETAG] = v["@odata.etag"];
 	return v;
 }
 function getEtag(v) {
-	return v?.[Etag];
+	return v?.[ETAG];
 }
 /**
 * Retains references to previous recrods if ETag value is unchanged
-* 
-* @param prevRecords 
-* @param newRecords 
-* @returns 
+*
+* @param prevRecords
+* @param newRecords
+* @returns
 */
 function mergeRecords(prevRecords, newRecords) {
-	const prevMap = new Map(prevRecords.map((v) => [v[Etag], v]));
+	const prevMap = new Map(prevRecords.map((v) => [v[ETAG], v]));
 	return newRecords.map((v) => prevMap.get(v["$etag"]) ?? v);
 }
 /**
@@ -331,7 +331,7 @@ var DataverseClient = class {
 		try {
 			const resource = this._resource(`${getName(entitySetName)}(${id})`, options.query);
 			return await this.fetch(resource, {
-				...options.etag ? { headers: { "If-None-Match": options.etag } } : {},
+				...options.ifNoneMatch ? { headers: { "If-None-Match": options.ifNoneMatch } } : {},
 				signal: options.signal
 			});
 		} catch (error) {
@@ -407,7 +407,8 @@ var DataverseClient = class {
 	*/
 	async patchRecord(entitySetName, id, value, options = {}) {
 		const extraHeaders = { Prefer: "return=representation" };
-		if (options.etag) extraHeaders["If-Match"] = options.etag;
+		if (options.ifMatch) extraHeaders["If-Match"] = options.ifMatch;
+		if (options.ifNoneMatch) extraHeaders["If-None-Match"] = options.ifNoneMatch;
 		return this.fetch(this._resource(`${getName(entitySetName)}(${id})`, options.query), {
 			method: "PATCH",
 			headers: extraHeaders,
@@ -427,7 +428,7 @@ var DataverseClient = class {
 			method: "DELETE",
 			signal: options.signal
 		};
-		if (options.etag) request.headers = { "If-Match": options.etag };
+		if (options.ifMatch) request.headers = { "If-Match": options.ifMatch };
 		await this.fetch(`${getName(entitySetName)}(${id})`, request);
 		return id;
 	}
@@ -444,7 +445,7 @@ var DataverseClient = class {
 			body: JSON.stringify({ value }),
 			signal: options.signal
 		};
-		if (options.etag) request.headers = { "If-Match": options.etag };
+		if (options.ifMatch) request.headers = { "If-Match": options.ifMatch };
 		await this.fetch(`${getName(entitySetName)}(${id})/${getName(propertyName)}`, request);
 		return id;
 	}
@@ -899,9 +900,10 @@ var FieldRef = class FieldRef {
 			this._path = path ?? name;
 			this.path = pathSegments ?? [this.field];
 		} else {
-			this.field = field;
-			this._path = path ?? field.fromDataverseName;
-			this.path = pathSegments ?? [field];
+			const f = field;
+			this.field = f;
+			this._path = path ?? f.fromDataverseName;
+			this.path = pathSegments ?? [f];
 		}
 	}
 	static fromPath(field, path, pathSegments) {
@@ -992,6 +994,13 @@ function renderFilterFetchXml(node) {
 function pathOf(field) {
 	return field.path;
 }
+/** Converts typed field values (e.g. choice labels) into their Dataverse representation before rendering. */
+function toFilterValue(field, value) {
+	if (value == null || typeof value !== "string") return value;
+	const f = field.field;
+	if (f?.type !== "choice") return value;
+	return f.transformValueToDataverse(value);
+}
 var FilterExpr = class {
 	node;
 	constructor(node) {
@@ -1016,7 +1025,7 @@ function fn(field, fnName, operator, values) {
 		field: pathOf(field),
 		fnName,
 		operator,
-		values
+		values: values.map((v) => toFilterValue(field, v))
 	});
 }
 function eq(field, value) {
@@ -1030,7 +1039,7 @@ function eq(field, value) {
 		type: "comparison",
 		field: pathOf(field),
 		operator: "eq",
-		value
+		value: toFilterValue(field, value)
 	});
 }
 function ne(field, value) {
@@ -1044,7 +1053,7 @@ function ne(field, value) {
 		type: "comparison",
 		field: pathOf(field),
 		operator: "ne",
-		value
+		value: toFilterValue(field, value)
 	});
 }
 function gt(field, value) {
@@ -1058,7 +1067,7 @@ function gt(field, value) {
 		type: "comparison",
 		field: pathOf(field),
 		operator: "gt",
-		value
+		value: toFilterValue(field, value)
 	});
 }
 function ge(field, value) {
@@ -1072,7 +1081,7 @@ function ge(field, value) {
 		type: "comparison",
 		field: pathOf(field),
 		operator: "ge",
-		value
+		value: toFilterValue(field, value)
 	});
 }
 function lt(field, value) {
@@ -1086,7 +1095,7 @@ function lt(field, value) {
 		type: "comparison",
 		field: pathOf(field),
 		operator: "lt",
-		value
+		value: toFilterValue(field, value)
 	});
 }
 function le(field, value) {
@@ -1100,7 +1109,7 @@ function le(field, value) {
 		type: "comparison",
 		field: pathOf(field),
 		operator: "le",
-		value
+		value: toFilterValue(field, value)
 	});
 }
 function isNull(field) {
@@ -1612,7 +1621,7 @@ var ODataApplyQuery = class {
 	_transformRow(v) {
 		const r = { ...v };
 		for (const [alias, field] of Object.entries(this._aliasFields)) if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
-		r[Etag] = v["@odata.etag"];
+		r[ETAG] = v["@odata.etag"];
 		delete r["@odata.etag"];
 		return r;
 	}
@@ -1787,7 +1796,7 @@ var ODataQuery = class ODataQuery {
 			result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
 		}
 		for (const expand of this.#expandMeta) if (value[expand.dvName] !== void 0) result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
-		result[Etag] = value["@odata.etag"];
+		result[ETAG] = value["@odata.etag"];
 		return result;
 	}
 	_transformRow(value) {
@@ -2186,11 +2195,14 @@ var DataverseTable = class DataverseTable {
 	* @param value The record data (partial — primary key is auto-generated).
 	*
 	* @example
-	* const newId = await Person.insertRecord({ name: "John", age: 30 });
+	* const newId = await Person.createRecord({ name: "John", age: 30 });
 	*/
-	async insertRecord(value) {
+	async createRecord(value, options) {
 		const pkName = this.primaryKey.property.logicalName;
-		const guid = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), { query: selectQuery(pkName) }))?.[pkName];
+		const guid = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), {
+			query: selectQuery(pkName),
+			signal: options?.signal
+		}))?.[pkName];
 		const ctx = {
 			table: this,
 			client: this.client,
@@ -2200,36 +2212,42 @@ var DataverseTable = class DataverseTable {
 		return guid;
 	}
 	/**
-	* Updates an existing record by ID. Supports optimistic concurrency via etag.
+	* Updates an existing record by ID. Supports optimistic concurrency via the
+	* `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+	* to `"*"`, which updates the record only if it already exists.
 	*
 	* @param id The record's primary key.
 	* @param value The fields to update (partial record data).
-	* @param etag Optional etag for conditional updates (If-Match header).
+	* @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
 	*
 	* @example
 	* await Person.updateRecord("some-guid", { name: "Jane" });
-	* // With etag:
-	* await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
+	* // Conditional update:
+	* await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
 	*/
-	async updateRecord(id, value, etag) {
+	async updateRecord(id, value, options) {
 		if (!id) throw new Error("No ID provided");
 		const ctx = {
 			table: this,
 			client: this.client,
 			recordId: id
 		};
-		await this.client.patchRecord(this.entitySetName, id, await this.transformValueToDataverse(value, ctx), { etag });
+		await this.client.patchRecord(this.entitySetName, id, await this.transformValueToDataverse(value, ctx), {
+			ifMatch: options?.ifMatch ?? "*",
+			ifNoneMatch: options?.ifNoneMatch,
+			signal: options?.signal
+		});
 		await this._afterSave(ctx, value);
 		return id;
 	}
 	/**
-	* Creates or updates a record. If `id` is provided the record is updated;
-	* otherwise a new record is created. Navigation properties (collections, lookups)
-	* are also synced through nested upserts.
+	* Creates or updates a record. If `id` is provided the record is updated via
+	* PATCH; otherwise a new record is created via POST. Navigation properties
+	* (collections, lookups) are also synced through nested upserts.
 	*
 	* @param id The GUID of an existing record, or `undefined` to create new.
 	* @param value The record data (partial for updates).
-	* @param etag Optional etag for conditional upsert.
+	* @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
 	*
 	* @example
 	* // Create
@@ -2237,7 +2255,7 @@ var DataverseTable = class DataverseTable {
 	* // Update
 	* await Person.upsertRecord(existingId, { name: "Jane" });
 	*/
-	async upsertRecord(id, value, etag) {
+	async upsertRecord(id, value, options) {
 		const pkName = this.primaryKey.property.logicalName;
 		const ctx = {
 			table: this,
@@ -2249,26 +2267,35 @@ var DataverseTable = class DataverseTable {
 			const transformed = await this.transformValueToDataverse(value, ctx);
 			await this.client.patchRecord(this.entitySetName, id, transformed, {
 				query: selectQuery(pkName),
-				etag
+				ifMatch: options?.ifMatch,
+				ifNoneMatch: options?.ifNoneMatch,
+				signal: options?.signal
 			});
 		} else {
-			id = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), { query: selectQuery(pkName) }))[pkName];
+			id = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), {
+				query: selectQuery(pkName),
+				signal: options?.signal
+			}))[pkName];
 			ctx.recordId = id;
 		}
 		await this._afterSave(ctx, value);
 		return id;
 	}
 	/**
-	* Deletes a record by its primary key. Supports optimistic concurrency via etag.
+	* Deletes a record by its primary key. Supports optimistic concurrency via the
+	* `ifMatch` option (If-Match header).
 	*
 	* @param id The primary key of the record to delete.
-	* @param etag Optional etag for conditional deletion.
+	* @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
 	*
 	* @example
 	* await Person.deleteRecord("some-guid");
 	*/
-	async deleteRecord(id, etag) {
-		return this.client.deleteRecord(this.entitySetName, id, { etag });
+	async deleteRecord(id, options) {
+		return this.client.deleteRecord(this.entitySetName, id, {
+			ifMatch: options?.ifMatch,
+			signal: options?.signal
+		});
 	}
 	/**
 	* Activates a record by setting its `statecode` to 0.
@@ -2397,7 +2424,7 @@ var DataverseTable = class DataverseTable {
 			const raw = value[property.fromDataverseName];
 			result[key] = property.transformValueFromDataverse(raw, ctx);
 		}
-		result[Etag] = value["@odata.etag"];
+		result[ETAG] = value["@odata.etag"];
 		return result;
 	}
 	async transformValueToDataverse(value, ctx) {
@@ -3580,7 +3607,7 @@ var FetchXmlAggregateQuery = class {
 			};
 			for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
 			else result[alias] = info.getDefault();
-			result[Etag] = v["@odata.etag"];
+			result[ETAG] = v["@odata.etag"];
 			return result;
 		}
 		return this._table.transformValueFromDataverse(v);
@@ -4018,7 +4045,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 			};
 			for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
 			else result[alias] = info.getDefault();
-			result[Etag] = v["@odata.etag"];
+			result[ETAG] = v["@odata.etag"];
 			return result;
 		}
 		return this._table.transformValueFromDataverse(v);
@@ -4179,4 +4206,4 @@ function serializeFetchXml(ast) {
 }
 
 //#endregion
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };

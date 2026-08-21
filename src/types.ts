@@ -16,6 +16,7 @@ import {
   NullableDateTimeField,
   NullableDateField,
   FileField,
+  FormattedField,
   ChoiceField,
   NullableChoiceField,
   JsonField,
@@ -129,10 +130,11 @@ export type GenericValueProperty =
   | DateField  
   | NullableDateField
   | ImageField // Represents an image value.
-  | ListField<string | number> // Represents a list of strings or numbers
+  | ListField<any> // Represents a list of strings or numbers
   | FileField
-  | ChoiceField<Record<number, string>>
-  | NullableChoiceField<Record<number, string>>
+  | FormattedField
+  | ChoiceField<any>
+  | NullableChoiceField<any>
   | JsonField<any>
 
 /**

@@ -13,7 +13,7 @@ function dataverseCollectionOptions(config) {
 	const defaultOnInsert = async ({ transaction }) => {
 		const results = [];
 		for (const mutation of transaction.mutations) {
-			const guid = await table.insertRecord(mutation.modified);
+			const guid = await table.createRecord(mutation.modified);
 			results.push(guid);
 		}
 		return results;
@@ -144,7 +144,7 @@ var DataverseSyncDB = class {
 			timestamp: mutation.createdAt.valueOf(),
 			sequence: this.sequence++,
 			attempts: 0,
-			etag: getEtag(mutation.modified)
+			ifMatch: getEtag(mutation.modified)
 		};
 	}
 	db;
@@ -194,9 +194,9 @@ var DataverseSyncDB = class {
 					continue;
 				}
 				try {
-					if (mutation.type === "insert") await table.insertRecord(mutation.value);
-					else if (mutation.type === "update") await table.updateRecord(mutation.key, mutation.value, mutation.etag);
-					else if (mutation.type === "delete") await table.deleteRecord(mutation.key, mutation.etag);
+					if (mutation.type === "insert") await table.createRecord(mutation.value);
+					else if (mutation.type === "update") await table.updateRecord(mutation.key, mutation.value, { ifMatch: mutation.ifMatch });
+					else if (mutation.type === "delete") await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
 					await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
 				} catch (e) {
 					if (!navigator.onLine) break;

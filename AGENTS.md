@@ -17,10 +17,10 @@ npm run dev
 npm run build:browser-test
 
 # Run all tests (vitest)
-npx vitest run
+npm test
 
 # Run tests in watch mode
-npx vitest
+npm run test:watch
 
 # Run a single test file
 npx vitest run test/fields.test.ts
@@ -29,20 +29,22 @@ npx vitest run test/fields.test.ts
 npx vitest run -t "table.getRecord"
 
 # Typecheck (no emit)
-npx tsc --noEmit
+npm run typecheck
+
+# Verify expectTypeOf assertions with real tsc (type-level tests)
+npm run test:types
 ```
 
 There is no linter or formatter configured. Do not add linting unless the user explicitly asks.
 
 ## Test Infrastructure
 
-- **Framework**: Vitest (no dedicated config file; uses defaults + `jsdom` environment via `test/setup.ts`)
-- **Environment**: jsdom
-- **Setup file**: `test/setup.ts` — starts MSW server before tests, resets handlers after each, shuts down after all
-- **Mocking**: MSW (Mock Service Worker) intercepts HTTP requests. Default handlers live in `test/mocks/handlers.ts`, server in `test/mocks/server.ts`
+- **Framework**: Vitest (no dedicated config file; uses defaults)
+- **Environment**: Node by default. Files that need DOM APIs opt in with a `// @vitest-environment jsdom` docblock (e.g. `test/util.test.ts` for FileReader/location); files that must NOT see browser globals use `// @vitest-environment node` (e.g. `test/client.test.ts`)
+- **No HTTP mocking**: unit tests never hit the network — they exercise pure logic only (field transforms, query builders, AST serialization, URL builders). The MSW setup that existed earlier has been removed
 - **Test file naming**: `*.test.ts` in the `test/` directory (plus `test/browser-smoke.ts`)
 - **Test structure**: Flat `test()` blocks (no `describe()` wrappers). Tests are organized by section using `// --- Section Name ---` comments
-- **Many tests use `server.use()`** to override default handlers per-test with custom MSW handlers
+- **Type tests**: `expectTypeOf` assertions live in `*typecheck*.test.ts` files. They are compile-time only and are verified via `npm run test:types` (vitest `--typecheck` mode). Compile-error assertions use `// @ts-expect-error` wrapped in never-invoked closures so they don't execute at runtime
 - **Some tests are skipped** with `test.skip` — do not un-skip them without understanding why they were skipped
 - **Browser smoke test**: `test/browser-smoke.ts` is bundled by `npm run build:browser-test` into `test/dist/browser-test/browser-test.js` for manual real-environment checks
 
@@ -80,10 +82,17 @@ src/
     collection.ts              — dataverseCollectionOptions() + collection config/types
     offline-collection.ts      — DataverseSyncDB (IndexedDB via idb), MutationPersistenceError, offline collection config/types
 test/
-  mocks/                       — MSW mock server and handlers
-  fields.test.ts               — Field + table unit tests
-  query.test.ts                — Query builder (OData + FetchXML) tests
-  query-ast.test.ts            — AST + render tests
+  util.test.ts                 — util helpers (etag, xml, dates, image URLs)
+  filter-render.test.ts        — FilterExpr rendering to OData + FetchXML (incl. choice transforms)
+  table.test.ts                — Pure DataverseTable methods, navigation properties, intersect tables
+  odata-builder.test.ts        — OData fluent builder output, lambdas, error paths
+  fetchxml-builder.test.ts     — FetchXML builder output: joins, aggregates, serialization
+  client.test.ts               — Client construction + URL builders (no HTTP)
+  fields.test.ts               — Field classes: defaults, transforms, validation
+  query.test.ts                — FilterExpr + util query helpers
+  query-ast.test.ts            — AST serializers
+  types-typecheck.test.ts      — Type-level checks for Infer/types/table algebra
+  odata-typecheck.test.ts      — Type-level checks for OData builder inference
   fetchXml-typecheck.test.ts   — Type-level checks for FetchXML builder
   browser-smoke.ts             — Manual browser smoke-test entry (bundled by build:browser-test)
 ```
@@ -154,12 +163,11 @@ test/
 
 ### Testing Patterns
 - Import `test` and `expect` from `"vitest"` — not `describe`
-- Use `server.use(http.get(...))` or `server.use(http.post(...))` for per-test handler overrides
-- Capture request details via `let capturedUrl = ""` or `let capturedBody: any = null` pattern
+- Tests are pure unit tests: assert on returned strings, AST objects, and transformed values; never hit the network
 - Assertions: `expect(result).toBe(...)`, `.toEqual(...)`, `.toContain(...)`, `.toHaveLength(...)`, `.toBeNull()`, `.toBeUndefined()`, `.toBeInstanceOf(...)`
 - Async tests use `async`/`await`
-- Error testing: `await expect(promise).rejects.toThrow("message")`
-- Type testing: `expectTypeOf(...)` from vitest (used sparingly)
+- Error testing: `expect(() => fn()).toThrow("message")` for sync builder errors, `await expect(promise).rejects.toThrow("message")` for async ones
+- Type testing: `expectTypeOf(...)` in `*typecheck*.test.ts` files only (verified via `npm run test:types`); wrap compile-error assertions (`// @ts-expect-error`) in never-invoked closures so they don't run at runtime
 
 ## Key Dependencies
 
@@ -169,8 +177,8 @@ test/
 - `vite` — Dev server and browser-test bundler (dev)
 - `tsdown` — Library bundler that produces `dist/` (dev)
 - `vite-plugin-dts` — Generates `.d.ts` files (used by the older vite build path; tsdown handles dts now)
-- `msw` — Mock Service Worker for test HTTP mocking (dev)
-- `jsdom` — Browser environment simulation for tests (dev)
+- `msw` — Mock Service Worker (dev dependency, currently unused — kept installed)
+- `jsdom` — Browser environment simulation for tests that need DOM APIs (dev)
 - `@tanstack/db` — Optional peer dependency for the `tanstack-db` entry point
 
 ## Important Notes

@@ -8,7 +8,7 @@ declare class FieldRef<T = any, K extends string = string, F extends FieldBase<T
   readonly field: F;
   readonly path: readonly QueryProperty[];
   private readonly _path;
-  constructor(field: F, path?: string, pathSegments?: readonly QueryProperty[]);
+  constructor(field: F | string, path?: string, pathSegments?: readonly QueryProperty[]);
   static fromPath<T, F extends FieldBase<T>>(field: F, path: string, pathSegments?: readonly QueryProperty[]): FieldRef<T, string, F>;
   get dataverseName(): string;
   transformFromDataverse(value: unknown, ctx?: TransformContext): T;
@@ -402,6 +402,11 @@ type TableRequestOptions = {
   pageSize?: number;
   signal?: AbortSignal;
 };
+type MutationOptions = {
+  ifMatch?: string;
+  ifNoneMatch?: string;
+  signal?: AbortSignal;
+};
 type DataverseTableOptions<TProperties extends GenericProperties> = {
   client: DataverseClient;
   entitySetName: string;
@@ -561,30 +566,32 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    * @param value The record data (partial — primary key is auto-generated).
    *
    * @example
-   * const newId = await Person.insertRecord({ name: "John", age: 30 });
+   * const newId = await Person.createRecord({ name: "John", age: 30 });
    */
-  insertRecord(value: Partial<Infer<TProperties>>): Promise<GUID>;
+  createRecord(value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID>;
   /**
-   * Updates an existing record by ID. Supports optimistic concurrency via etag.
+   * Updates an existing record by ID. Supports optimistic concurrency via the
+   * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+   * to `"*"`, which updates the record only if it already exists.
    *
    * @param id The record's primary key.
    * @param value The fields to update (partial record data).
-   * @param etag Optional etag for conditional updates (If-Match header).
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
    *
    * @example
    * await Person.updateRecord("some-guid", { name: "Jane" });
-   * // With etag:
-   * await Person.updateRecord("some-guid", { name: "Jane" }, 'W/"123456"');
+   * // Conditional update:
+   * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
    */
-  updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID>;
+  updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID>;
   /**
-   * Creates or updates a record. If `id` is provided the record is updated;
-   * otherwise a new record is created. Navigation properties (collections, lookups)
-   * are also synced through nested upserts.
+   * Creates or updates a record. If `id` is provided the record is updated via
+   * PATCH; otherwise a new record is created via POST. Navigation properties
+   * (collections, lookups) are also synced through nested upserts.
    *
    * @param id The GUID of an existing record, or `undefined` to create new.
    * @param value The record data (partial for updates).
-   * @param etag Optional etag for conditional upsert.
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
    *
    * @example
    * // Create
@@ -592,17 +599,18 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    * // Update
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
-  upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, etag?: string): Promise<GUID>;
+  upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID>;
   /**
-   * Deletes a record by its primary key. Supports optimistic concurrency via etag.
+   * Deletes a record by its primary key. Supports optimistic concurrency via the
+   * `ifMatch` option (If-Match header).
    *
    * @param id The primary key of the record to delete.
-   * @param etag Optional etag for conditional deletion.
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
    *
    * @example
    * await Person.deleteRecord("some-guid");
    */
-  deleteRecord(id: DataverseKey, etag?: string): Promise<GUID>;
+  deleteRecord(id: DataverseKey, options?: MutationOptions): Promise<GUID>;
   /**
    * Activates a record by setting its `statecode` to 0.
    *
@@ -1290,7 +1298,7 @@ type GenericNavigationProperty = CollectionProperty<GenericProperties> | LookupP
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | NullableBooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<string | number> | FileField | ChoiceField<Record<number, string>> | NullableChoiceField<Record<number, string>> | JsonField<any>;
+type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | NullableBooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<any> | FileField | FormattedField | ChoiceField<any> | NullableChoiceField<any> | JsonField<any>;
 /**
  * Represents a generic property in a Dataverse entity.  A property can be
  * either a navigation property or a value property.
@@ -1299,7 +1307,7 @@ type GenericProperty = GenericNavigationProperty | GenericValueProperty;
 type GetTable<T = any> = () => T;
 //#endregion
 //#region src/util.d.ts
-declare const Etag = "$etag";
+declare const ETAG = "$etag";
 declare function isNonEmptyString(value: unknown): value is string;
 declare function wrapString(value: unknown): string;
 type ExpandValue = string | {
@@ -1329,7 +1337,7 @@ declare function keys(keyValues: {
   [key: string]: string | number;
 }): string;
 declare function expand(values: string | ExpandObject): string;
-declare function attachEtag<T>(v: T): T;
+declare function attachETag<T>(v: T): T;
 declare function getEtag(v: any): string | undefined;
 /**
  * Retains references to previous recrods if ETag value is unchanged
@@ -1437,13 +1445,14 @@ type QueryRequestOptions = RequestOptions & {
   query?: string;
 };
 type GetRecordOptions = QueryRequestOptions & {
-  etag?: string;
+  ifNoneMatch?: string;
 };
 type PatchRecordOptions = QueryRequestOptions & {
-  etag?: string;
+  ifMatch?: string;
+  ifNoneMatch?: string;
 };
 type DeleteRecordOptions = RequestOptions & {
-  etag?: string;
+  ifMatch?: string;
 };
 type PostRecordOptions = QueryRequestOptions & {
   returnRepresentation?: boolean;
@@ -1617,7 +1626,7 @@ declare class DataverseClient {
    *   "00000000-0000-0000-0000-000000000001", "name", "New Name")
    */
   updatePropertyValue(entitySetName: Name, id: string, propertyName: Name, value: any, options?: RequestOptions & {
-    etag?: string;
+    ifMatch?: string;
   }): Promise<GUID>;
   /**
    * Deletes (nulls out) a single property value.
@@ -2169,4 +2178,4 @@ declare class EntityQueryBuilder<TProps extends GenericProperties, TResult exten
 }
 declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, Etag, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FormattedField, GUID, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, SelectQuery, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, asc, attachEtag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FormattedField, GUID, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MutationOptions, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, SelectQuery, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };

@@ -13,6 +13,14 @@ function pathOf(field: FieldRef<any>): FieldPath {
   return field.path
 }
 
+/** Converts typed field values (e.g. choice labels) into their Dataverse representation before rendering. */
+function toFilterValue(field: FieldRef<any>, value: unknown): FilterValue {
+  if (value == null || typeof value !== "string") return value as FilterValue
+  const f = field.field as any
+  if (f?.type !== "choice") return value as FilterValue
+  return f.transformValueToDataverse(value)
+}
+
 export class FilterExpr {
   constructor(private node: FilterNode) {}
 
@@ -34,49 +42,49 @@ export class FilterExpr {
 }
 
 function fn(field: FieldRef<any>, fnName: string, operator: string, values: FilterValue[]): FilterExpr {
-  return new FilterExpr({ type: "fn", field: pathOf(field), fnName, operator, values })
+  return new FilterExpr({ type: "fn", field: pathOf(field), fnName, operator, values: values.map(v => toFilterValue(field, v)) })
 }
 
 export function eq<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr {
   if (value instanceof FieldRef) {
     return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value: value as FilterValue })
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value: toFilterValue(field, value) })
 }
 
 export function ne<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr {
   if (value instanceof FieldRef) {
     return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ne", otherField: pathOf(value) })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ne", value: value as FilterValue })
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ne", value: toFilterValue(field, value) })
 }
 
 export function gt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
   if (value instanceof FieldRef) {
     return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value: value as FilterValue })
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value: toFilterValue(field, value) })
 }
 
 export function ge<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
   if (value instanceof FieldRef) {
     return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ge", otherField: pathOf(value) })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ge", value: value as FilterValue })
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ge", value: toFilterValue(field, value) })
 }
 
 export function lt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
   if (value instanceof FieldRef) {
     return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value: value as FilterValue })
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value: toFilterValue(field, value) })
 }
 
 export function le<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
   if (value instanceof FieldRef) {
     return new FilterExpr({ type: "compare", field: pathOf(field), operator: "le", otherField: pathOf(value) })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "le", value: value as FilterValue })
+  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "le", value: toFilterValue(field, value) })
 }
 
 export function isNull(field: FieldRef<any>): FilterExpr {

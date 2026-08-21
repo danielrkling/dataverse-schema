@@ -2,6 +2,7 @@ import {
   DataverseClient,
   WhoAmI,
   DataverseTable,
+  GUID,
   primaryKey,
   string,
   number,
@@ -37,7 +38,7 @@ function reportError(label: string, error: unknown) {
   write(label, error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : error)
 }
 
-function assert(cond: unknown, msg: string) {
+function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(`Assertion failed: ${msg}`)
 }
 
@@ -116,10 +117,10 @@ const TestTable = new DataverseTable({
 
 async function run() {
   // IDs we create, so we can clean up at the end.
-  const created: string[] = []
-  let parentId: string | undefined
-  let childId: string | undefined
-  let child2Id: string | undefined
+  const created: GUID[] = []
+  let parentId: GUID | undefined
+  let childId: GUID | undefined
+  let child2Id: GUID | undefined
 
   try {
     await test("WhoAmI returns a userId", async () => {

@@ -6,7 +6,7 @@ type DataverseCollectionConfig<T extends GenericProperties> = {
   table: DataverseTable<T>;
   syncInterval?: number;
   readOnlyWhenOffline?: boolean;
-} & Omit<CollectionConfig<Infer<T>>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
+} & Omit<CollectionConfig<any>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
 interface DataverseCollectionUtils<T extends GenericProperties> extends UtilsRecord {
   forceSync: () => Promise<void>;
   table: DataverseTable<T>;
@@ -24,7 +24,7 @@ type QueuedMutation = {
   timestamp: number;
   sequence: number;
   attempts: number;
-  etag?: string;
+  ifMatch?: string;
   lastAttemptAt?: number;
   nextAttemptAt?: number;
   error?: any;
