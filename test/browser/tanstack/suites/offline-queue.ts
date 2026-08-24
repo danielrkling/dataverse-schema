@@ -3,7 +3,9 @@ import { DataverseSyncDB } from "../../../../src/tanstack-db/index"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
-import { makeSyncDB, readQueue, readErrored, simulateOffline, enqueueRaw, flush } from "../db-helper"
+import { makeSyncDB, readQueue, readErrored, simulateOffline, enqueueRaw, flush, forceVisible, waitFor } from "../db-helper"
+
+const MAX_ATTEMPTS = 3
 
 export const offlineQueueSuite: Suite = {
   name: "offline-queue",
@@ -13,17 +15,13 @@ export const offlineQueueSuite: Suite = {
       name: "createCollectionOptions builds a collection backed by the sync DB",
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
+        const restoreVis = forceVisible()
         try {
           const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
-          try {
-            await new Promise((r) => setTimeout(r, 500))
-            assert(collection.size >= 0, "collection initialized (cache may be empty)")
-          } finally {
-            const id = collection.get(MOCK_KEY)
-            if (id) collection.delete(id)
-          }
+          await waitFor(() => collection.size >= 0, 3000)
         } finally {
+          restoreVis()
           db.close()
         }
       },
@@ -32,20 +30,23 @@ export const offlineQueueSuite: Suite = {
       name: "online insert is flushed and appears in Dataverse immediately",
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
+        const restoreVis = forceVisible()
         try {
           const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
-          await new Promise((r) => setTimeout(r, 500))
+          await waitFor(() => collection.size >= 0, 3000)
           const name = ctx.fx.name("offline-on")
-          collection.insert({ name, int: 11, text: "flush-me" })
-          await new Promise((r) => setTimeout(r, 700))
-          const queue = await readQueue(db)
-          assertEquals(queue.length, 0, "queue drained after online flush")
+          const id = crypto.randomUUID()
+          collection.insert({ id, name, int: 11, text: "flush-me" })
+          await waitFor(async () => {
+            const queue = await readQueue(db)
+            const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` })
+            return queue.length === 0 && rows.length === 1
+          }, 8000)
           const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` })
-          assert(rows.length === 1, "row flushed to Dataverse")
           ctx.fx.track(rows[0].id)
-          collection.delete(rows[0].id)
         } finally {
+          restoreVis()
           db.close()
         }
       },
@@ -55,15 +56,16 @@ export const offlineQueueSuite: Suite = {
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restore = simulateOffline(true)
-        let collection: any
+        const restoreVis = forceVisible()
         try {
           const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
-          collection = createCollection(config) as any
-          await new Promise((r) => setTimeout(r, 500))
+          const collection = createCollection(config) as any
+          await waitFor(() => collection.size >= 0, 3000)
           const name = ctx.fx.name("offline-q")
-          collection.insert({ name, int: 22, text: "queued" })
+          const id = crypto.randomUUID()
+          collection.insert({ id, name, int: 22, text: "queued" })
           // Give any (incorrect) flush a chance to run.
-          await new Promise((r) => setTimeout(r, 400))
+          await new Promise((r) => setTimeout(r, 500))
           const queue = await readQueue(db)
           assert(queue.length === 1, `expected 1 queued mutation, got ${queue.length}`)
           assertEquals(queue[0].type, "insert", "queued as insert")
@@ -72,7 +74,7 @@ export const offlineQueueSuite: Suite = {
           assertEquals(rows.length, 0, "offline insert must NOT reach Dataverse yet")
         } finally {
           restore()
-          collection?.delete?.(undefined)
+          restoreVis()
           db.close()
         }
       },
@@ -82,26 +84,28 @@ export const offlineQueueSuite: Suite = {
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restore = simulateOffline(true)
-        let collection: any
+        const restoreVis = forceVisible()
         let name = ""
         try {
           const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
-          collection = createCollection(config) as any
-          await new Promise((r) => setTimeout(r, 500))
+          const collection = createCollection(config) as any
+          await waitFor(() => collection.size >= 0, 3000)
           name = ctx.fx.name("offline-then-on")
-          collection.insert({ name, int: 33, text: "deferred" })
-          await new Promise((r) => setTimeout(r, 300))
+          const id = crypto.randomUUID()
+          collection.insert({ id, name, int: 33, text: "deferred" })
+          await new Promise((r) => setTimeout(r, 400))
           // Go back online — the `online` event should trigger flushAndSync.
           restore()
-          await new Promise((r) => setTimeout(r, 900))
-          const queue = await readQueue(db)
-          assertEquals(queue.length, 0, "queue drained after reconnect")
+          await waitFor(async () => {
+            const queue = await readQueue(db)
+            const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` })
+            return queue.length === 0 && rows.length === 1
+          }, 10000)
           const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` })
-          assert(rows.length === 1, "deferred insert flushed on reconnect")
           ctx.fx.track(rows[0].id)
-          collection.delete(rows[0].id)
         } finally {
           restore()
+          restoreVis()
           db.close()
         }
       },
@@ -111,21 +115,22 @@ export const offlineQueueSuite: Suite = {
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restore = simulateOffline(true)
-        let collection: any
+        const restoreVis = forceVisible()
         try {
           const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
-          collection = createCollection(config) as any
-          await new Promise((r) => setTimeout(r, 500))
+          const collection = createCollection(config) as any
+          await waitFor(() => collection.size >= 0, 3000)
           const name = ctx.fx.name("qcount")
-          collection.insert({ name, int: 44, text: "x" })
-          await new Promise((r) => setTimeout(r, 300))
+          const id = crypto.randomUUID()
+          collection.insert({ id, name, int: 44, text: "x" })
+          await new Promise((r) => setTimeout(r, 400))
           const count = await db.getQueueCount()
           assert(count >= 1, `getQueueCount should see the queued mutation (got ${count})`)
           const errored = await db.getErroredMutations()
           assertEquals(errored.length, 0, "no errored mutations yet")
         } finally {
           restore()
-          collection?.delete?.(undefined)
+          restoreVis()
           db.close()
         }
       },
@@ -134,18 +139,20 @@ export const offlineQueueSuite: Suite = {
       name: "errored mutation can be retried and discarded",
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
+        const restoreVis = forceVisible()
         const id = await seedRow(ctx, { int: 1, text: "will-fail" })
         const collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable })) as any
         try {
-          await new Promise((r) => setTimeout(r, 500))
-          // Inject a failing update (stale ifMatch) directly into the queue and
-          // flush repeatedly while online so it exhausts attempts -> errored store.
+          await waitFor(() => collection.size >= 1, 8000)
+          // Inject a failing update (stale ifMatch) directly into the queue. The
+          // per-table cache store is keyed by the TS primary key `id`, so the
+          // value must carry it or queueMutations throws on the IDB put.
           const eid = `test-err-${Date.now()}`
           await enqueueRaw(db, {
             id: eid,
             type: "update",
             key: id,
-            value: { int: 2 },
+            value: { id, int: 2 },
             entitySetName: ctx.tables.TestTable.entitySetName,
             timestamp: Date.now(),
             sequence: 0,
@@ -154,7 +161,7 @@ export const offlineQueueSuite: Suite = {
           })
           for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
             await flush(db)
-            await new Promise((r) => setTimeout(r, 60))
+            await new Promise((r) => setTimeout(r, 80))
           }
           const errored = await readErrored(db)
           assert(errored.length >= 1, `expected the failing mutation in errored store (got ${errored.length})`)
@@ -166,13 +173,10 @@ export const offlineQueueSuite: Suite = {
           await db.discardErroredMutation(eid)
         } finally {
           await ctx.tables.TestTable.deleteRecord(id).catch(() => undefined)
-          collection.delete(id)
+          restoreVis()
           db.close()
         }
       },
     },
   ],
 }
-
-const MAX_ATTEMPTS = 3
-const MOCK_KEY = "__never__"
