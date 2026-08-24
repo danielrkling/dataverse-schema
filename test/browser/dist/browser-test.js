@@ -4338,7 +4338,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T12:14:24.840Z"}
+      meta.textContent = `build ${"2026-08-24T12:18:57.818Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4427,7 +4427,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T12:14:24.840Z",
+          build: "2026-08-24T12:18:57.818Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4446,7 +4446,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T12:14:24.840Z"}\``,
+        `Build: \`${"2026-08-24T12:18:57.818Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -5070,7 +5070,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "typed FilterExpr composites narrow rows",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ id: f.id, int: f.int })).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ id: f.id, int: f.int })).filter(scoped).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
             assertEquals(rows.map((r) => r.int).sort(), [7, 42], "windowed ints");
           }
         }
