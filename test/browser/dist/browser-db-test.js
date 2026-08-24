@@ -3252,7 +3252,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T16:18:24.274Z"}
+      meta.textContent = `build ${"2026-08-24T16:23:33.850Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3341,7 +3341,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T16:18:24.274Z",
+          build: "2026-08-24T16:23:33.850Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3360,7 +3360,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T16:18:24.274Z"}\``,
+        `Build: \`${"2026-08-24T16:23:33.850Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -10913,16 +10913,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
-          try {
-            await new Promise((r) => setTimeout(r, 500));
-            assert(collection.size >= 1, `expected at least the seeded row, got ${collection.size}`);
-            const found = collection.get(ctx.state.row);
-            assert(found, "seeded row present in collection");
-            assert(typeof found.int === "number", "row transformed (int is number)");
-            assert(typeof found.name === "string", "row transformed (name is string)");
-          } finally {
-            collection.delete(ctx.state.row);
-          }
+          await new Promise((r) => setTimeout(r, 600));
+          assert(collection.size >= 1, `expected at least the seeded row, got ${collection.size}`);
+          const found = collection.get(ctx.state.row);
+          assert(found, "seeded row present in collection");
+          assert(typeof found.int === "number", "row transformed (int is number)");
+          assert(typeof found.name === "string", "row transformed (name is string)");
         }
       },
       {
@@ -10930,20 +10926,17 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
-          try {
-            await new Promise((r) => setTimeout(r, 500));
-            const name = ctx.fx.name("coll-insert");
-            collection.insert({ name, int: 77, text: "via-collection" });
-            await new Promise((r) => setTimeout(r, 600));
-            const rows = await ctx.tables.TestTable.getRecords({
-              filter: `nnsyc200_name eq '${name}'`
-            });
-            assert(rows.length === 1, `inserted row not found in Dataverse (got ${rows.length})`);
-            assert(rows[0].int === 77, "inserted int persisted");
-            ctx.fx.track(rows[0].id);
-          } finally {
-            collection.delete(ctx.state.row);
-          }
+          await new Promise((r) => setTimeout(r, 600));
+          const name = ctx.fx.name("coll-insert");
+          const id = crypto.randomUUID();
+          collection.insert({ id, name, int: 77, text: "via-collection" });
+          await new Promise((r) => setTimeout(r, 700));
+          const rows = await ctx.tables.TestTable.getRecords({
+            filter: `nnsyc200_name eq '${name}'`
+          });
+          assert(rows.length === 1, `inserted row not found in Dataverse (got ${rows.length})`);
+          assert(rows[0].int === 77, "inserted int persisted");
+          ctx.fx.track(rows[0].id);
         }
       },
       {
@@ -10951,19 +10944,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
-          try {
-            await new Promise((r) => setTimeout(r, 500));
-            const entry = collection.get(ctx.state.row);
-            assert(entry, "row in collection before update");
-            collection.update(ctx.state.row, (d) => {
-              d.int = 999;
-            });
-            await new Promise((r) => setTimeout(r, 600));
-            const live = await ctx.tables.TestTable.getRecord(ctx.state.row);
-            assertEquals(live?.int, 999, "collection-driven update persisted");
-          } finally {
-            collection.delete(ctx.state.row);
-          }
+          await new Promise((r) => setTimeout(r, 600));
+          const entry = collection.get(ctx.state.row);
+          assert(entry, "row in collection before update");
+          collection.update(ctx.state.row, (d) => {
+            d.int = 999;
+          });
+          await new Promise((r) => setTimeout(r, 700));
+          const live = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          assertEquals(live?.int, 999, "collection-driven update persisted");
         }
       },
       {
@@ -10972,15 +10961,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const id = await seedRow(ctx, { int: 5, text: "coll-del" });
           const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
-          try {
-            await new Promise((r) => setTimeout(r, 500));
-            collection.delete(id);
-            await new Promise((r) => setTimeout(r, 600));
-            const live = await ctx.tables.TestTable.getRecord(id);
-            assertEquals(live, null, "collection-driven delete removed the row");
-          } finally {
-            collection.delete(id);
-          }
+          await new Promise((r) => setTimeout(r, 600));
+          collection.delete(id);
+          await new Promise((r) => setTimeout(r, 700));
+          const live = await getRecordSafe(ctx.tables.TestTable, id);
+          assertEquals(live, null, "collection-driven delete removed the row");
         }
       },
       {
@@ -10988,17 +10973,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
-          try {
-            await new Promise((r) => setTimeout(r, 500));
-            await ctx.tables.TestTable.updateRecord(ctx.state.row, { int: 1234 });
-            const utils = collection.utils;
-            assert(typeof utils?.forceSync === "function", "forceSync util exposed");
-            await utils.forceSync();
-            const entry = collection.get(ctx.state.row);
-            assertEquals(entry?.int, 1234, "external change reflected after forceSync");
-          } finally {
-            collection.delete(ctx.state.row);
-          }
+          await new Promise((r) => setTimeout(r, 600));
+          await ctx.tables.TestTable.updateRecord(ctx.state.row, { int: 1234 });
+          const utils = collection.utils;
+          assert(typeof utils?.forceSync === "function", "forceSync util exposed");
+          await utils.forceSync();
+          const entry = collection.get(ctx.state.row);
+          assertEquals(entry?.int, 1234, "external change reflected after forceSync");
         }
       },
       {
@@ -11006,16 +10987,20 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
-          try {
-            const utils = collection.utils;
-            assertInstanceOf(utils.table, ctx.tables.TestTable.constructor, "utils.table");
-          } finally {
-            collection.delete(ctx.state.row);
-          }
+          await new Promise((r) => setTimeout(r, 300));
+          const utils = collection.utils;
+          assertInstanceOf(utils.table, ctx.tables.TestTable.constructor, "utils.table");
         }
       }
     ]
   };
+  async function getRecordSafe(table, id) {
+    try {
+      return await table.getRecord(id);
+    } catch {
+      return null;
+    }
+  }
 
   function makeSyncDB(tables, version = 1) {
     const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -11051,6 +11036,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     };
   }
 
+  const MAX_ATTEMPTS = 3;
   const offlineQueueSuite = {
     name: "offline-queue",
     title: "Offline mutation queue (DataverseSyncDB)",
@@ -11062,13 +11048,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           try {
             const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
             const collection = createCollection(config);
-            try {
-              await new Promise((r) => setTimeout(r, 500));
-              assert(collection.size >= 0, "collection initialized (cache may be empty)");
-            } finally {
-              const id = collection.get(MOCK_KEY);
-              if (id) collection.delete(id);
-            }
+            await new Promise((r) => setTimeout(r, 500));
+            assert(collection.size >= 0, "collection initialized (cache may be empty)");
           } finally {
             db.close();
           }
@@ -11083,14 +11064,14 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const collection = createCollection(config);
             await new Promise((r) => setTimeout(r, 500));
             const name = ctx.fx.name("offline-on");
-            collection.insert({ name, int: 11, text: "flush-me" });
-            await new Promise((r) => setTimeout(r, 700));
+            const id = crypto.randomUUID();
+            collection.insert({ id, name, int: 11, text: "flush-me" });
+            await new Promise((r) => setTimeout(r, 800));
             const queue = await readQueue(db);
             assertEquals(queue.length, 0, "queue drained after online flush");
             const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
             assert(rows.length === 1, "row flushed to Dataverse");
             ctx.fx.track(rows[0].id);
-            collection.delete(rows[0].id);
           } finally {
             db.close();
           }
@@ -11101,13 +11082,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restore = simulateOffline();
-          let collection;
           try {
             const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
-            collection = createCollection(config);
+            const collection = createCollection(config);
             await new Promise((r) => setTimeout(r, 500));
             const name = ctx.fx.name("offline-q");
-            collection.insert({ name, int: 22, text: "queued" });
+            const id = crypto.randomUUID();
+            collection.insert({ id, name, int: 22, text: "queued" });
             await new Promise((r) => setTimeout(r, 400));
             const queue = await readQueue(db);
             assert(queue.length === 1, `expected 1 queued mutation, got ${queue.length}`);
@@ -11117,7 +11098,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assertEquals(rows.length, 0, "offline insert must NOT reach Dataverse yet");
           } finally {
             restore();
-            collection?.delete?.(void 0);
             db.close();
           }
         }
@@ -11127,23 +11107,22 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restore = simulateOffline();
-          let collection;
           let name = "";
           try {
             const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
-            collection = createCollection(config);
+            const collection = createCollection(config);
             await new Promise((r) => setTimeout(r, 500));
             name = ctx.fx.name("offline-then-on");
-            collection.insert({ name, int: 33, text: "deferred" });
+            const id = crypto.randomUUID();
+            collection.insert({ id, name, int: 33, text: "deferred" });
             await new Promise((r) => setTimeout(r, 300));
             restore();
-            await new Promise((r) => setTimeout(r, 900));
+            await new Promise((r) => setTimeout(r, 1e3));
             const queue = await readQueue(db);
             assertEquals(queue.length, 0, "queue drained after reconnect");
             const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
             assert(rows.length === 1, "deferred insert flushed on reconnect");
             ctx.fx.track(rows[0].id);
-            collection.delete(rows[0].id);
           } finally {
             restore();
             db.close();
@@ -11155,13 +11134,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restore = simulateOffline();
-          let collection;
           try {
             const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
-            collection = createCollection(config);
+            const collection = createCollection(config);
             await new Promise((r) => setTimeout(r, 500));
             const name = ctx.fx.name("qcount");
-            collection.insert({ name, int: 44, text: "x" });
+            const id = crypto.randomUUID();
+            collection.insert({ id, name, int: 44, text: "x" });
             await new Promise((r) => setTimeout(r, 300));
             const count = await db.getQueueCount();
             assert(count >= 1, `getQueueCount should see the queued mutation (got ${count})`);
@@ -11169,7 +11148,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assertEquals(errored.length, 0, "no errored mutations yet");
           } finally {
             restore();
-            collection?.delete?.(void 0);
             db.close();
           }
         }
@@ -11179,7 +11157,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const id = await seedRow(ctx, { int: 1, text: "will-fail" });
-          const collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
+          createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
           try {
             await new Promise((r) => setTimeout(r, 500));
             const eid = `test-err-${Date.now()}`;
@@ -11208,15 +11186,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             await db.discardErroredMutation(eid);
           } finally {
             await ctx.tables.TestTable.deleteRecord(id).catch(() => void 0);
-            collection.delete(id);
             db.close();
           }
         }
       }
     ]
   };
-  const MAX_ATTEMPTS = 3;
-  const MOCK_KEY = "__never__";
 
   const crossTabSuite = {
     name: "cross-tab",
@@ -11235,14 +11210,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             b = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
             await new Promise((r) => setTimeout(r, 500));
             const name = ctx.fx.name("xtab");
-            a.insert({ name, int: 8, text: "from-a" });
-            await new Promise((r) => setTimeout(r, 300));
+            const id = crypto.randomUUID();
+            a.insert({ id, name, int: 8, text: "from-a" });
+            await new Promise((r) => setTimeout(r, 400));
             const inB = [...b.values()].find((v) => v.name === name);
             assert(inB, "sibling collection received the mutation via BroadcastChannel");
             assertEquals(inB.int, 8, "propagated row keeps its values");
           } finally {
-            a?.delete?.(void 0);
-            b?.delete?.(void 0);
             db.close();
           }
         }
@@ -11257,12 +11231,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             b = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
             await new Promise((r) => setTimeout(r, 500));
             const name = ctx.fx.name("xtab-abort");
-            a.insert({ name, int: 9, text: "z" });
-            await new Promise((r) => setTimeout(r, 300));
+            const id = crypto.randomUUID();
+            a.insert({ id, name, int: 9, text: "z" });
+            await new Promise((r) => setTimeout(r, 400));
             assert([...b.values()].some((v) => v.name === name), "b saw the row (abort broadcast path exercised)");
           } finally {
-            a?.delete?.(void 0);
-            b?.delete?.(void 0);
             db.close();
           }
         }
@@ -11286,31 +11259,28 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           try {
             collection1 = createCollection(db1.createCollectionOptions({ table: ctx.tables.TestTable }));
             await new Promise((r) => setTimeout(r, 500));
-            collection1.insert({ name, int: 55, text: "durable" });
+            const id = crypto.randomUUID();
+            collection1.insert({ id, name, int: 55, text: "durable" });
             await new Promise((r) => setTimeout(r, 300));
             const q1 = await readQueue(db1);
             assert(q1.length === 1, `mutation queued in session 1 (got ${q1.length})`);
           } finally {
             restore1();
-            collection1?.delete?.(void 0);
             db1.close();
           }
           const db2 = new DataverseSyncDB(dbName, tables, 1);
-          let collection2;
           try {
             const q2 = await readQueue(db2);
             assert(q2.length === 1, `mutation survived reload in IndexedDB (got ${q2.length})`);
             assertEquals(q2[0].entitySetName, ctx.tables.TestTable.entitySetName, "survived mutation targets right entity");
-            collection2 = createCollection(db2.createCollectionOptions({ table: ctx.tables.TestTable }));
-            await new Promise((r) => setTimeout(r, 900));
+            const collection2 = createCollection(db2.createCollectionOptions({ table: ctx.tables.TestTable }));
+            await new Promise((r) => setTimeout(r, 1e3));
             const q3 = await readQueue(db2);
             assertEquals(q3.length, 0, "persisted queue flushed after reload+online");
             const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
             assert(rows.length === 1, "durable mutation eventually reached Dataverse");
             ctx.fx.track(rows[0].id);
-            collection2.delete(rows[0].id);
           } finally {
-            collection2?.delete?.(void 0);
             db2.close();
           }
         }
@@ -11320,14 +11290,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const id = await seedRow(ctx, { int: 7, text: "cache-me" });
-          const collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
+          createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
           try {
-            await new Promise((r) => setTimeout(r, 700));
+            await new Promise((r) => setTimeout(r, 800));
             const idb = await db.getDB();
             const cached = await idb.getAll(ctx.tables.TestTable.entitySetName);
             assert(cached.some((r) => r.id === id), "row cached in IndexedDB after sync");
           } finally {
-            collection.delete(id);
             db.close();
           }
         }
