@@ -9,8 +9,8 @@ export const navigationSuite: Suite = {
   async setup(ctx) {
     ctx.state.parentName = ctx.fx.name("nav-parent")
     ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100 })
-    ctx.state.kid1 = await seedRow(ctx, { int: 5, testLookup: ctx.state.parent } as any)
-    ctx.state.kid2 = await seedRow(ctx, { int: 7, testLookup: ctx.state.parent } as any)
+    ctx.state.kid1 = await seedRow(ctx, { int: 5, testLookup: ctx.state.parent })
+    ctx.state.kid2 = await seedRow(ctx, { int: 7, testLookup: ctx.state.parent })
     ctx.state.detached = await seedRow(ctx, { int: 9 })
   },
   tests: (ctx) => [
@@ -32,7 +32,7 @@ export const navigationSuite: Suite = {
         assertEquals(idValue, ctx.state.parent, "raw lookupId value")
         const nav = await ctx.tables.TestTable.getPropertyValue("testLookupNav", ctx.state.kid2)
         assert(nav && typeof nav === "object", "expanded lookup object returned")
-        assertEquals((nav as any)?.name, ctx.state.parentName, "nav record transformed")
+        assertEquals(nav.name, ctx.state.parentName, "nav record transformed")
       },
     },
     {
@@ -78,7 +78,7 @@ export const navigationSuite: Suite = {
         const navName = ctx.fx.name("nav-created")
         await ctx.tables.TestTable.updateRecord(ctx.state.kid1, {
           text: "nav-created-target",
-          testLookupNav: { name: navName } as any,
+          testLookupNav: { name: navName },
         })
         const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
         assert(kid?.testLookup, "lookupId now points at the created record")
@@ -90,7 +90,7 @@ export const navigationSuite: Suite = {
     {
       name: "lookup navigation null clears the lookup",
       fn: async () => {
-        await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { text: "nav-clear", testLookupNav: null } as any)
+        await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { text: "nav-clear", testLookupNav: null })
         const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
         assertEquals(kid?.testLookup, null, "lookup cleared")
       },

@@ -72,8 +72,9 @@ export const crudSuite: Suite = {
         const id = await seedRow(ctx, { int: 12 })
         try {
           await ctx.tables.TestTable.deleteRecord(id)
-        } catch (e: any) {
-          if (!(e instanceof Error) || !e.message.includes("404")) throw e
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : JSON.stringify(e)
+          if (!msg.includes("404")) throw e
         }
         const r = await ctx.tables.TestTable.getRecord(id)
         assertEquals(r, null, "deleted record is gone")

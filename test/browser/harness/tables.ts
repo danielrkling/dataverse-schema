@@ -79,3 +79,6 @@ export function buildTables(client: DataverseClient, cfg: BrowserTestConfig) {
 }
 
 export type Tables = ReturnType<typeof buildTables>
+
+export type MainFields = ReturnType<typeof buildTables>["TestTable"]["fields"]
+export type ParentFields = ReturnType<typeof buildTables>["TestTable0"]["fields"]

@@ -27,7 +27,7 @@ export function assertInstanceOf(value: unknown, ctor: Function, label = "value"
   }
 }
 
-export async function assertRejects(fn: () => Promise<unknown>, fragment?: string): Promise<unknown> {
+export async function assertRejects<T extends Error = Error>(fn: () => Promise<unknown>, fragment?: string): Promise<T> {
   let threw: unknown
   let didThrow = false
   try {
@@ -38,10 +38,10 @@ export async function assertRejects(fn: () => Promise<unknown>, fragment?: strin
   }
   if (!didThrow) throw new Error(`Assertion failed: expected promise to reject${fragment ? ` with "${fragment}"` : ""}`)
   if (fragment) {
-    const message = threw instanceof Error ? threw.message : String(threw)
+    const message = threw instanceof Error ? threw.message : JSON.stringify(threw)
     if (!message.includes(fragment)) {
       throw new Error(`Assertion failed: expected rejection containing "${fragment}", got "${message}"`)
     }
   }
-  return threw
+  return threw as T
 }

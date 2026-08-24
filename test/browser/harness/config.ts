@@ -31,9 +31,9 @@ const paramMap: Record<string, keyof BrowserTestConfig> = {
 export function loadConfig(): BrowserTestConfig {
   const params = new URLSearchParams(location.search)
   const overrides: Partial<BrowserTestConfig> = {}
-  for (const [param, key] of Object.entries(paramMap)) {
+  for (const [param, key] of Object.entries(paramMap) as Array<[string, keyof BrowserTestConfig]>) {
     const value = params.get(param)
-    if (value) (overrides as any)[key] = value
+    if (value) overrides[key] = value
   }
   return { ...defaults, ...(window.__DV_TEST_CONFIG__ ?? {}), ...overrides }
 }

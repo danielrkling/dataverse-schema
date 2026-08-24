@@ -1,5 +1,5 @@
 import { Suite } from "../harness/runner"
-import { assert, assertEquals, assertInstanceOf } from "../harness/assert"
+import { assert, assertEquals } from "../harness/assert"
 import { pngBlob } from "../harness/fixtures"
 import { seedRow } from "../harness/seed"
 
@@ -23,15 +23,16 @@ export const filesSuite: Suite = {
       name: "file reads back as FileRef with the uploaded name",
       fn: async () => {
         const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
-        assertInstanceOf(r?.file ?? null, Object, "file ref object")
-        assertEquals((r!.file as any)?.name, "smoke.txt", "uploaded filename")
+        assert(r, "row missing")
+        assertEquals(r.file?.name ?? null, "smoke.txt", "uploaded filename")
       },
     },
     {
       name: "image reads back as ImageRef with a data URL",
       fn: async () => {
         const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
-        const img = (r as any)?.image
+        assert(r, "row missing")
+        const img = r.image
         assert(img && typeof img.url === "string", "image ref present")
         assert(String(img.url).startsWith("data:image/png;base64,"), `png data url, got ${String(img.url).slice(0, 40)}…`)
       },
@@ -57,8 +58,9 @@ export const filesSuite: Suite = {
         await ctx.tables.TestTable.deleteFile(ctx.state.row, "file")
         await ctx.tables.TestTable.deleteImage(ctx.state.row, "image")
         const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
-        assertEquals((r as any)?.file ?? null, null, "file cleared")
-        assertEquals((r as any)?.image ?? null, null, "image cleared")
+        assert(r, "row missing")
+        assertEquals(r.file, null, "file cleared")
+        assertEquals(r.image, null, "image cleared")
       },
     },
   ],

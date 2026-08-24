@@ -1,7 +1,8 @@
-import { fetchXml, eq, gt, lt, and, startsWith, groupby, sum, count, min, max, average } from "../../../src"
+import { FieldProxy, fetchXml, eq, gt, lt, and, startsWith, groupby, sum, count, min, max, average } from "../../../src"
 import { Suite } from "../harness/runner"
 import { assert, assertEquals } from "../harness/assert"
 import { seedParent, seedRow } from "../harness/seed"
+import { MainFields, ParentFields } from "../harness/tables"
 
 export const fetchxmlSuite: Suite = {
   name: "query-fetchxml",
@@ -24,13 +25,13 @@ export const fetchxmlSuite: Suite = {
         int,
         choice,
         testLookup: ctx.state.parent,
-      } as any)
+      })
       ctx.state.seeds.push({ id, kind, int, choice })
     }
   },
   tests: (ctx) => {
     const scopePrefix = ctx.fx.scopePrefix
-    const scoped = (f: any) => startsWith(f.name, scopePrefix)
+    const scoped = (f: FieldProxy<MainFields | ParentFields>) => startsWith(f.name, scopePrefix)
     return [
       {
         name: "select with aliases + execute applies transforms",

@@ -1,7 +1,11 @@
-import { fetchOdata, count } from "../../../src"
+import { fetchOdata, count, GUID } from "../../../src"
 import { Suite } from "../harness/runner"
 import { seedRow } from "../harness/seed"
 import { assert, assertEquals } from "../harness/assert"
+
+function messageOf(e: unknown): string {
+  return e instanceof Error ? e.message : JSON.stringify(e)
+}
 
 const BULK = 5
 
@@ -9,7 +13,7 @@ export const bulkSuite: Suite = {
   name: "bulk",
   title: "Bulk operations",
   async setup(ctx) {
-    ctx.state.rows = [] as string[]
+    ctx.state.rows = [] as GUID[]
     for (let i = 0; i < BULK; i++) {
       ctx.state.rows.push(await seedRow(ctx, { name: ctx.fx.name(`bulk-${i}`), int: i + 1 }))
     }
@@ -28,7 +32,7 @@ export const bulkSuite: Suite = {
         name: "updateMultiple applies to every row",
         fn: async () => {
           await ctx.tables.TestTable.updateMultiple(
-            (ctx.state.rows as string[]).map((id) => ({ id, int: 555 }) as any),
+            (ctx.state.rows as GUID[]).map((id) => ({ id, int: 555 })),
           )
           const rows = await ctx.tables.TestTable.getRecords({ filter: scope })
           for (const r of rows) assertEquals(r.int, 555, `bulk-updated int on ${r.id}`)
@@ -48,9 +52,9 @@ export const bulkSuite: Suite = {
         name: "deleteMultiple removes every row",
         fn: async () => {
           try {
-            await ctx.tables.TestTable.deleteMultiple(ctx.state.rows as string[])
-          } catch (e: any) {
-            const msg = e instanceof Error ? e.message : JSON.stringify(e)
+            await ctx.tables.TestTable.deleteMultiple(ctx.state.rows as GUID[])
+          } catch (e) {
+            const msg = messageOf(e)
             if (msg.includes("has not yet been implemented") || msg.includes("405")) {
               throw new Error("skip: this org has not enabled DeleteMultiple")
             }

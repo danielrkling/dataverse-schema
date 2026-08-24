@@ -4164,7 +4164,7 @@
     }
     if (!didThrow) throw new Error(`Assertion failed: expected promise to reject${fragment ? ` with "${fragment}"` : ""}`);
     if (fragment) {
-      const message = threw instanceof Error ? threw.message : String(threw);
+      const message = threw instanceof Error ? threw.message : JSON.stringify(threw);
       if (!message.includes(fragment)) {
         throw new Error(`Assertion failed: expected rejection containing "${fragment}", got "${message}"`);
       }
@@ -4211,7 +4211,7 @@
               name: test.name,
               status: "skip",
               durationMs: 0,
-              error: `suite setup failed: ${messageOf(setupError)}`
+              error: `suite setup failed: ${messageOf$1(setupError)}`
             };
           } else {
             try {
@@ -4225,8 +4225,8 @@
                 name: test.name,
                 status,
                 durationMs: performance.now() - started,
-                error: status === "fail" ? `${messageOf(e)}
-${stackOf(e)}` : messageOf(e)
+                error: status === "fail" ? `${messageOf$1(e)}
+${stackOf(e)}` : messageOf$1(e)
               };
             }
           }
@@ -4249,7 +4249,7 @@ ${stackOf(e)}` : messageOf(e)
       return summary;
     }
   }
-  function messageOf(e) {
+  function messageOf$1(e) {
     if (e instanceof Error) return e.message;
     try {
       return JSON.stringify(e);
@@ -4338,7 +4338,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T12:26:47.927Z"}
+      meta.textContent = `build ${"2026-08-24T12:44:19.643Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4427,7 +4427,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T12:26:47.927Z",
+          build: "2026-08-24T12:44:19.643Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4446,7 +4446,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T12:26:47.927Z"}\``,
+        `Build: \`${"2026-08-24T12:44:19.643Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4505,12 +4505,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     });
     return ctx.fx.track(id);
   }
-
-  const seed = /*#__PURE__*/Object.freeze(/*#__PURE__*/Object.defineProperty({
-    __proto__: null,
-    seedParent,
-    seedRow
-  }, Symbol.toStringTag, { value: 'Module' }));
 
   const GUID_RE$1 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const generalSuite = {
@@ -4782,7 +4776,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           try {
             await ctx.tables.TestTable.deleteRecord(id);
           } catch (e) {
-            if (!(e instanceof Error) || !e.message.includes("404")) throw e;
+            const msg = e instanceof Error ? e.message : JSON.stringify(e);
+            if (!msg.includes("404")) throw e;
           }
           const r = await ctx.tables.TestTable.getRecord(id);
           assertEquals(r, null, "deleted record is gone");
@@ -5106,7 +5101,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           assertEquals(idValue, ctx.state.parent, "raw lookupId value");
           const nav = await ctx.tables.TestTable.getPropertyValue("testLookupNav", ctx.state.kid2);
           assert(nav && typeof nav === "object", "expanded lookup object returned");
-          assertEquals(nav?.name, ctx.state.parentName, "nav record transformed");
+          assertEquals(nav.name, ctx.state.parentName, "nav record transformed");
         }
       },
       {
@@ -5188,15 +5183,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "file reads back as FileRef with the uploaded name",
         fn: async () => {
           const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
-          assertInstanceOf(r?.file ?? null, Object, "file ref object");
-          assertEquals(r.file?.name, "smoke.txt", "uploaded filename");
+          assert(r, "row missing");
+          assertEquals(r.file?.name ?? null, "smoke.txt", "uploaded filename");
         }
       },
       {
         name: "image reads back as ImageRef with a data URL",
         fn: async () => {
           const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
-          const img = r?.image;
+          assert(r, "row missing");
+          const img = r.image;
           assert(img && typeof img.url === "string", "image ref present");
           assert(String(img.url).startsWith("data:image/png;base64,"), `png data url, got ${String(img.url).slice(0, 40)}…`);
         }
@@ -5222,8 +5218,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           await ctx.tables.TestTable.deleteFile(ctx.state.row, "file");
           await ctx.tables.TestTable.deleteImage(ctx.state.row, "image");
           const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
-          assertEquals(r?.file ?? null, null, "file cleared");
-          assertEquals(r?.image ?? null, null, "image cleared");
+          assert(r, "row missing");
+          assertEquals(r.file, null, "file cleared");
+          assertEquals(r.image, null, "image cleared");
         }
       }
     ]
@@ -5272,6 +5269,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     ]
   };
 
+  function messageOf(e) {
+    return e instanceof Error ? e.message : JSON.stringify(e);
+  }
   const BULK = 5;
   const bulkSuite = {
     name: "bulk",
@@ -5315,7 +5315,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             try {
               await ctx.tables.TestTable.deleteMultiple(ctx.state.rows);
             } catch (e) {
-              const msg = e instanceof Error ? e.message : JSON.stringify(e);
+              const msg = messageOf(e);
               if (msg.includes("has not yet been implemented") || msg.includes("405")) {
                 throw new Error("skip: this org has not enabled DeleteMultiple");
               }
@@ -5329,6 +5329,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
   };
 
+  const MISSING = "00000000-0000-0000-0000-00000000dead";
   const errorsSuite = {
     name: "errors",
     title: "Error handling",
@@ -5336,7 +5337,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "getRecord on a missing id returns null",
         fn: async () => {
-          const r = await ctx.tables.TestTable.getRecord("00000000-0000-0000-0000-00000000dead");
+          const r = await ctx.tables.TestTable.getRecord(MISSING);
           assertEquals(r, null, "missing record maps to null");
         }
       },
@@ -5344,26 +5345,28 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "deleteRecord on a missing id rejects with DataverseHttpError 404",
         fn: async () => {
           const err = await assertRejects(
-            () => ctx.tables.TestTable.deleteRecord("00000000-0000-0000-0000-00000000dead")
+            () => ctx.tables.TestTable.deleteRecord(MISSING)
           );
-          assertInstanceOf(err, Error, "error instance");
-          assertEquals(err.name, "DataverseHttpError", "typed error");
+          assertInstanceOf(err, DataverseHttpError, "typed error");
           assertEquals(err.status, 404, "status code");
         }
       },
       {
         name: "invalid choice label throws client-side before any HTTP call",
         fn: async () => {
-          await assertRejects(async () => {
-            const id = await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" });
-            if (id) await ctx.tables.TestTable.deleteRecord(id);
-          }, "Unknown choice label");
+          await assertRejects(
+            async () => {
+              const id = await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" });
+              if (id) await ctx.tables.TestTable.deleteRecord(id);
+            },
+            "Unknown choice label"
+          );
         }
       },
       {
         name: "stale ifMatch update rejects with 412 Precondition Failed",
         fn: async () => {
-          const row = await Promise.resolve().then(() => seed).then((m) => m.seedRow(ctx, { int: 1 }));
+          const row = await seedRow(ctx, { int: 1 });
           try {
             const err = await assertRejects(
               () => ctx.tables.TestTable.updateRecord(row, { int: 2 }, { ifMatch: 'W/"999999"' })
@@ -5377,7 +5380,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "multiChoice write of an unknown value still round-trips numerically",
         fn: async () => {
-          const row = await Promise.resolve().then(() => seed).then((m) => m.seedRow(ctx, {}));
+          const row = await seedRow(ctx, {});
           try {
             await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, [1, 12]);
             const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", row);
