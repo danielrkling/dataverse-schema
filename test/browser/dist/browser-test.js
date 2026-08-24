@@ -1571,6 +1571,9 @@
   function contains(field, value) {
     return new FilterExpr({ type: "contains", field: pathOf(field), value });
   }
+  function startsWith(field, value) {
+    return new FilterExpr({ type: "startsWith", field: pathOf(field), value });
+  }
   function and(...conditions) {
     const valid = conditions.filter((c) => c != null && c !== "");
     const exprs = valid.map((c) => typeof c === "string" ? new FilterExpr({ type: "raw", value: c }) : c);
@@ -4005,7 +4008,8 @@
     entitySetName: "nnsyc200_test_tables",
     logicalName: "nnsyc200_test_table",
     collectionNav: "nnsyc200_test_table_Test_Lookup_nnsyc200_test_table",
-    altKeyAttribute: "nnsyc200_alt_key"
+    altKeyAttribute: "nnsyc200_alt_key",
+    globalOptionSet: "nnsyc200_test_choice"
   };
   const paramMap = {
     entity: "entitySetName",
@@ -4324,7 +4328,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-21T19:47:55.322Z"}
+      meta.textContent = `build ${"2026-08-21T19:59:32.312Z"}
 org ${this.ctxMeta.orgUrl}
 run prefix ${this.ctxMeta.runPrefix}`;
       const copyJson = document.createElement("button");
@@ -4413,7 +4417,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-21T19:47:55.322Z",
+          build: "2026-08-21T19:59:32.312Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4432,7 +4436,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-21T19:47:55.322Z"}\``,
+        `Build: \`${"2026-08-21T19:59:32.312Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4597,10 +4601,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "fetchXml join (link-entity) to parent",
         fn: async () => {
-          const base = fetchXml(ctx.tables.TestTable).select((f) => ({ name: f.name, datetime: f.datetime, int: f.int })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter(`nnsyc200_test_tableid eq ${ctx.state.child}`);
+          const base = fetchXml(ctx.tables.TestTable).select((f) => ({ name: f.name, datetime: f.datetime, int: f.int })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter((f) => eq(f.id, ctx.state.child));
           const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: base.toString() });
           assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join");
-          assertEquals(raw[0].parentName, `${ctx.fx.runPrefix}-parent`, "joined alias column present in raw payload");
+          assertEquals(raw[0].parentName, `${ctx.fx.runPrefix}-parent-1`, "joined alias column present in raw payload");
           const transformed = await base.execute();
           assert(transformed[0].datetime instanceof Date, "main-entity transforms on joined query");
         }
@@ -4954,12 +4958,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     },
     tests: (ctx) => {
-      const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`;
+      const scopePrefix = ctx.fx.runPrefix;
+      const scoped = (f) => startsWith(f.name, scopePrefix);
       return [
         {
           name: "select with aliases + execute applies transforms",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ label: f.name, amount: f.int })).filter(scope).top(10).execute();
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ label: f.name, amount: f.int })).filter(scoped).top(10).execute();
             assertEquals(rows.length, 5, "prefixed rows (3 children + 2 parents)");
             for (const r of rows) {
               assert(typeof r.label === "string", "aliased name transformed");
@@ -4970,7 +4975,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "distinct collapses duplicate values",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ c: f.choice })).filter(scope).distinct().execute();
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ c: f.choice })).filter(scoped).distinct().execute();
             const labels = new Set(rows.map((r) => r.c));
             assertEquals(labels.size, rows.length, "no duplicates returned");
             for (const want of ["A", "B", "C"]) assert(labels.has(want), `missing choice ${want}`);
@@ -4979,7 +4984,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "inner join to parent exposes aliased columns",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ childName: f.name })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentLabel: f.name }))).filter(`nnsyc200_test_tableid eq ${ctx.state.seeds[0].id}`).execute();
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ childName: f.name })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentLabel: f.name }))).filter((f) => eq(f.id, ctx.state.seeds[0].id)).execute();
             assertEquals(rows.length, 1, "one joined row");
             assertEquals(rows[0].parentLabel, `${ctx.fx.runPrefix}-parent-2`, "parent alias resolved");
           }
@@ -4987,7 +4992,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "outer join keeps parents without children; inner drops them",
           fn: async () => {
-            const base = (linkType) => fetchXml(ctx.tables.TestTable0).select((f) => ({ parentName: f.name })).join(linkType, ctx.tables.TestTable, "testLookup", "id", (sub) => sub.select((f) => ({ kid: f.name }))).filter(scope).execute();
+            const base = (linkType) => fetchXml(ctx.tables.TestTable0).select((f) => ({ parentName: f.name })).join(linkType, ctx.tables.TestTable, "testLookup", "id", (sub) => sub.select((f) => ({ kid: f.name }))).filter(scoped).execute();
             const outer = await base("outer");
             assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)");
             const outerNames = new Set(outer.map((r) => r.parentName));
@@ -5006,14 +5011,14 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               "testLookup",
               "id",
               (sub) => sub.filter((f) => gt(f.int, 6))
-            ).filter(scope).execute();
+            ).filter(scoped).execute();
             assertEquals(rows.length, 1, "only parent with a big-int child");
           }
         },
         {
           name: "aggregate groupby(choice) + sum + count via execute()",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ byChoice: groupby(f.choice), totalInt: sum(f.int), n: count(f.id) })).filter(scope).execute();
+            const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ byChoice: groupby(f.choice), totalInt: sum(f.int), n: count(f.id) })).filter(scoped).execute();
             const byChoice = new Map(rows.map((r) => [r.byChoice, r]));
             assertEquals(byChoice.size, 3, "groups A/B/C");
             const a = byChoice.get("A");
@@ -5026,7 +5031,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "aggregate min/max/average aliases",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ lo: min(f.int), hi: max(f.int), avg: average(f.int), n: count() })).filter(scope).execute();
+            const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ lo: min(f.int), hi: max(f.int), avg: average(f.int), n: count() })).filter(scoped).execute();
             assertEquals(rows.length, 1, "single aggregate row");
             const r = rows[0];
             assertEquals(r.lo, 0, "min includes lonely parent");
@@ -5038,7 +5043,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "orderby desc + top on aliased select",
           fn: async () => {
-            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ amount: f.int })).filter(scope).orderby((f) => f.int, "desc").top(3).execute();
+            const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ amount: f.int })).filter(scoped).orderby((f) => f.int, "desc").top(3).execute();
             assertEquals(rows.map((r) => r.amount), [100, 42, 7], "descending ints");
           }
         },
