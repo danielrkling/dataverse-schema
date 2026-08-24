@@ -4328,7 +4328,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-21T19:59:32.312Z"}
+      meta.textContent = `build ${"2026-08-24T11:42:57.169Z"}
 org ${this.ctxMeta.orgUrl}
 run prefix ${this.ctxMeta.runPrefix}`;
       const copyJson = document.createElement("button");
@@ -4417,7 +4417,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-21T19:59:32.312Z",
+          build: "2026-08-24T11:42:57.169Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4436,7 +4436,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-21T19:59:32.312Z"}\``,
+        `Build: \`${"2026-08-24T11:42:57.169Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
