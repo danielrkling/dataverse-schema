@@ -81,9 +81,11 @@ export const optionsSuite: Suite = {
         const collection = createCollection(config) as any
         await waitFor(() => collection.size >= 1, 8000)
         const id = crypto.randomUUID()
-        // Insert should be rejected by the adapter's readonly guard.
+        // `collection.insert` returns a Transaction; the rejection surfaces on
+        // its `isPersisted.promise` (the adapter's readonly guard throws).
+        const tx = collection.insert({ id, name: ctx.fx.name("ro"), int: 1, text: "x" })
         await assertRejects(
-          () => collection.insert({ id, name: ctx.fx.name("ro"), int: 1, text: "x" }),
+          () => tx.isPersisted.promise,
           "read-only",
         )
         assert(collection.size >= 1, "collection still intact after rejected insert")
@@ -98,8 +100,9 @@ export const optionsSuite: Suite = {
         ) as any
         await waitFor(() => collection.size >= 1, 8000)
         const id = crypto.randomUUID()
+        const tx = collection.insert({ id, name: ctx.fx.name("ro-off"), int: 1, text: "x" })
         await assertRejects(
-          () => collection.insert({ id, name: ctx.fx.name("ro-off"), int: 1, text: "x" }),
+          () => tx.isPersisted.promise,
           "read-only",
         )
         // And it must NOT have been queued in IndexedDB.

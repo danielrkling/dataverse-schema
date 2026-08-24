@@ -3270,7 +3270,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T17:30:37.359Z"}
+      meta.textContent = `build ${"2026-08-24T17:36:40.849Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3359,7 +3359,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T17:30:37.359Z",
+          build: "2026-08-24T17:36:40.849Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3378,7 +3378,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T17:30:37.359Z"}\``,
+        `Build: \`${"2026-08-24T17:36:40.849Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -11610,8 +11610,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const collection = createCollection(config);
           await waitFor(() => collection.size >= 1, 8e3);
           const id = crypto.randomUUID();
+          const tx = collection.insert({ id, name: ctx.fx.name("ro"), int: 1, text: "x" });
           await assertRejects(
-            () => collection.insert({ id, name: ctx.fx.name("ro"), int: 1, text: "x" }),
+            () => tx.isPersisted.promise,
             "read-only"
           );
           assert(collection.size >= 1, "collection still intact after rejected insert");
@@ -11626,8 +11627,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           );
           await waitFor(() => collection.size >= 1, 8e3);
           const id = crypto.randomUUID();
+          const tx = collection.insert({ id, name: ctx.fx.name("ro-off"), int: 1, text: "x" });
           await assertRejects(
-            () => collection.insert({ id, name: ctx.fx.name("ro-off"), int: 1, text: "x" }),
+            () => tx.isPersisted.promise,
             "read-only"
           );
           const count = await db.getQueueCount();
