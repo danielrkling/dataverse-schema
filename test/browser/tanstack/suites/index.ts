@@ -4,6 +4,7 @@ import { offlineQueueSuite } from "./offline-queue"
 import { crossTabSuite } from "./cross-tab"
 import { durabilitySuite } from "./durability"
 import { onlineCrossTabSuite } from "./online-cross-tab"
+import { optionsSuite } from "./options"
 
 export const suites: Suite[] = [
   onlineCollectionSuite,
@@ -11,4 +12,5 @@ export const suites: Suite[] = [
   crossTabSuite,
   onlineCrossTabSuite,
   durabilitySuite,
+  optionsSuite,
 ]

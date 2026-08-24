@@ -3085,6 +3085,24 @@
       throw new Error(`Assertion failed: ${label} expected instance of ${ctor.name}, got ${String(value)}`);
     }
   }
+  async function assertRejects(fn, fragment) {
+    let threw;
+    let didThrow = false;
+    try {
+      await fn();
+    } catch (e) {
+      didThrow = true;
+      threw = e;
+    }
+    if (!didThrow) throw new Error(`Assertion failed: expected promise to reject${` with "${fragment}"` }`);
+    {
+      const message = threw instanceof Error ? threw.message : JSON.stringify(threw);
+      if (!message.includes(fragment)) {
+        throw new Error(`Assertion failed: expected rejection containing "${fragment}", got "${message}"`);
+      }
+    }
+    return threw;
+  }
 
   class Runner {
     constructor(base) {
@@ -3252,7 +3270,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T17:19:16.025Z"}
+      meta.textContent = `build ${"2026-08-24T17:30:37.359Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3341,7 +3359,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T17:19:16.025Z",
+          build: "2026-08-24T17:30:37.359Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3360,7 +3378,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T17:19:16.025Z"}\``,
+        `Build: \`${"2026-08-24T17:30:37.359Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -10141,7 +10159,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
 
   const DEFAULT_SYNC_INTERVAL = 3e4;
   function dataverseCollectionOptions(config) {
-    const { table, syncInterval = DEFAULT_SYNC_INTERVAL, ...rest } = config;
+    const { table, syncInterval = DEFAULT_SYNC_INTERVAL, readonly = false, ...rest } = config;
     const pk = table.primaryKey;
     const getKey = (item) => item[pk.key];
     const collectionId = table.entitySetName;
@@ -10157,6 +10175,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       channel.postMessage({ type: "MUTATIONS_ADDED", mutations });
     };
     const defaultOnInsert = async ({ transaction }) => {
+      if (readonly) throw new Error("Collection is read-only");
       const results = [];
       const serialized = [];
       for (const mutation of transaction.mutations) {
@@ -10168,6 +10187,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       return results;
     };
     const defaultOnUpdate = async ({ transaction }) => {
+      if (readonly) throw new Error("Collection is read-only");
       const results = [];
       const serialized = [];
       for (const mutation of transaction.mutations) {
@@ -10179,6 +10199,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       return results;
     };
     const defaultOnDelete = async ({ transaction }) => {
+      if (readonly) throw new Error("Collection is read-only");
       const results = [];
       const serialized = [];
       for (const mutation of transaction.mutations) {
@@ -10803,6 +10824,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         table,
         syncInterval = DEFAULT_POLL_INTERVAL,
         readOnlyWhenOffline = false,
+        readonly = false,
+        requireVisible = true,
         ...rest
       } = config;
       this.tables.set(table.entitySetName, table);
@@ -10838,7 +10861,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         return new Promise((resolve) => {
           if (pollTimer) clearTimeout(pollTimer);
           pollTimer = setTimeout(async () => {
-            if (navigator.onLine && document.visibilityState === "visible") {
+            const visible = !requireVisible || document.visibilityState === "visible";
+            if (navigator.onLine && visible) {
               await runSync();
               scheduleNextSync(syncInterval);
             }
@@ -10847,7 +10871,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         });
       };
       const flushAndSync = async () => {
-        if (!disposed && document.visibilityState === "visible" && navigator.onLine) {
+        const visible = !requireVisible || document.visibilityState === "visible";
+        if (!disposed && visible && navigator.onLine) {
           await this.flushQueue();
           await scheduleNextSync(50);
         }
@@ -10953,6 +10978,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         rowUpdateMode: "full"
       };
       const defaultMutation = async ({ transaction }) => {
+        if (readonly) {
+          throw new Error("Collection is read-only");
+        }
         if (readOnlyWhenOffline && !navigator.onLine) {
           throw new Error("Collection is read-only while offline");
         }
@@ -10966,6 +10994,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           await scheduleNextSync(100);
         }
       };
+      const utils = {
+        forceSync: async () => {
+          await this.flushQueue();
+          await runSync();
+        },
+        table
+      };
       return {
         ...rest,
         id: collectionId,
@@ -10974,6 +11009,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         onInsert: defaultMutation,
         onUpdate: defaultMutation,
         onDelete: defaultMutation,
+        utils,
         // Begin syncing immediately on creation rather than waiting for the
         // first subscriber to attach (the default for @tanstack/db collections).
         startSync: true
@@ -11506,12 +11542,119 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     ]
   };
 
+  const optionsSuite = {
+    name: "options",
+    title: "Adapter options (forceSync / requireVisible / readonly)",
+    async setup(ctx) {
+      ctx.state.row = await seedRow(ctx, { int: 3, text: "opts", choice: "B" });
+    },
+    tests: (ctx) => [
+      {
+        name: "offline utils.forceSync flushes queue and re-syncs",
+        fn: async () => {
+          const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
+          const restoreVis = forceVisible();
+          let collection;
+          try {
+            collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
+            await waitFor(() => collection.size >= 1, 8e3);
+            const name = ctx.fx.name("opts-fs");
+            const id = crypto.randomUUID();
+            const restore = simulateOfflineHere();
+            collection.insert({ id, name, int: 70, text: "fs" });
+            await new Promise((r) => setTimeout(r, 300));
+            const queuedBefore = await db.getQueueCount();
+            assert(queuedBefore >= 1, `mutation queued before forceSync (got ${queuedBefore})`);
+            restore();
+            const utils = collection.utils;
+            assert(typeof utils?.forceSync === "function", "forceSync util exposed on offline collection");
+            await utils.forceSync();
+            await waitFor(async () => {
+              const queue = await db.getQueueCount();
+              const rows2 = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
+              return queue === 0 && rows2.length === 1;
+            }, 8e3);
+            const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
+            ctx.fx.track(rows[0].id);
+          } finally {
+            restoreVis();
+            collection?.delete?.(ctx.state.row);
+            db.close();
+          }
+        }
+      },
+      {
+        name: "offline requireVisible:false syncs even when hidden",
+        fn: async () => {
+          const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
+          const origVis = document.visibilityState;
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+          let collection;
+          try {
+            collection = createCollection(
+              db.createCollectionOptions({ table: ctx.tables.TestTable, requireVisible: false })
+            );
+            await waitFor(() => collection.size >= 1, 8e3);
+            assert(collection.size >= 1, "collection synced despite hidden visibility (requireVisible:false)");
+          } finally {
+            Object.defineProperty(document, "visibilityState", { configurable: true, get: () => origVis });
+            collection?.delete?.(ctx.state.row);
+            db.close();
+          }
+        }
+      },
+      {
+        name: "online readonly:true rejects mutations",
+        fn: async () => {
+          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable, readonly: true });
+          const collection = createCollection(config);
+          await waitFor(() => collection.size >= 1, 8e3);
+          const id = crypto.randomUUID();
+          await assertRejects(
+            () => collection.insert({ id, name: ctx.fx.name("ro"), int: 1, text: "x" }),
+            "read-only"
+          );
+          assert(collection.size >= 1, "collection still intact after rejected insert");
+        }
+      },
+      {
+        name: "offline readonly:true rejects mutations",
+        fn: async () => {
+          const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
+          const collection = createCollection(
+            db.createCollectionOptions({ table: ctx.tables.TestTable, readonly: true })
+          );
+          await waitFor(() => collection.size >= 1, 8e3);
+          const id = crypto.randomUUID();
+          await assertRejects(
+            () => collection.insert({ id, name: ctx.fx.name("ro-off"), int: 1, text: "x" }),
+            "read-only"
+          );
+          const count = await db.getQueueCount();
+          assertEquals(count, 0, "no mutation queued while readonly");
+          collection.delete(ctx.state.row);
+          db.close();
+        }
+      }
+    ]
+  };
+  function simulateOfflineHere() {
+    const previous = navigator.onLine;
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
+    window.dispatchEvent(new Event("offline"));
+    return () => {
+      Object.defineProperty(navigator, "onLine", { configurable: true, get: () => previous });
+      window.dispatchEvent(new Event(previous ? "online" : "offline"));
+    };
+  }
+
   const suites = [
     onlineCollectionSuite,
     offlineQueueSuite,
     crossTabSuite,
     onlineCrossTabSuite,
-    durabilitySuite
+    durabilitySuite,
+    optionsSuite
   ];
 
   async function boot() {

@@ -6,6 +6,8 @@ const DEFAULT_SYNC_INTERVAL = 30000;
 export type DataverseCollectionConfig<T extends GenericProperties> = {
     table: DataverseTable<T>;
     syncInterval?: number;
+    /** When true, the collection rejects all insert/update/delete mutations. */
+    readonly?: boolean;
     readOnlyWhenOffline?: boolean;
     // NOTE: The passthrough options use `any` for the row type on purpose.
     // Referencing `Infer<T>` here breaks generic inference of `T` from `table`
@@ -23,7 +25,7 @@ export interface DataverseCollectionUtils<T extends GenericProperties> extends U
 export function dataverseCollectionOptions<T extends GenericProperties>(
     config: DataverseCollectionConfig<T>,
 ): CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>> {
-    const { table, syncInterval = DEFAULT_SYNC_INTERVAL, ...rest } = config;
+    const { table, syncInterval = DEFAULT_SYNC_INTERVAL, readonly = false, ...rest } = config;
     const pk = table.primaryKey;
     const getKey = ((item: Infer<T>) => (item as any)[pk.key]);
     const collectionId = table.entitySetName;
@@ -51,6 +53,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
     };
 
     const defaultOnInsert: InsertMutationFn<Infer<T>> = async ({ transaction }) => {
+        if (readonly) throw new Error("Collection is read-only");
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {
@@ -63,6 +66,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
     };
 
     const defaultOnUpdate: UpdateMutationFn<Infer<T>> = async ({ transaction }) => {
+        if (readonly) throw new Error("Collection is read-only");
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {
@@ -75,6 +79,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
     };
 
     const defaultOnDelete: DeleteMutationFn<Infer<T>> = async ({ transaction }) => {
+        if (readonly) throw new Error("Collection is read-only");
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {

@@ -120,4 +120,5 @@ disconnection is required.
 | Cross-tab | Two collections on the same `DataverseSyncDB` observe each other via `BroadcastChannel` (`MUTATIONS_ADDED` / `ABORT_ACTIVE_FETCHES`) |
 | Cross-tab (online) | Same propagation for the online `dataverseCollectionOptions` collection, which now also uses a `BroadcastChannel` keyed by the collection id |
 | Durability | A queued offline mutation survives reopening the same DB name (IndexedDB persistence) and flushes on reconnect; the cache store is rebuilt after a fresh sync |
+| Options | Offline `utils.forceSync` (manual flush + re-sync), offline `requireVisible: false` (sync while hidden), and `readonly: true` rejecting mutations on both adapters |
 

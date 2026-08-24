@@ -1,7 +1,7 @@
 import { type Transaction, type CollectionConfig, type PendingMutation, type SyncConfig } from "@tanstack/db";
 import { IDBPDatabase, openDB } from "idb";
 import { getEtag, type DataverseTable, type GenericProperties, type Infer } from "dataverse-schema";
-import type { DataverseCollectionConfig } from "./collection";
+import { type DataverseCollectionConfig, type DataverseCollectionUtils } from "./collection";
 
 const DEFAULT_POLL_INTERVAL = 30000;
 const MAX_MUTATION_ATTEMPTS = 3;
@@ -9,7 +9,14 @@ const RETRY_BASE_DELAY = 1000;
 const RETRY_MAX_DELAY = 60000;
 
 
-export type DataverseOfflineCollectionConfig<T extends GenericProperties> = DataverseCollectionConfig<T>;
+export type DataverseOfflineCollectionConfig<T extends GenericProperties> = DataverseCollectionConfig<T> & {
+    /**
+     * When true (default), remote syncing/flushing only runs while the document
+     * is visible. Set to false to sync regardless of `visibilityState` (e.g. in a
+     * non-visible web-resource context).
+     */
+    requireVisible?: boolean;
+};
 
 export type QueuedMutation = {
     id: string;
@@ -312,6 +319,8 @@ export class DataverseSyncDB {
             table,
             syncInterval = DEFAULT_POLL_INTERVAL,
             readOnlyWhenOffline = false,
+            readonly = false,
+            requireVisible = true,
             ...rest
         } = config;
         this.tables.set(table.entitySetName, table);
@@ -352,7 +361,8 @@ export class DataverseSyncDB {
             return new Promise<void>((resolve) => {
                 if (pollTimer) clearTimeout(pollTimer);
                 pollTimer = setTimeout(async () => {
-                    if (navigator.onLine && document.visibilityState === "visible") {
+                    const visible = !requireVisible || document.visibilityState === "visible";
+                    if (navigator.onLine && visible) {
                         await runSync();
                         scheduleNextSync(syncInterval);
                     }
@@ -362,7 +372,8 @@ export class DataverseSyncDB {
         };
 
         const flushAndSync = async () => {
-            if (!disposed && document.visibilityState === "visible" && navigator.onLine) {
+            const visible = !requireVisible || document.visibilityState === "visible";
+            if (!disposed && visible && navigator.onLine) {
                 await this.flushQueue()
                 await scheduleNextSync!(50)
             }
@@ -485,6 +496,9 @@ export class DataverseSyncDB {
         };
 
         const defaultMutation = async ({ transaction }: { transaction: Transaction<any> }) => {
+            if (readonly) {
+                throw new Error("Collection is read-only");
+            }
             if (readOnlyWhenOffline && !navigator.onLine) {
                 throw new Error("Collection is read-only while offline");
             }
@@ -506,6 +520,16 @@ export class DataverseSyncDB {
             }
         };
 
+        const utils: DataverseCollectionUtils<T> = {
+            forceSync: async () => {
+                // Flush any queued local mutations, then pull fresh state from
+                // Dataverse (mirrors the online adapter's forceSync utility).
+                await this.flushQueue();
+                await runSync();
+            },
+            table,
+        };
+
         return {
             ...rest,
             id: collectionId,
@@ -514,9 +538,10 @@ export class DataverseSyncDB {
             onInsert: defaultMutation,
             onUpdate: defaultMutation,
             onDelete: defaultMutation,
+            utils,
             // Begin syncing immediately on creation rather than waiting for the
             // first subscriber to attach (the default for @tanstack/db collections).
             startSync: true,
-        } as CollectionConfig<Infer<T>, string | number, never>;
+        } as CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>>;
     }
 }
