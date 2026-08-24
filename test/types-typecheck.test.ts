@@ -80,7 +80,7 @@ test("choice and list infer label/element unions", () => {
 
 test("json infers the schema output type", () => {
   const Address = v.object({ street: v.string(), zip: v.number() })
-  const f = json("address_data", Address)
+  const f = json("address_data", { schema: Address })
   expectTypeOf(f.transformValueToDataverse({ street: "Main", zip: 12345 })).toEqualTypeOf<string | null>()
   type T = ReturnType<typeof f.transformValueFromDataverse>
   expectTypeOf<T["street"]>().toBeString()
@@ -130,6 +130,29 @@ test("navigation inference nests recursively", () => {
     name: string
     location: { id: GUID; name: string } | null
   } | null>()
+})
+
+test("mutual table references compile when one direction uses an untyped navigation", () => {
+  // lookupId/collectionIds intentionally take untyped `() => any` thunks so the
+  // back-reference contributes nothing to Child's inferred type, avoiding TS7022.
+  const Parent = new DataverseTable({
+    client, entitySetName: "parents", logicalName: "parent",
+    fields: {
+      id: primaryKey("parentid"),
+      child: lookup("child_id", () => Child),
+      childIds: collectionIds("children", () => Child),
+    },
+  })
+  const Child = new DataverseTable({
+    client, entitySetName: "children", logicalName: "child",
+    fields: {
+      id: primaryKey("childid"),
+      parentId: lookupId("parent_id", () => Parent),
+    },
+  })
+  expectTypeOf<Infer<typeof Child>>().toEqualTypeOf<{ id: GUID; parentId: GUID | null }>()
+  expectTypeOf<Infer<typeof Parent>["child"]>().toEqualTypeOf<Infer<typeof Child> | null>()
+  expectTypeOf<Infer<typeof Parent>["childIds"]>().toEqualTypeOf<GUID[]>()
 })
 
 test("table.T mirrors Infer", () => {

@@ -1093,6 +1093,29 @@
   }
 
   //#endregion
+  //#region src/schemas/custom/custom.ts
+  /* @__NO_SIDE_EFFECTS__ */
+  function custom(check$1, message$1) {
+  	return {
+  		kind: "schema",
+  		type: "custom",
+  		reference: custom,
+  		expects: "unknown",
+  		async: false,
+  		check: check$1,
+  		message: message$1,
+  		get "~standard"() {
+  			return /* @__PURE__ */ _getStandardProps(this);
+  		},
+  		"~run"(dataset, config$1) {
+  			if (this.check(dataset.value)) dataset.typed = true;
+  			else _addIssue(this, "type", dataset, config$1);
+  			return dataset;
+  		}
+  	};
+  }
+
+  //#endregion
   //#region src/schemas/date/date.ts
   /* @__NO_SIDE_EFFECTS__ */
   function date$1(message$1) {
@@ -1855,7 +1878,7 @@
         this.#fields = [];
         this.#selectedKeys = [];
         for (const [key, prop] of Object.entries(this.#table.fields)) {
-          if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file" || prop.type === "image") {
+          if (prop.kind === "value" || prop.type === "lookupId") {
             this.#fields.push([prop]);
             this.#selectedKeys.push(key);
           }
@@ -2341,12 +2364,15 @@
     /**
      * Updates the value of a single property for a record by ID.
      * For navigation properties, this associates/dissociates related records.
+     * File/image columns accept `{ data: Blob | null }` to upload/clear content.
+     * Throws for fields marked `readonly`.
      *
      * @example
      * await Person.updatePropertyValue("age", "some-guid", 35);
      */
     async updatePropertyValue(key, id, value) {
       const prop = this.fields[key];
+      if (prop.getReadOnly()) throw new Error(`Cannot update readonly property "${String(key)}"`);
       const ctx = { table: this, client: this.client, recordId: id };
       if (prop.type === "lookupId") {
         const name = prop.navigationName;
@@ -2366,7 +2392,9 @@
       } else {
         let v2 = prop.transformValueToDataverse(value, ctx);
         if (v2 instanceof Promise) v2 = await v2;
-        if (v2 !== SKIP) {
+        if (v2 === SKIP) {
+          if (prop.afterSave) await prop.afterSave(ctx, value);
+        } else {
           await this.client.updatePropertyValue(
             this.entitySetName,
             id,
@@ -2523,13 +2551,15 @@
     }
     /**
      * Deletes (clears) the value of a value property for a record. Cannot be used
-     * on navigation properties.
+     * on navigation properties or fields marked `readonly` — use the dedicated
+     * `deleteFile`/`deleteImage` helpers for file and image columns.
      *
      * @example
      * await Person.deletePropertyValue("name", "some-guid");
      */
     async deletePropertyValue(key, id) {
       const prop = this.fields[key];
+      if (prop.getReadOnly()) throw new Error(`Cannot delete readonly property "${String(key)}"`);
       if (prop.kind === "value") {
         return this.client.deletePropertyValue(this.entitySetName, id, prop.logicalName);
       }
@@ -2876,7 +2906,7 @@
       if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
       super(name, {
         defaultValue: [],
-        schema: array(number$1())
+        schema: array(custom((value) => values.includes(value), `Value not in [${values}]`))
       }, options);
       this.choices = Object.freeze(values);
     }
@@ -2898,24 +2928,27 @@
   class ChoiceField extends FieldBase {
     kind = "value";
     type = "choice";
-    #options;
-    constructor(name, options, fieldOptions) {
-      const firstKey = Object.keys(options)[0];
+    /** Allowed labels (values of the choice map), frozen. */
+    choices;
+    #choices;
+    constructor(name, choices, options) {
+      const firstKey = Object.keys(choices)[0];
       if (firstKey === void 0) throw new Error("Choice fields require at least one option");
-      const values = Object.values(options);
+      const values = Object.values(choices);
       super(name, {
-        defaultValue: options[Number(firstKey)],
+        defaultValue: choices[Number(firstKey)],
         schema: picklist(values)
-      }, fieldOptions);
-      this.#options = options;
+      }, options);
+      this.#choices = choices;
+      this.choices = Object.freeze([...values]);
     }
     transformValueFromDataverse(value) {
-      const result = this.#options[value];
+      const result = this.#choices[value];
       if (result === void 0) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
       return result;
     }
     transformValueToDataverse(value) {
-      for (const [k, v2] of Object.entries(this.#options)) {
+      for (const [k, v2] of Object.entries(this.#choices)) {
         if (v2 === value) return Number(k);
       }
       throw new Error(`Unknown choice label: ${value}`);
@@ -2923,7 +2956,7 @@
   }
   class DateTimeField extends FieldBase {
     kind = "value";
-    type = "date";
+    type = "dateTime";
     constructor(name, options) {
       super(name, {
         defaultValue: /* @__PURE__ */ new Date(),
@@ -2934,7 +2967,8 @@
       return /* @__PURE__ */ new Date();
     }
     transformValueFromDataverse(value) {
-      if (value == null) return /* @__PURE__ */ new Date();
+      if (value === void 0) return this.getDefault();
+      if (value === null) throw new Error(`Invalid datetime value: ${value}`);
       const result = new Date(value);
       if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
       return result;
@@ -2949,8 +2983,12 @@
         schema: instance(Date)
       }, options);
     }
+    getDefault() {
+      return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
+    }
     transformValueFromDataverse(value) {
-      if (value == null) return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
+      if (value === void 0) return this.getDefault();
+      if (value === null) throw new Error(`Invalid date-only value: ${value}`);
       return parseValidDateOnly(value);
     }
     transformValueToDataverse(value) {
@@ -2981,7 +3019,7 @@
       return { url, fullSizeUrl };
     }
     //When using conditional operations (If-Match) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
-    async transformValueToDataverse(value) {
+    async transformValueToDataverse(_value, _ctx) {
       return SKIP;
     }
     async afterSave(ctx, value) {
@@ -2993,17 +3031,17 @@
     }
   }
   class FileField extends FieldBase {
+    kind = "value";
     type = "file";
-    kind = "file";
     constructor(name, options) {
       super(name, {
         defaultValue: null,
         schema: nullable(object({
-          name: string$1(),
+          name: optional(string$1()),
           url: optional(string$1()),
           data: optional(nullable(instance(Blob)))
         }))
-      }, { ...options, readonly: true });
+      }, options);
       this.fromDataverseName = `${name}_name`;
     }
     transformValueFromDataverse(value, ctx) {
@@ -3014,7 +3052,7 @@
         url: ctx.client.getPropertyRawValueURL(ctx.table.entitySetName, ctx.recordId, this.logicalName)
       };
     }
-    transformValueToDataverse() {
+    transformValueToDataverse(_value, _ctx) {
       return SKIP;
     }
     async afterSave(ctx, value) {
@@ -3043,8 +3081,8 @@
   function multiChoice(name, choices, options) {
     return new MultiChoiceField(name, choices, options);
   }
-  function choice(name, options, fieldOptions) {
-    return new ChoiceField(name, options, fieldOptions);
+  function choice(name, choices, options) {
+    return new ChoiceField(name, choices, options);
   }
   function datetime(name, options) {
     return new DateTimeField(name, options);
@@ -3127,11 +3165,11 @@
       );
     }
   }
-  function collection(name, getTable) {
-    return new CollectionProperty(name, getTable);
+  function collection(name, getTable, options) {
+    return new CollectionProperty(name, getTable, options);
   }
-  function lookupId(name, getTable) {
-    return new LookupIdProperty(name, getTable);
+  function lookupId(name, getTable, options) {
+    return new LookupIdProperty(name, getTable, options);
   }
   class LookupProperty extends FieldBase {
     kind = "navigation";
@@ -3170,8 +3208,8 @@
       }
     }
   }
-  function lookup(name, getTable) {
-    return new LookupProperty(name, getTable);
+  function lookup(name, getTable, options) {
+    return new LookupProperty(name, getTable, options);
   }
 
   function buildFlatFieldProxy(table) {
@@ -3580,7 +3618,7 @@
       const attrs = [];
       for (const [key, prop] of Object.entries(this._table.fields)) {
         const p = prop;
-        if (p.kind === "value" || p.type === "lookupId" || p.type === "file") {
+        if (p.kind === "value" || p.type === "lookupId") {
           attrs.push({ name: p.logicalName, alias: key });
         }
       }
@@ -4338,7 +4376,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T12:44:19.643Z"}
+      meta.textContent = `build ${"2026-08-24T13:39:12.904Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4427,7 +4465,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T12:44:19.643Z",
+          build: "2026-08-24T13:39:12.904Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4446,7 +4484,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T12:44:19.643Z"}\``,
+        `Build: \`${"2026-08-24T13:39:12.904Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

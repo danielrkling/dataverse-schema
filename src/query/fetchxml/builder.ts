@@ -806,7 +806,7 @@ export class EntityQueryBuilder<
         const attrs: AttrDef[] = [];
         for (const [key, prop] of Object.entries(this._table.fields)) {
             const p = prop as any;
-            if (p.kind === "value" || p.type === "lookupId" || p.type === "file") {
+            if (p.kind === "value" || p.type === "lookupId") {
                 attrs.push({ name: p.logicalName, alias: key });
             }
         }

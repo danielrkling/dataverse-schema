@@ -124,13 +124,20 @@ test("transformValueFromDataverse copies @odata.etag", () => {
   expect((result as any)["$etag"]).toBe("W/\"9\"")
 })
 
-test("transformValueFromDataverse normalizes nulls for non-nullable fields", () => {
+test("transformValueFromDataverse defaults fields absent from the payload", () => {
   const result = Account.transformValueFromDataverse({
-    accountid: null, name: null, revenue: null, statuscode: 1, createdon: null,
+    accountid: "a1", statuscode: 1,
+    // name, revenue, createdon intentionally absent (e.g. partial select)
   })
   expect(result.name).toBe("")
   expect(result.revenue).toBe(0)
   expect(result.createdOn).toBeInstanceOf(Date)
+})
+
+test("transformValueFromDataverse throws when a non-nullable datetime is null", () => {
+  expect(() => Account.transformValueFromDataverse({
+    accountid: "a1", name: "A", revenue: 0, statuscode: 1, createdon: null,
+  })).toThrow("Invalid datetime value")
 })
 
 test("transformValueFromDataverse transforms expanded navigation records", () => {
@@ -282,7 +289,7 @@ test("json field round-trips through table transform", async () => {
   const Address = v.object({ street: v.string() })
   const T = new DataverseTable({
     client, entitySetName: "places", logicalName: "place",
-    fields: { id: primaryKey("placeid"), address: json("address_data", Address) },
+    fields: { id: primaryKey("placeid"), address: json("address_data", { schema: Address }) },
   })
   const from = T.transformValueFromDataverse({ placeid: "p1", address_data: "{\"street\":\"Main\"}" })
   expect(from.address).toEqual({ street: "Main" })
@@ -290,7 +297,7 @@ test("json field round-trips through table transform", async () => {
   expect(to).toEqual({ address_data: "{\"street\":\"Oak\"}" })
 })
 
-test("formatted and file fields are readonly and excluded from writes", async () => {
+test("formatted and file/image fields are excluded from write bodies", async () => {
   const T = new DataverseTable({
     client, entitySetName: "people", logicalName: "person",
     fields: {
@@ -302,4 +309,54 @@ test("formatted and file fields are readonly and excluded from writes", async ()
   })
   const result = await T.transformValueToDataverse({ label: "x", doc: { name: "f.pdf" }, pic: null })
   expect(result).toEqual({})
+})
+
+// --- Readonly guards ---
+
+test("updatePropertyValue throws for readonly fields", async () => {
+  const T = new DataverseTable({
+    client, entitySetName: "people", logicalName: "person",
+    fields: { id: primaryKey("personid"), label: formatted("fullname") },
+  })
+  await expect(T.updatePropertyValue("label", "g1", "x")).rejects.toThrow('Cannot update readonly property "label"')
+})
+
+test("deletePropertyValue throws for readonly fields", async () => {
+  const T = new DataverseTable({
+    client, entitySetName: "people", logicalName: "person",
+    fields: { id: primaryKey("personid"), label: formatted("fullname") },
+  })
+  await expect(T.deletePropertyValue("label", "g1")).rejects.toThrow('Cannot delete readonly property "label"')
+})
+
+test("updatePropertyValue routes file data through the upload channel", async () => {
+  const T = new DataverseTable({
+    client, entitySetName: "people", logicalName: "person",
+    fields: { id: primaryKey("personid"), doc: file("document") },
+  })
+  const uploaded: any[][] = []
+  ;(T.client as any).updateFileProperty = async (...args: any[]) => { uploaded.push(args) }
+
+  await T.updatePropertyValue("doc", "g1", { name: "f.pdf", data: new Blob(["x"]) })
+  expect(uploaded).toHaveLength(1)
+  expect(uploaded[0][3]).toBe("f.pdf")
+  expect(uploaded[0][4]).toBeInstanceOf(Blob)
+
+  uploaded.length = 0
+  await T.updatePropertyValue("doc", "g1", { name: "stale.pdf" }) // no explicit data → no-op
+  expect(uploaded).toHaveLength(0)
+})
+
+test("updatePropertyValue clears image data via explicit null", async () => {
+  const T = new DataverseTable({
+    client, entitySetName: "people", logicalName: "person",
+    fields: { id: primaryKey("personid"), pic: image("entityimage") },
+  })
+  const deleted: string[] = []
+  ;(T.client as any).deletePropertyValue = async (_e: unknown, _id: unknown, property: string) => {
+    deleted.push(property)
+  }
+
+  await T.updatePropertyValue("pic", "g1", { data: null })
+  expect(deleted).toEqual(["entityimage"])
 })

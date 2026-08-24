@@ -280,6 +280,8 @@ export class DataverseTable<TProperties extends GenericProperties> {
   /**
    * Updates the value of a single property for a record by ID.
    * For navigation properties, this associates/dissociates related records.
+   * File/image columns accept `{ data: Blob | null }` to upload/clear content.
+   * Throws for fields marked `readonly`.
    *
    * @example
    * await Person.updatePropertyValue("age", "some-guid", 35);
@@ -290,6 +292,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     value: Infer<TProperties[TKey]>,
   ): Promise<GUID> {
     const prop = this.fields[key];
+    if (prop.getReadOnly()) throw new Error(`Cannot update readonly property "${String(key)}"`);
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
 
     if (prop.type === "lookupId") {
@@ -307,7 +310,11 @@ export class DataverseTable<TProperties extends GenericProperties> {
     } else {
       let v = (prop as FieldBase<any>).transformValueToDataverse(value as any, ctx);
       if (v instanceof Promise) v = await v;
-      if (v !== SKIP) {
+      if (v === SKIP) {
+        // File/image columns: the column value is never written directly; route
+        // the explicit `{ data: Blob | null }` channel through afterSave.
+        if (prop.afterSave) await prop.afterSave(ctx, value);
+      } else {
         await this.client.updatePropertyValue(
           this.entitySetName,
           id,
@@ -501,7 +508,8 @@ export class DataverseTable<TProperties extends GenericProperties> {
 
   /**
    * Deletes (clears) the value of a value property for a record. Cannot be used
-   * on navigation properties.
+   * on navigation properties or fields marked `readonly` — use the dedicated
+   * `deleteFile`/`deleteImage` helpers for file and image columns.
    *
    * @example
    * await Person.deletePropertyValue("name", "some-guid");
@@ -510,6 +518,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     TKey extends NarrowKeysByValue<TProperties, GenericValueProperty>,
   >(key: TKey, id: DataverseKey): Promise<GUID> {
     const prop = this.fields[key];
+    if (prop.getReadOnly()) throw new Error(`Cannot delete readonly property "${String(key)}"`);
     if (prop.kind === "value") {
       return this.client.deletePropertyValue(this.entitySetName, id, prop.logicalName);
     }

@@ -38,6 +38,24 @@ export type TransformContext = {
   recordId: string
 }
 
+/**
+ * Base class for all Dataverse column and navigation property definitions.
+ *
+ * ## Transform contract
+ * - `transformValueFromDataverse(value, ctx?)` converts a raw API payload into the
+ *   typed record value. Non-nullable fields **throw** when Dataverse returns null;
+ *   use the `nullable*` variants to allow null.
+ * - `transformValueToDataverse(value, ctx?)` converts a record value into its API
+ *   payload. It may return synchronously or return a `Promise`. Returning the
+ *   {@link SKIP} symbol excludes the value from the request body (used by file/image
+ *   columns whose content is uploaded separately).
+ * - `afterSave(ctx, value)` runs after a create/update when the key was present in
+ *   the submitted value. File/image fields use it as the explicit data channel:
+ *   they only act when `value.data` is a `Blob` (upload) or exactly `null` (clear).
+ *
+ * Fields created with `readonly: true` are never included in request bodies,
+ * `updatePropertyValue`, or `deletePropertyValue`.
+ */
 export abstract class FieldBase<T> {
   /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
   schemaName: string
@@ -227,7 +245,7 @@ export class MultiChoiceField extends FieldBase<number[]> {
     if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
     super(name, {
       defaultValue: [] as number[],
-      schema: v.array(v.number()) as unknown as ValidationSchema<number[]>,
+      schema: v.array(v.custom<number>((value) => values.includes(value as number), `Value not in [${values}]`)) as unknown as ValidationSchema<number[]>,
     }, options);
     this.choices = Object.freeze(values) as readonly number[];
   }
@@ -256,26 +274,29 @@ export class MultiChoiceField extends FieldBase<number[]> {
 export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
   kind = "value" as const;
   type = "choice" as const;
-  #options: T;
-  constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>) {
-    const firstKey = Object.keys(options)[0];
+  /** Allowed labels (values of the choice map), frozen. */
+  readonly choices: readonly T[keyof T][];
+  #choices: T;
+  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T]>) {
+    const firstKey = Object.keys(choices)[0];
     if (firstKey === undefined) throw new Error("Choice fields require at least one option");
-    const values = Object.values(options) as [string, ...string[]];
+    const values = Object.values(choices) as [string, ...string[]];
     super(name, {
-      defaultValue: options[Number(firstKey) as keyof T],
+      defaultValue: choices[Number(firstKey) as keyof T],
       schema: v.picklist(values) as unknown as ValidationSchema<T[keyof T]>,
-    }, fieldOptions);
-    this.#options = options;
+    }, options);
+    this.#choices = choices;
+    this.choices = Object.freeze([...values]) as readonly T[keyof T][];
   }
 
   transformValueFromDataverse(value: any): T[keyof T] {
-    const result = this.#options[value as keyof T];
+    const result = this.#choices[value as keyof T];
     if (result === undefined) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
     return result;
   }
 
   transformValueToDataverse(value: any): number {
-    for (const [k, v] of Object.entries(this.#options)) {
+    for (const [k, v] of Object.entries(this.#choices)) {
       if (v === value) return Number(k);
     }
     throw new Error(`Unknown choice label: ${value}`);
@@ -285,27 +306,30 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
 export class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
   kind = "value" as const;
   type = "choice" as const;
-  #options: T;
-  constructor(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>) {
-    if (Object.keys(options).length === 0) throw new Error("Choice fields require at least one option");
-    const values = Object.values(options) as [string, ...string[]];
+  /** Allowed labels (values of the choice map), frozen. */
+  readonly choices: readonly T[keyof T][];
+  #choices: T;
+  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>) {
+    if (Object.keys(choices).length === 0) throw new Error("Choice fields require at least one option");
+    const values = Object.values(choices) as [string, ...string[]];
     super(name, {
       defaultValue: null,
       schema: v.nullable(v.picklist(values)) as unknown as ValidationSchema<T[keyof T] | null>,
-    }, fieldOptions);
-    this.#options = options;
+    }, options);
+    this.#choices = choices;
+    this.choices = Object.freeze([...values]) as readonly T[keyof T][];
   }
 
   transformValueFromDataverse(value: any): T[keyof T] | null {
     if (value === null) return null;
-    const result = this.#options[value as keyof T];
+    const result = this.#choices[value as keyof T];
     if (result === undefined) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
     return result;
   }
 
   transformValueToDataverse(value: any): number | null {
     if (value === null) return null;
-    for (const [k, v] of Object.entries(this.#options)) {
+    for (const [k, v] of Object.entries(this.#choices)) {
       if (v === value) return Number(k);
     }
     throw new Error(`Unknown choice label: ${value}`);
@@ -314,7 +338,7 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
 
 export class DateTimeField extends FieldBase<Date> {
   kind = "value" as const;
-  type = "date" as const;
+  type = "dateTime" as const;
   constructor(name: string, options?: FieldOptions<Date>) {
     super(name, {
       defaultValue: new Date(),
@@ -325,7 +349,8 @@ export class DateTimeField extends FieldBase<Date> {
     return new Date();
   }
   transformValueFromDataverse(value: any): Date {
-    if (value == null) return new Date();
+    if (value === undefined) return this.getDefault();
+    if (value === null) throw new Error(`Invalid datetime value: ${value}`);
     const result = new Date(value);
     if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
     return result;
@@ -334,7 +359,7 @@ export class DateTimeField extends FieldBase<Date> {
 
 export class NullableDateTimeField extends FieldBase<Date | null> {
   kind = "value" as const;
-  type = "date" as const;
+  type = "dateTime" as const;
   constructor(name: string, options?: FieldOptions<Date | null>) {
     super(name, {
       defaultValue: null,
@@ -359,8 +384,12 @@ export class DateField extends FieldBase<Date> {
       schema: v.instance(Date) as ValidationSchema<Date>,
     }, options);
   }
+  getDefault(): Date {
+    return parseDateOnly(new Date().toISOString());
+  }
   transformValueFromDataverse(value: any): Date {
-    if (value == null) return parseDateOnly(new Date().toISOString());
+    if (value === undefined) return this.getDefault();
+    if (value === null) throw new Error(`Invalid date-only value: ${value}`);
     return parseValidDateOnly(value);
   }
   transformValueToDataverse(value: any) {
@@ -383,11 +412,17 @@ export class NullableDateField extends FieldBase<Date | null> {
     return parseValidDateOnly(value);
   }
   transformValueToDataverse(value: any) {
-    if (value !== null && (!(value instanceof Date) || !isValidDate(value))) throw new Error("Invalid date value");
+    if (value === null || value === undefined) return null;
+    if (!(value instanceof Date) || !isValidDate(value)) throw new Error("Invalid date value");
     return toDateOnly(value);
   }
 }
 
+/**
+ * Field for retrieving user-localized display values
+ * (e.g. `...@OData.Community.Display.V1.FormattedValue`). Always read-only:
+ * the value is computed by Dataverse and can never be written or deleted.
+ */
 export class FormattedField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "formatted" as const;
@@ -400,6 +435,15 @@ export class FormattedField extends FieldBase<string | null> {
   }
 }
 
+/**
+ * Field for Dataverse image columns.
+ *
+ * The column value itself is server-managed: `transformValueToDataverse` returns
+ * {@link SKIP} so the field is never part of a create/update body. Instead, data
+ * flows through the explicit channel in `afterSave`: include `{ data }` in the
+ * record value where `data` is a `Blob` to upload or exactly `null` to clear the
+ * image. Reading returns `{ url, fullSizeUrl? }`.
+ */
 export class ImageField extends FieldBase<ImageRef | null> {
   kind = "value" as const;
   type = "image" as const;
@@ -428,7 +472,7 @@ export class ImageField extends FieldBase<ImageRef | null> {
   }
 
   //When using conditional operations (If-Match) image columns are not allowed even though they are allowed normally. Workaround is to update property after save
-  async transformValueToDataverse(value: ImageRef | null): Promise<string | null | typeof SKIP> {
+  async transformValueToDataverse(_value?: unknown, _ctx?: TransformContext): Promise<string | null | typeof SKIP> {
     return SKIP
   }
 
@@ -452,7 +496,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 export type FileRef = {
-  name: string;
+  name?: string;
   url?: string;
   data?: Blob | null;
 }
@@ -463,19 +507,28 @@ export type ImageRef = {
   data?: Blob | null;
 }
 
+/**
+ * Field for Dataverse file columns.
+ *
+ * The column value itself is server-managed: `transformValueToDataverse` returns
+ * {@link SKIP} so the field is never part of a create/update body. Instead, data
+ * flows through the explicit channel in `afterSave`: include `{ name?, data }` in
+ * the record value where `data` is a `Blob` to upload or exactly `null` to clear
+ * the file. Reading returns `{ name, url? }`.
+ */
 export class FileField extends FieldBase<FileRef | null> {
+  kind = "value" as const;
   type = "file" as const;
-  kind = "file" as const;
 
   constructor(name: string, options?: FieldOptions<FileRef | null>) {
     super(name, {
       defaultValue: null,
       schema: v.nullable(v.object({
-        name: v.string(),
+        name: v.optional(v.string()),
         url: v.optional(v.string()),
         data: v.optional(v.nullable(v.instance(Blob))),
       })) as ValidationSchema<FileRef | null>,
-    }, { ...options, readonly: true });
+    }, options);
     this.fromDataverseName = `${name}_name`;
   }
 
@@ -489,7 +542,7 @@ export class FileField extends FieldBase<FileRef | null> {
     }
   }
 
-  transformValueToDataverse(): typeof SKIP {
+  transformValueToDataverse(_value?: unknown, _ctx?: TransformContext): typeof SKIP {
     return SKIP;
   }
 
@@ -509,12 +562,13 @@ export class JsonField<T> extends FieldBase<T> {
   kind = "value" as const;
   type = "json" as const;
 
-  constructor(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>) {
-    super(name, { defaultValue: undefined as T, schema }, options);
+  constructor(name: string, options: FieldOptions<T> & { schema: ValidationSchema<T> }) {
+    super(name, { defaultValue: undefined as T, schema: options.schema }, options);
   }
 
   transformValueFromDataverse(value: any): T {
-    if (value == null) return this.getDefault();
+    if (value === undefined) return this.getDefault();
+    if (value === null) throw new Error(`Invalid json value: ${value}`);
     const raw = typeof value === "string" ? JSON.parse(value) : value;
     return v.parse(this.schema, raw);
   }
@@ -658,7 +712,8 @@ export function multiChoice(name: string, choices: Array<number> | Record<number
  * to human-readable string labels.
  *
  * @param name The Dataverse logical name of the column.
- * @param options An object mapping numeric option values to string labels.
+ * @param choices An object mapping numeric option values to string labels.
+ * @param options Optional field options (default, readonly, schema).
  *
  * @example
  * const table = new DataverseTable({
@@ -666,15 +721,16 @@ export function multiChoice(name: string, choices: Array<number> | Record<number
  * });
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
  */
-export function choice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T]>) {
-  return new ChoiceField<T>(name, options, fieldOptions);
+export function choice<T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>) {
+  return new ChoiceField<T>(name, choices, options);
 }
 
 /**
  * Creates a nullable choice/option-set column definition (allows `null`).
  *
  * @param name The Dataverse logical name of the column.
- * @param options An object mapping numeric option values to string labels.
+ * @param choices An object mapping numeric option values to string labels.
+ * @param options Optional field options (default, readonly, schema).
  *
  * @example
  * const table = new DataverseTable({
@@ -682,8 +738,8 @@ export function choice<T extends Record<number, string>>(name: string, options: 
  * });
  * // Infer<typeof table>["priority"] → "Low" | "High" | null
  */
-export function nullableChoice<T extends Record<number, string>>(name: string, options: T, fieldOptions?: FieldOptions<T[keyof T] | null>) {
-  return new NullableChoiceField<T>(name, options, fieldOptions);
+export function nullableChoice<T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>) {
+  return new NullableChoiceField<T>(name, choices, options);
 }
 
 /**
@@ -772,18 +828,18 @@ export function file(name: string, options?: FieldOptions<FileRef | null>) {
  * in Dataverse and parses/validates it using the provided valibot schema.
  *
  * @param name The Dataverse logical name of the column.
- * @param schema A valibot schema that validates the parsed JSON structure.
- * @param options Optional field options (default, readonly).
+ * @param options Field options; `schema` (a valibot schema validating the parsed
+ * JSON structure) is required, plus the standard default/readonly options.
  *
  * @example
  * const Address = v.object({ street: v.string(), city: v.string() });
  * const table = new DataverseTable({
- *   address: json("address_data", Address),
+ *   address: json("address_data", { schema: Address }),
  * });
  * // Infer<typeof table>["address"] → { street: string; city: string }
  */
-export function json<T>(name: string, schema: ValidationSchema<T>, options?: FieldOptions<T>) {
-  return new JsonField<T>(name, schema, options);
+export function json<T>(name: string, options: FieldOptions<T> & { schema: ValidationSchema<T> }) {
+  return new JsonField<T>(name, options);
 }
 
 export class LookupIdProperty extends FieldBase<GUID | null> {
@@ -873,22 +929,35 @@ export class CollectionProperty<
  * Creates a one-to-many (collection) navigation property definition. The related records
  * can be expanded via OData `$expand` or fetched through the table API.
  *
+ * The thunk is strongly typed so the related records appear in `Infer<typeof table>`.
+ * Note: if two tables reference each other through the typed navigation factories
+ * (`collection`/`lookup`) on **both** ends, TypeScript cannot implicitly infer the
+ * mutually recursive types (TS7022) — break the cycle by using `collectionIds` or
+ * `lookupId` (untyped thunks) for one direction, or annotate one table explicitly.
+ *
  * @param name The Dataverse logical name of the collection navigation property.
  * @param getTable A thunk that returns the related table definition.
  *
  * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), street: string("street"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   addresses: collection("person_addresses", () => Address),
+ * const Address = new DataverseTable({
+ *   client, entitySetName: "addresses", logicalName: "address",
+ *   fields: { id: primaryKey("addressid"), street: string("street") },
+ * });
+ * const Person = new DataverseTable({
+ *   client, entitySetName: "people", logicalName: "person",
+ *   fields: {
+ *     id: primaryKey("personid"),
+ *     addresses: collection("person_addresses", () => Address),
+ *   },
  * });
  * // Infer<typeof Person>["addresses"] → { id: GUID; street: string }[]
  */
 export function collection<TProperties extends GenericProperties>(
   name: string,
   getTable: GetTable<DataverseTable<TProperties>>,
+  options?: FieldOptions<Infer<TProperties>[]>,
 ) {
-  return new CollectionProperty(name, getTable);
+  return new CollectionProperty(name, getTable, options);
 }
 
 export class CollectionIdsProperty extends FieldBase<GUID[]> {
@@ -942,18 +1011,27 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
  * this only stores the related record IDs (GUIDs), not the full records.
  *
  * @param name The Dataverse logical name of the navigation property.
- * @param getTable A thunk that returns the related table definition.
+ * @param getTable A thunk that returns the related table definition. It is
+ * intentionally untyped (`GetTable` → `() => any`): the related table only
+ * contributes GUIDs here, and keeping the thunk non-generic lets two tables
+ * reference each other without creating a TypeScript inference cycle.
  *
  * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   addressIds: collectionIds("person_addresses", () => Address),
+ * const Address = new DataverseTable({
+ *   client, entitySetName: "addresses", logicalName: "address",
+ *   fields: { id: primaryKey("addressid") },
+ * });
+ * const Person = new DataverseTable({
+ *   client, entitySetName: "people", logicalName: "person",
+ *   fields: {
+ *     id: primaryKey("personid"),
+ *     addressIds: collectionIds("person_addresses", () => Address),
+ *   },
  * });
  * // Infer<typeof Person>["addressIds"] → `${string}-${string}-${string}-${string}-${string}`[]
  */
-export function collectionIds(name: string, getTable: GetTable) {
-  return new CollectionIdsProperty(name, getTable);
+export function collectionIds(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>) {
+  return new CollectionIdsProperty(name, getTable, options);
 }
 
 /**
@@ -961,18 +1039,27 @@ export function collectionIds(name: string, getTable: GetTable) {
  * GUID of the related record (not the full expanded record).
  *
  * @param name The Dataverse logical name of the lookup column.
- * @param getTable A thunk that returns the related table definition.
+ * @param getTable A thunk that returns the related table definition. It is
+ * intentionally untyped (`GetTable` → `() => any`): the related table only
+ * contributes a GUID here, and keeping the thunk non-generic lets two tables
+ * reference each other without creating a TypeScript inference cycle.
  *
  * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   primaryAddressId: lookupId("primaryaddressid", () => Address),
+ * const Address = new DataverseTable({
+ *   client, entitySetName: "addresses", logicalName: "address",
+ *   fields: { id: primaryKey("addressid") },
+ * });
+ * const Person = new DataverseTable({
+ *   client, entitySetName: "people", logicalName: "person",
+ *   fields: {
+ *     id: primaryKey("personid"),
+ *     primaryAddressId: lookupId("primaryaddressid", () => Address),
+ *   },
  * });
  * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
  */
-export function lookupId(name: string, getTable: GetTable) {
-  return new LookupIdProperty(name, getTable);
+export function lookupId(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
+  return new LookupIdProperty(name, getTable, options);
 }
 
 export class LookupProperty<
@@ -1022,20 +1109,33 @@ export class LookupProperty<
  * Creates a many-to-one (lookup) navigation property definition. The related record
  * can be expanded via OData `$expand` or fetched through the table API.
  *
+ * The thunk is strongly typed so the related record appears in `Infer<typeof table>`.
+ * Note: if two tables reference each other through the typed navigation factories
+ * (`lookup`/`collection`) on **both** ends, TypeScript cannot implicitly infer the
+ * mutually recursive types (TS7022) — break the cycle by using `lookupId` or
+ * `collectionIds` (untyped thunks) for one direction, or annotate one table explicitly.
+ *
  * @param name The Dataverse logical name of the lookup column.
  * @param getTable A thunk that returns the related table definition.
  *
  * @example
- * const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
- * const Person = table(client, "people", {
- *   id: primaryKey("personid"),
- *   primaryAddress: lookup("primaryaddressid", () => Address),
+ * const Address = new DataverseTable({
+ *   client, entitySetName: "addresses", logicalName: "address",
+ *   fields: { id: primaryKey("addressid") },
+ * });
+ * const Person = new DataverseTable({
+ *   client, entitySetName: "people", logicalName: "person",
+ *   fields: {
+ *     id: primaryKey("personid"),
+ *     primaryAddress: lookup("primaryaddressid", () => Address),
+ *   },
  * });
  * // Infer<typeof Person>["primaryAddress"] → { id: GUID; ... } | null
  */
 export function lookup<TProperties extends GenericProperties>(
   name: string,
   getTable: GetTable<DataverseTable<TProperties>>,
+  options?: FieldOptions<Infer<TProperties> | null>,
 ) {
-  return new LookupProperty(name, getTable);
+  return new LookupProperty(name, getTable, options);
 }

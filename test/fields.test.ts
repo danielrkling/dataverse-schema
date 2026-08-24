@@ -4,7 +4,7 @@ import {
   string, nullableString, number, nullableNumber, boolean, nullableBoolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted, multiChoice,
   collection, collectionIds, lookupId, lookup, DataverseTable,
-  choice, nullableChoice,
+  choice, nullableChoice, SKIP, json,
 } from "../src"
 import { DataverseClient } from "../src/client"
 
@@ -75,10 +75,14 @@ test("datetime transformValueFromDataverse converts string to Date", () => {
   expect(result.getFullYear()).toBe(2024)
 })
 
-test("datetime transformValueFromDataverse handles null", () => {
+test("datetime transformValueFromDataverse throws on null", () => {
   const f = datetime("createdon")
-  const result = f.transformValueFromDataverse(null)
-  expect(result).toBeInstanceOf(Date)
+  expect(() => f.transformValueFromDataverse(null)).toThrow("Invalid datetime value")
+})
+
+test("datetime transformValueFromDataverse defaults absent values", () => {
+  const f = datetime("createdon")
+  expect(f.transformValueFromDataverse(undefined)).toBeInstanceOf(Date)
 })
 
 test("nullableDateTime field defaults to null", () => {
@@ -106,10 +110,20 @@ test("date field transformValueToDataverse formats as date-only", () => {
   expect(result).toBe("2024-01-15")
 })
 
-test("date field handles null input", () => {
+test("date field throws on null input", () => {
   const f = date("birthdate")
-  const result = f.transformValueFromDataverse(null)
-  expect(result).toBeInstanceOf(Date)
+  expect(() => f.transformValueFromDataverse(null)).toThrow("Invalid date-only value")
+})
+
+test("date field defaults absent values", () => {
+  const f = date("birthdate")
+  expect(f.transformValueFromDataverse(undefined)).toBeInstanceOf(Date)
+})
+
+test("date getDefault returns a fresh date each call", () => {
+  const f = date("birthdate")
+  expect(f.getDefault()).toBeInstanceOf(Date)
+  expect(f.getDefault()).not.toBe(f.getDefault())
 })
 
 test("nullableDate field defaults to null", () => {
@@ -211,11 +225,18 @@ test("image field type", () => {
 test("file field uses _name suffix and returns FileRef", () => {
   const f = file("document")
   expect(f.type).toBe("file")
+  expect(f.kind).toBe("value")
   expect(f.fromDataverseName).toBe("document_name")
-  expect(f.getReadOnly()).toBe(true)
+  expect(f.getReadOnly()).toBe(false)
   expect(f.getDefault()).toBeNull()
   expect(f.transformValueFromDataverse("report.pdf")).toEqual({ name: "report.pdf" })
   expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("file field transformValueToDataverse always skips", async () => {
+  const f = file("document")
+  expect(f.transformValueToDataverse()).toBe(SKIP)
+  expect(await f.transformValueToDataverse({ name: "f.pdf", data: new Blob(["x"]) })).toBe(SKIP)
 })
 
 test("file field schema preserves upload data and URL", () => {
@@ -424,6 +445,12 @@ test("multiChoice schema validates parsed arrays", () => {
   expect(() => v.parse(f.schema, ["nope"] as any)).toThrow()
 })
 
+test("multiChoice schema rejects values outside the choice set", () => {
+  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  const result = v.safeParse(f.schema, [1, 9])
+  expect(result.success).toBe(false)
+})
+
 test("multiChoice getDefault returns independent empty arrays", () => {
   const f = multiChoice("nnsyc200_months", [1, 2, 3])
   const a = f.getDefault()
@@ -452,4 +479,63 @@ test("boolean field coerces stringly true/false", () => {
   expect(boolean("active").transformValueFromDataverse("False")).toBe(false)
   expect(nullableBoolean("flag").transformValueFromDataverse("true")).toBe(true)
   expect(nullableBoolean("flag").transformValueFromDataverse(null)).toBeNull()
+})
+
+// --- Choice choices accessor ---
+
+test("choice exposes frozen labels via choices", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
+  expect(f.choices).toEqual(["Active", "Inactive"])
+  expect(Object.isFrozen(f.choices))
+})
+
+test("nullableChoice exposes frozen labels via choices", () => {
+  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  expect(f.choices).toEqual(["Low", "High"])
+  expect(Object.isFrozen(f.choices))
+})
+
+// --- NullableDateField write ---
+
+test("nullableDate transformValueToDataverse returns null for null input", () => {
+  const f = nullableDate("birthdate")
+  expect(f.transformValueToDataverse(null)).toBeNull()
+})
+
+test("nullableDate transformValueToDataverse throws for non-date values", () => {
+  const f = nullableDate("birthdate")
+  expect(() => f.transformValueToDataverse("2024-01-01" as any)).toThrow("Invalid date value")
+})
+
+// --- JsonField options form ---
+
+test("json accepts schema via options and validates parsed values", () => {
+  const Address = v.object({ street: v.string(), city: v.string() })
+  const f = json("address_data", { schema: Address })
+  expect(f.transformValueFromDataverse('{"street":"Main","city":"Springfield"}')).toEqual({ street: "Main", city: "Springfield" })
+  expect(() => f.transformValueFromDataverse(null)).toThrow("Invalid json value")
+})
+
+test("json supports default and readonly options", async () => {
+  const Address = v.object({ street: v.string() })
+  const f = json("address_data", { schema: Address, default: { street: "Main" }, readonly: true })
+  expect(f.getDefault()).toEqual({ street: "Main" })
+  expect(f.getReadOnly()).toBe(true)
+  expect(await f.transformValueToDataverse({ street: "Oak" })).toBe("{\"street\":\"Oak\"}")
+})
+
+// --- Navigation factory options ---
+
+test("navigation factories pass options through to the property", () => {
+  const c = collection("contact_list", () => testRefTable, { readonly: true, default: [] as any[] })
+  expect(c.getReadOnly()).toBe(true)
+
+  const l = lookup("primary_contact", () => testRefTable, { readonly: true })
+  expect(l.getReadOnly()).toBe(true)
+
+  const li = lookupId("primary_contact_id", () => testRefTable, { readonly: true })
+  expect(li.getReadOnly()).toBe(true)
+
+  const ci = collectionIds("contact_ids", () => testRefTable, { readonly: true })
+  expect(ci.getReadOnly()).toBe(true)
 })

@@ -282,7 +282,7 @@ class ODataQuery<T extends GenericProperties> {
       this.#fields = []
       this.#selectedKeys = []
       for (const [key, prop] of Object.entries(this.#table.fields) as [string, any][]) {
-        if (prop.kind === "value" || prop.type === "lookupId" || prop.type === "file" || prop.type === "image") {
+        if (prop.kind === "value" || prop.type === "lookupId") {
           this.#fields.push([prop])
           this.#selectedKeys.push(key)
         }
