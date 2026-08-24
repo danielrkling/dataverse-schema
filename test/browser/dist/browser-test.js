@@ -2967,8 +2967,7 @@
       return /* @__PURE__ */ new Date();
     }
     transformValueFromDataverse(value) {
-      if (value === void 0) return this.getDefault();
-      if (value === null) throw new Error(`Invalid datetime value: ${value}`);
+      if (value == null) return this.getDefault();
       const result = new Date(value);
       if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
       return result;
@@ -2987,8 +2986,7 @@
       return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
     }
     transformValueFromDataverse(value) {
-      if (value === void 0) return this.getDefault();
-      if (value === null) throw new Error(`Invalid date-only value: ${value}`);
+      if (value == null) return this.getDefault();
       return parseValidDateOnly(value);
     }
     transformValueToDataverse(value) {
@@ -4376,7 +4374,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T13:39:12.904Z"}
+      meta.textContent = `build ${"2026-08-24T14:40:04.318Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4465,7 +4463,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T13:39:12.904Z",
+          build: "2026-08-24T14:40:04.318Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4484,7 +4482,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T13:39:12.904Z"}\``,
+        `Build: \`${"2026-08-24T14:40:04.318Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
