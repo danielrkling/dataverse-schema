@@ -82,3 +82,41 @@ URL params also work and win over the window config:
 After a run: **Copy JSON results** / **Copy Markdown results** buttons put a structured
 report (suite, test, status, durationMs, error) on the clipboard for issue reports or
 future CI consumption.
+
+## `@tanstack/db` adapter tests (`browser-db-test.js`)
+
+A second bundle exercises the tanstack-db integration
+(`dataverseCollectionOptions` + `DataverseSyncDB`) the same way the core harness
+exercises the library. It reuses the same reporter/runner/fixtures and the same
+`dvt*` data stem + sweep, so it is safe to run in the same org.
+
+Build it with:
+
+```bash
+npm run build:browser-db-test   # → test/browser/dist/browser-db-test.js
+```
+
+Load it the same way as the core bundle (separate `<script>` tag):
+
+```js
+(function (d, s) {
+  s = d.createElement("script");
+  s.src = "https://raw.githubusercontent.com/<user>/<repo>/<branch>/test/browser/dist/browser-db-test.js?t=" + Date.now();
+  d.body.appendChild(s);
+})(document);
+```
+
+The adapter reads `navigator.onLine` live, so the **offline-queue** suite simulates
+being offline by overriding `navigator.onLine` (and dispatching `offline`/`online`
+events) for the duration of those tests, then restores it. No real network
+disconnection is required.
+
+### Suites
+
+| Suite | Covers |
+|---|---|
+| Online collection | `dataverseCollectionOptions` builds a `Collection`; `forceSync()` pulls external changes; insert/update/delete through the collection round-trip to Dataverse; `utils.table` wiring |
+| Offline queue | `DataverseSyncDB` + `createCollectionOptions`; online insert flushes immediately; offline insert is queued in IndexedDB and NOT sent; `online` event flushes the queue; `getQueueCount`/`getErroredMutations`; retry + discard of errored mutations |
+| Cross-tab | Two collections on the same `DataverseSyncDB` observe each other via `BroadcastChannel` (`MUTATIONS_ADDED` / `ABORT_ACTIVE_FETCHES`) |
+| Durability | A queued offline mutation survives reopening the same DB name (IndexedDB persistence) and flushes on reconnect; the cache store is rebuilt after a fresh sync |
+

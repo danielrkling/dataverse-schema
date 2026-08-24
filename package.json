@@ -63,6 +63,7 @@
   "scripts": {
     "build": "tsdown",
     "build:browser-test": "vite build --mode browser-test",
+    "build:browser-db-test": "vite build --mode browser-db-test",
     "dev": "vite",
     "test": "vitest run",
     "test:watch": "vitest",
