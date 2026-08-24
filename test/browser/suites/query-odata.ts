@@ -10,21 +10,26 @@ export const odataSuite: Suite = {
   title: "OData builder end-to-end",
   async setup(ctx) {
     ctx.state.parent = await seedRow(ctx, { int: 100, choice: "A", bool: true })
-    const seeds: Array<[string, number, "A" | "B" | "C"]> = [
-      ["c1", 5, "A"],
-      ["c2", 7, "C"],
-      ["c3", 42, "B"],
-      ["c4", 1, "A"],
+    const seeds: Array<[string, number, "A" | "B" | "C", boolean]> = [
+      ["c1", 5, "A", true],
+      ["c2", 7, "C", true],
+      ["c3", 42, "B", true],
+      ["c4", 1, "A", false],
     ]
     ctx.state.seeds = [] as Seed[]
-    for (const [kind, int, choice] of seeds) {
-      const id = await seedRow(ctx, { name: ctx.fx.name(kind), int, choice })
+    for (const [kind, int, choice, linked] of seeds) {
+      const id = await seedRow(ctx, {
+        name: ctx.fx.name(kind),
+        int,
+        choice,
+        ...(linked ? { testLookup: ctx.state.parent } : {}),
+      })
       ctx.state.seeds.push({ id, kind, int, choice })
     }
   },
   tests: (ctx) => {
     const allIds: string[] = [ctx.state.parent, ...ctx.state.seeds.map((s: Seed) => s.id)]
-    const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`
+    const scope = `startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`
     return [
       {
         name: "select narrows the row shape",
@@ -62,12 +67,12 @@ export const odataSuite: Suite = {
         fn: async () => {
           const contained = await fetchOdata(ctx.tables.TestTable)
             .select("id")
-            .filter((f) => contains(f.name, ctx.fx.runPrefix))
+            .filter((f) => contains(f.name, ctx.fx.scopePrefix))
             .execute()
           assertEquals(contained.length, 5, "all rows contain run prefix")
           const prefixed = await fetchOdata(ctx.tables.TestTable)
             .select("id")
-            .filter((f) => contains(f.name, `${ctx.fx.runPrefix}-c1`))
+            .filter((f) => contains(f.name, `${ctx.fx.scopePrefix}-c1`))
             .execute()
           assertEquals(prefixed.length, 1, "startsWith narrows to c1")
         },
@@ -80,7 +85,8 @@ export const odataSuite: Suite = {
             .filter(scope)
             .filter((f) => and(gt(f.int, 6), lt(f.int, 50)))
             .execute()
-          assertEquals(rows.map((r) => r.int).sort(), [7, 42], "windowed ints")
+          const ints = rows.map((r) => r.int)
+          assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
         },
       },
       {
@@ -91,7 +97,8 @@ export const odataSuite: Suite = {
             .filter(scope)
             .filter((f) => and(or(eq(f.int, 5), eq(f.int, 42)), not(eq(f.choice, "B"))))
             .execute()
-          assertEquals(rows.map((r) => r.int).sort(), [5, 42], "composed filter ints")
+          const composedInts = rows.map((r) => r.int)
+          assertEquals(composedInts.sort((a, b) => a - b), [5, 42], `composed filter ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
           assertEquals(rows.every((r) => r.choice !== "B"), true, "not(B) respected")
         },
       },

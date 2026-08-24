@@ -14,7 +14,7 @@ async function boot(): Promise<void> {
   const runner = new Runner({ client, tables, cfg, fx })
   const reporter = new Reporter(runner, suites, {
     orgUrl: client.options.url ?? "unknown",
-    runPrefix: fx.runPrefix,
+    dataStem: fx.sessionPrefix,
     sweep: () => sweepOrphans(tables.TestTable),
   })
   reporter.mount(document.body)

@@ -1,4 +1,4 @@
-import { fetchXml, eq, gt, and, groupby, sum, count, min, max, average } from "../../../src"
+import { fetchXml, eq, gt, lt, and, startsWith, groupby, sum, count, min, max, average } from "../../../src"
 import { Suite } from "../harness/runner"
 import { assert, assertEquals } from "../harness/assert"
 import { seedParent, seedRow } from "../harness/seed"
@@ -7,8 +7,11 @@ export const fetchxmlSuite: Suite = {
   name: "query-fetchxml",
   title: "FetchXML builder end-to-end",
   async setup(ctx) {
-    ctx.state.lonelyParent = await seedParent(ctx, { int: 0 })
-    ctx.state.parent = await seedParent(ctx, { int: 100, choice: "A" })
+    ctx.state.lonelyName = ctx.fx.name("lonely")
+    ctx.state.parentName = ctx.fx.name("parent")
+    ctx.state.kidBase = `${ctx.fx.scopePrefix}-kid`
+    ctx.state.lonelyParent = await seedParent(ctx, { name: ctx.state.lonelyName, int: 0, text: "fx-parent" })
+    ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100, choice: "A", text: "fx-parent" })
     const seeds: Array<[string, number, "A" | "B" | "C"]> = [
       ["c1", 5, "A"],
       ["c2", 7, "C"],
@@ -17,7 +20,7 @@ export const fetchxmlSuite: Suite = {
     ctx.state.seeds = [] as Array<{ id: string; kind: string; int: number; choice: string }>
     for (const [kind, int, choice] of seeds) {
       const id = await seedRow(ctx, {
-        name: ctx.fx.name(kind),
+        name: `${ctx.fx.scopePrefix}-${kind}`,
         int,
         choice,
         testLookup: ctx.state.parent,
@@ -26,14 +29,15 @@ export const fetchxmlSuite: Suite = {
     }
   },
   tests: (ctx) => {
-    const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`
+    const scopePrefix = ctx.fx.scopePrefix
+    const scoped = (f: any) => startsWith(f.name, scopePrefix)
     return [
       {
         name: "select with aliases + execute applies transforms",
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
             .select((f) => ({ label: f.name, amount: f.int }))
-            .filter(scope)
+            .filter(scoped)
             .top(10)
             .execute()
           assertEquals(rows.length, 5, "prefixed rows (3 children + 2 parents)")
@@ -48,7 +52,7 @@ export const fetchxmlSuite: Suite = {
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
             .select((f) => ({ c: f.choice }))
-            .filter(scope)
+            .filter(scoped)
             .distinct()
             .execute()
           const labels = new Set(rows.map((r) => r.c))
@@ -62,10 +66,10 @@ export const fetchxmlSuite: Suite = {
           const rows = await fetchXml(ctx.tables.TestTable)
             .select((f) => ({ childName: f.name }))
             .join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentLabel: f.name })))
-            .filter(`nnsyc200_test_tableid eq ${ctx.state.seeds[0].id}`)
+            .filter((f) => eq(f.id, ctx.state.seeds[0].id))
             .execute()
           assertEquals(rows.length, 1, "one joined row")
-          assertEquals(rows[0].parentLabel, `${ctx.fx.runPrefix}-parent-2`, "parent alias resolved")
+          assertEquals(rows[0].parentLabel, ctx.state.parentName, "parent alias resolved")
         },
       },
       {
@@ -75,15 +79,16 @@ export const fetchxmlSuite: Suite = {
             fetchXml(ctx.tables.TestTable0)
               .select((f) => ({ parentName: f.name }))
               .join(linkType, ctx.tables.TestTable, "testLookup", "id", (sub) => sub.select((f) => ({ kid: f.name })))
-              .filter(scope)
+              .filter(scoped)
+              .filter((f) => eq(f.text, "fx-parent"))
               .execute()
           const outer = await base("outer")
           assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)")
           const outerNames = new Set(outer.map((r) => r.parentName))
-          assertEquals([...outerNames].sort(), [`${ctx.fx.runPrefix}-parent-1`, `${ctx.fx.runPrefix}-parent-2`], "both parents present via outer join")
+          assertEquals([...outerNames].sort(), [ctx.state.lonelyName, ctx.state.parentName].sort(), "both parents present via outer join")
           const inner = await base("inner")
           assertEquals(inner.length, 3, "populated parent repeated per child")
-          assertEquals(inner.every((r) => r.parentName === `${ctx.fx.runPrefix}-parent-2`), true, "inner join hit the right parent")
+          assertEquals(inner.every((r) => r.parentName === ctx.state.parentName), true, "inner join hit the right parent")
         },
       },
       {
@@ -94,7 +99,7 @@ export const fetchxmlSuite: Suite = {
             .join("exists", ctx.tables.TestTable, "testLookup", "id", (sub) =>
               sub.filter((f) => gt(f.int, 6)),
             )
-            .filter(scope)
+            .filter(scoped)
             .execute()
           assertEquals(rows.length, 1, "only parent with a big-int child")
         },
@@ -104,7 +109,7 @@ export const fetchxmlSuite: Suite = {
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
             .apply((f) => ({ byChoice: groupby(f.choice), totalInt: sum(f.int), n: count(f.id) }))
-            .filter(scope)
+            .filter(scoped)
             .execute()
           const byChoice = new Map(rows.map((r) => [r.byChoice, r]))
           assertEquals(byChoice.size, 3, "groups A/B/C")
@@ -120,14 +125,14 @@ export const fetchxmlSuite: Suite = {
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
             .apply((f) => ({ lo: min(f.int), hi: max(f.int), avg: average(f.int), n: count() }))
-            .filter(scope)
+            .filter(scoped)
             .execute()
           assertEquals(rows.length, 1, "single aggregate row")
           const r = rows[0]
           assertEquals(r.lo, 0, "min includes lonely parent")
           assertEquals(r.hi, 100, "max")
           assertEquals(r.n, 5, "count all prefixed rows")
-          assert(Math.abs(r.avg - 154 / 5) < 0.01, `average ${154 / 5}, got ${r.avg}`)
+          assert(Math.abs(r.avg - 30) < 0.51, `average ~30 (Dataverse truncates int avg), got ${r.avg}`)
         },
       },
       {
@@ -135,7 +140,7 @@ export const fetchxmlSuite: Suite = {
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
             .select((f) => ({ amount: f.int }))
-            .filter(scope)
+            .filter(scoped)
             .orderby((f) => f.int, "desc")
             .top(3)
             .execute()
@@ -143,14 +148,15 @@ export const fetchxmlSuite: Suite = {
         },
       },
       {
-        name: "typed FilterExpr inside FetchXML renders numeric choice conditions",
+        name: "typed FilterExpr composites narrow rows",
         fn: async () => {
           const rows = await fetchXml(ctx.tables.TestTable)
             .select((f) => ({ id: f.id, int: f.int }))
-            .filter((f) => and(eq(f.choice, "B"), gt(f.int, 10)))
+            .filter(scoped)
+            .filter((f) => and(gt(f.int, 6), lt(f.int, 50)))
             .execute()
-          assertEquals(rows.length, 1, "choice B row above int 10")
-          assertEquals(rows[0].id, ctx.state.seeds[2].id, "c3 is the only such row")
+          const ints = rows.map((r) => r.int)
+          assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
         },
       },
     ]

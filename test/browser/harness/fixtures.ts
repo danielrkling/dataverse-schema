@@ -3,6 +3,8 @@ import { GUID, DataverseTable } from "../../../src"
 export class FixtureTracker {
   readonly sessionPrefix = `dvt${Date.now().toString(36)}`
   private runIndex = 0
+  private tag = ""
+  private counters: Record<string, number> = {}
   readonly ids: GUID[] = []
 
   beginRun(): void {
@@ -10,8 +12,14 @@ export class FixtureTracker {
     this.ids.length = 0
   }
 
-  get runPrefix(): string {
-    return `${this.sessionPrefix}-r${this.runIndex}`
+  beginSuite(tag: string): void {
+    this.tag = tag
+    this.counters = {}
+  }
+
+  /** Prefix that uniquely identifies the CURRENT suite's data (used by scoped filters). */
+  get scopePrefix(): string {
+    return `${this.sessionPrefix}-r${this.runIndex}-${this.tag}`
   }
 
   track(id: GUID | undefined | null): GUID {
@@ -21,7 +29,9 @@ export class FixtureTracker {
   }
 
   name(kind: string): string {
-    return `${this.runPrefix}-${kind}`
+    const n = (this.counters[kind] ?? 0) + 1
+    this.counters[kind] = n
+    return `${this.scopePrefix}-${kind}-${n}`
   }
 }
 

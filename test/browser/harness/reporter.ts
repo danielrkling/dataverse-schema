@@ -32,7 +32,7 @@ export class Reporter {
   constructor(
     private readonly runner: Runner,
     private readonly suites: Suite[],
-    private readonly ctxMeta: { orgUrl: string; runPrefix: string; sweep: () => Promise<number> },
+    private readonly ctxMeta: { orgUrl: string; dataStem: string; sweep: () => Promise<number> },
   ) {}
 
   mount(parent: HTMLElement): void {
@@ -89,7 +89,7 @@ export class Reporter {
 
     const meta = document.createElement("div")
     meta.className = "dvt-meta"
-    meta.textContent = `build ${__BUILD_STAMP__}\norg ${this.ctxMeta.orgUrl}\nrun prefix ${this.ctxMeta.runPrefix}`
+    meta.textContent = `build ${__BUILD_STAMP__}\norg ${this.ctxMeta.orgUrl}\ndata stem ${this.ctxMeta.dataStem} (auto-swept before each run)`
 
     const copyJson = document.createElement("button")
     copyJson.className = "dvt-button secondary"

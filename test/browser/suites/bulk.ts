@@ -15,7 +15,7 @@ export const bulkSuite: Suite = {
     }
   },
   tests: (ctx) => {
-    const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}-bulk-')`
+    const scope = `startswith(nnsyc200_name,'${ctx.fx.scopePrefix}-bulk')`
     return [
       {
         name: "seeded bulk rows are all present",

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
-  primaryKey, string, number, choice, fetchXml, eq, FieldRef,
+  primaryKey, string, number, choice, fetchXml, eq, gt, and, FieldRef,
   groupby, sum, count, average,
 } from "../src"
 
@@ -202,4 +202,25 @@ test("average aggregates serialize as FetchXML avg", () => {
   const q = fetchXml(Account)
     .apply(f => ({ mean: average(f.revenue), byStatus: groupby(f.status) }))
   expect(q.toXml()).toContain(`<attribute name="revenue" alias="mean" aggregate='avg' />`)
+})
+
+test("chained filters render as siblings inside one filter element", () => {
+  const xml = fetchXml(Account)
+    .select(f => ({ n: f.name }))
+    .filter("revenue gt 5")
+    .filter(f => eq(f.status, "Active"))
+    .toXml()
+  expect(xml).toContain("<filter type=\"and\">")
+  expect(xml).toContain("revenue gt 5")
+  expect(xml).toContain(`<condition attribute="statuscode" operator="eq" value="1" />`)
+})
+
+test("composite and() filters nest as a filter group", () => {
+  const xml = fetchXml(Account)
+    .select(f => ({ n: f.name }))
+    .filter(f => and(eq(f.name, "A"), gt(f.revenue, 1)))
+    .toXml()
+  expect(xml).toContain(
+    `<filter type="and"><condition attribute="name" operator="eq" value="A" /><condition attribute="revenue" operator="gt" value="1" /></filter>`,
+  )
 })

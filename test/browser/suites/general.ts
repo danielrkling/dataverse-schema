@@ -9,9 +9,11 @@ export const generalSuite: Suite = {
   name: "general",
   title: "General smoke",
   async setup(ctx) {
-    ctx.state.parent = await seedParent(ctx, { int: 100, bool: true, text: "parent" })
+    ctx.state.parentName = ctx.fx.name("parent")
+    ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100, bool: true, text: "parent" })
+    ctx.state.childName = ctx.fx.name("child")
     ctx.state.child = await seedRow(ctx, {
-      name: ctx.fx.name("child"),
+      name: ctx.state.childName,
       int: 5,
       bool: true,
       text: "child",
@@ -40,7 +42,7 @@ export const generalSuite: Suite = {
       name: "getRecords filter/orderby/top (OData, transformed)",
       fn: async () => {
         const rows = await ctx.tables.TestTable.getRecords({
-          filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`,
+          filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`,
           orderby: "nnsyc200_name asc",
           top: 10,
         })
@@ -97,7 +99,7 @@ export const generalSuite: Suite = {
           .execute()
         assert(rows.length === 1, "expected exactly the child row")
         const nav = rows[0].testLookupNav
-        assert(nav && nav.name === `${ctx.fx.runPrefix}-parent-1`, `expand failed: ${JSON.stringify(nav)}`)
+        assert(nav && nav.name === ctx.state.parentName, `expand failed: ${JSON.stringify(nav)}`)
         assert(nav.createdOn instanceof Date, "related createdOn not transformed to Date")
         assert(typeof nav.int === "number", "related int not transformed")
       },
@@ -107,7 +109,7 @@ export const generalSuite: Suite = {
       fn: async () => {
         const rows = await fetchXml(ctx.tables.TestTable)
           .select((f) => ({ name: f.name, int: f.int, bool: f.bool, datetime: f.datetime }))
-          .filter((f) => and(eq(f.name, ctx.fx.name("child")), gt(f.int, 0)))
+          .filter((f) => and(eq(f.name, ctx.state.childName), gt(f.int, 0)))
           .execute()
         assert(rows.length >= 1, "expected fetchxml rows")
         const r = rows[0]
@@ -122,10 +124,10 @@ export const generalSuite: Suite = {
         const base = fetchXml(ctx.tables.TestTable)
           .select((f) => ({ name: f.name, datetime: f.datetime, int: f.int }))
           .join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name })))
-          .filter(`nnsyc200_test_tableid eq ${ctx.state.child}`)
+          .filter((f) => eq(f.id, ctx.state.child))
         const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: base.toString() })
         assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join")
-        assertEquals(raw[0].parentName, `${ctx.fx.runPrefix}-parent`, "joined alias column present in raw payload")
+        assertEquals(raw[0].parentName, ctx.state.parentName, "joined alias column present in raw payload")
         const transformed = await base.execute()
         assert(transformed[0].datetime instanceof Date, "main-entity transforms on joined query")
       },

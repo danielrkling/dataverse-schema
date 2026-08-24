@@ -62,6 +62,7 @@ export class Runner {
 
     for (const suite of suites) {
       events.onSuiteStart?.(suite)
+      this.base.fx.beginSuite(suite.name)
       const ctx: SuiteCtx = { ...this.base, state: {} }
 
       let setupError: unknown

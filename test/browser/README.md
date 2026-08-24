@@ -50,6 +50,13 @@ they use ambient auth (`location.origin`) — no tokens or config needed.
 
 \* skips unless configured below.
 
+## Filter dialect note
+
+`fetchXml(...).filter(...)` accepts typed expressions (`eq`, `startsWith`, …) or **raw
+FetchXML condition markup** (`<condition attribute="x" operator="eq" value="1" />`).
+Raw *OData-style* text like `name eq 'x'` is not valid FetchXML and Dataverse silently
+ignores it — prefer typed expressions.
+
 ## Configuration
 
 Defaults target `nnsyc200_test_table`. Override before loading the script:

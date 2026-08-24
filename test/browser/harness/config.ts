@@ -17,6 +17,7 @@ const defaults: BrowserTestConfig = {
   logicalName: "nnsyc200_test_table",
   collectionNav: "nnsyc200_test_table_Test_Lookup_nnsyc200_test_table",
   altKeyAttribute: "nnsyc200_alt_key",
+  globalOptionSet: "nnsyc200_test_choice",
 }
 
 const paramMap: Record<string, keyof BrowserTestConfig> = {
