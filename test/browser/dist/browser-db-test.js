@@ -3252,7 +3252,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T16:41:51.574Z"}
+      meta.textContent = `build ${"2026-08-24T16:45:11.142Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3341,7 +3341,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T16:41:51.574Z",
+          build: "2026-08-24T16:45:11.142Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3360,7 +3360,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T16:41:51.574Z"}\``,
+        `Build: \`${"2026-08-24T16:45:11.142Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -11066,7 +11066,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
   }
 
-  const MAX_ATTEMPTS = 3;
   const offlineQueueSuite = {
     name: "offline-queue",
     title: "Offline mutation queue (DataverseSyncDB)",
@@ -11214,10 +11213,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               attempts: 0,
               ifMatch: 'W/"999999"'
             });
-            for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
+            await waitFor(async () => {
               await flush(db);
-              await new Promise((r) => setTimeout(r, 80));
-            }
+              await new Promise((r) => setTimeout(r, 1300));
+              const errored2 = await readErrored(db);
+              return errored2.some((m) => m.id === eid);
+            }, 2e4, 1300);
             const errored = await readErrored(db);
             assert(errored.length >= 1, `expected the failing mutation in errored store (got ${errored.length})`);
             const found = errored.find((m) => m.id === eid);

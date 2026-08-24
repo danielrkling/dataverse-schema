@@ -5,8 +5,6 @@ import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
 import { makeSyncDB, readQueue, readErrored, simulateOffline, enqueueRaw, flush, forceVisible, waitFor } from "../db-helper"
 
-const MAX_ATTEMPTS = 3
-
 export const offlineQueueSuite: Suite = {
   name: "offline-queue",
   title: "Offline mutation queue (DataverseSyncDB)",
@@ -159,10 +157,16 @@ export const offlineQueueSuite: Suite = {
             attempts: 0,
             ifMatch: 'W/"999999"',
           })
-          for (let i = 0; i < MAX_ATTEMPTS + 2; i++) {
+          // The adapter uses an exponential retry backoff (1s, 2s, 4s, ...) and
+          // skips flushing a mutation whose nextAttemptAt is still in the future.
+          // So we flush, then wait past the backoff, repeating until the mutation
+          // exhausts its attempts and lands in the errored store.
+          await waitFor(async () => {
             await flush(db)
-            await new Promise((r) => setTimeout(r, 80))
-          }
+            await new Promise((r) => setTimeout(r, 1300))
+            const errored = await readErrored(db)
+            return errored.some((m) => m.id === eid)
+          }, 20000, 1300)
           const errored = await readErrored(db)
           assert(errored.length >= 1, `expected the failing mutation in errored store (got ${errored.length})`)
           const found = errored.find((m) => m.id === eid)
