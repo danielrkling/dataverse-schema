@@ -4338,7 +4338,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T12:18:57.818Z"}
+      meta.textContent = `build ${"2026-08-24T12:26:47.927Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4427,7 +4427,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T12:18:57.818Z",
+          build: "2026-08-24T12:26:47.927Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4446,7 +4446,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T12:18:57.818Z"}\``,
+        `Build: \`${"2026-08-24T12:26:47.927Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4865,14 +4865,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           name: "comparison operators gt/ge/lt/le windows",
           fn: async () => {
             const rows = await fetchOdata(ctx.tables.TestTable).select("int").filter(scope).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
-            assertEquals(rows.map((r) => r.int).sort(), [7, 42], "windowed ints");
+            const ints = rows.map((r) => r.int);
+            assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
           }
         },
         {
           name: "and / or / not composition",
           fn: async () => {
             const rows = await fetchOdata(ctx.tables.TestTable).select("int", "choice").filter(scope).filter((f) => and(or(eq(f.int, 5), eq(f.int, 42)), not(eq(f.choice, "B")))).execute();
-            assertEquals(rows.map((r) => r.int).sort(), [5, 42], "composed filter ints");
+            const composedInts = rows.map((r) => r.int);
+            assertEquals(composedInts.sort((a, b) => a - b), [5, 42], `composed filter ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
             assertEquals(rows.every((r) => r.choice !== "B"), true, "not(B) respected");
           }
         },
@@ -5071,7 +5073,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           name: "typed FilterExpr composites narrow rows",
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ id: f.id, int: f.int })).filter(scoped).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
-            assertEquals(rows.map((r) => r.int).sort(), [7, 42], "windowed ints");
+            const ints = rows.map((r) => r.int);
+            assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
           }
         }
       ];
