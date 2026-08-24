@@ -4078,13 +4078,20 @@
   class FixtureTracker {
     sessionPrefix = `dvt${Date.now().toString(36)}`;
     runIndex = 0;
+    tag = "";
+    counters = {};
     ids = [];
     beginRun() {
       this.runIndex++;
       this.ids.length = 0;
     }
-    get runPrefix() {
-      return `${this.sessionPrefix}-r${this.runIndex}`;
+    beginSuite(tag) {
+      this.tag = tag;
+      this.counters = {};
+    }
+    /** Prefix that uniquely identifies the CURRENT suite's data (used by scoped filters). */
+    get scopePrefix() {
+      return `${this.sessionPrefix}-r${this.runIndex}-${this.tag}`;
     }
     track(id) {
       if (!id) throw new Error("track() called without an id");
@@ -4092,7 +4099,9 @@
       return id;
     }
     name(kind) {
-      return `${this.runPrefix}-${kind}`;
+      const n = (this.counters[kind] ?? 0) + 1;
+      this.counters[kind] = n;
+      return `${this.scopePrefix}-${kind}-${n}`;
     }
   }
   function pngBlob() {
@@ -4173,6 +4182,7 @@
       this.base.fx.beginRun();
       for (const suite of suites) {
         events.onSuiteStart?.(suite);
+        this.base.fx.beginSuite(suite.name);
         const ctx = { ...this.base, state: {} };
         let setupError;
         const cases = (() => {
@@ -4328,9 +4338,9 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T11:42:57.169Z"}
+      meta.textContent = `build ${"2026-08-24T12:06:12.465Z"}
 org ${this.ctxMeta.orgUrl}
-run prefix ${this.ctxMeta.runPrefix}`;
+data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
       copyJson.className = "dvt-button secondary";
       copyJson.textContent = "Copy JSON results";
@@ -4417,7 +4427,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T11:42:57.169Z",
+          build: "2026-08-24T12:06:12.465Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4436,7 +4446,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T11:42:57.169Z"}\``,
+        `Build: \`${"2026-08-24T12:06:12.465Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4483,14 +4493,14 @@ tracked records deleted after run: ${summary.cleanedUp}`;
 
   async function seedRow(ctx, overrides = {}) {
     const id = await ctx.tables.TestTable.createRecord({
-      name: ctx.fx.name(overrides.name ?? `row-${ctx.fx.ids.length + 1}`),
+      name: ctx.fx.name("row"),
       ...overrides
     });
     return ctx.fx.track(id);
   }
   async function seedParent(ctx, overrides = {}) {
     const id = await ctx.tables.TestTable0.createRecord({
-      name: ctx.fx.name(`parent-${ctx.fx.ids.length + 1}`),
+      name: ctx.fx.name("parent"),
       ...overrides
     });
     return ctx.fx.track(id);
@@ -4507,7 +4517,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     name: "general",
     title: "General smoke",
     async setup(ctx) {
-      ctx.state.parent = await seedParent(ctx, { int: 100, bool: true, text: "parent" });
+      ctx.state.parentName = ctx.fx.name("parent");
+      ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100, bool: true, text: "parent" });
       ctx.state.child = await seedRow(ctx, {
         name: ctx.fx.name("child"),
         int: 5,
@@ -4538,7 +4549,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "getRecords filter/orderby/top (OData, transformed)",
         fn: async () => {
           const rows = await ctx.tables.TestTable.getRecords({
-            filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`,
+            filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`,
             orderby: "nnsyc200_name asc",
             top: 10
           });
@@ -4582,7 +4593,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const rows = await fetchOdata(ctx.tables.TestTable).select("name").expand("testLookupNav", (q) => q.select("name", "createdOn", "int")).filter(`nnsyc200_test_tableid eq ${ctx.state.child}`).execute();
           assert(rows.length === 1, "expected exactly the child row");
           const nav = rows[0].testLookupNav;
-          assert(nav && nav.name === `${ctx.fx.runPrefix}-parent-1`, `expand failed: ${JSON.stringify(nav)}`);
+          assert(nav && nav.name === ctx.state.parentName, `expand failed: ${JSON.stringify(nav)}`);
           assert(nav.createdOn instanceof Date, "related createdOn not transformed to Date");
           assert(typeof nav.int === "number", "related int not transformed");
         }
@@ -4604,7 +4615,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const base = fetchXml(ctx.tables.TestTable).select((f) => ({ name: f.name, datetime: f.datetime, int: f.int })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentName: f.name }))).filter((f) => eq(f.id, ctx.state.child));
           const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, { query: base.toString() });
           assert(Array.isArray(raw) && raw.length === 1, "expected the child row via join");
-          assertEquals(raw[0].parentName, `${ctx.fx.runPrefix}-parent-1`, "joined alias column present in raw payload");
+          assertEquals(raw[0].parentName, ctx.state.parentName, "joined alias column present in raw payload");
           const transformed = await base.execute();
           assert(transformed[0].datetime instanceof Date, "main-entity transforms on joined query");
         }
@@ -4796,20 +4807,25 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     async setup(ctx) {
       ctx.state.parent = await seedRow(ctx, { int: 100, choice: "A", bool: true });
       const seeds = [
-        ["c1", 5, "A"],
-        ["c2", 7, "C"],
-        ["c3", 42, "B"],
-        ["c4", 1, "A"]
+        ["c1", 5, "A", true],
+        ["c2", 7, "C", true],
+        ["c3", 42, "B", true],
+        ["c4", 1, "A", false]
       ];
       ctx.state.seeds = [];
-      for (const [kind, int, choice] of seeds) {
-        const id = await seedRow(ctx, { name: ctx.fx.name(kind), int, choice });
+      for (const [kind, int, choice, linked] of seeds) {
+        const id = await seedRow(ctx, {
+          name: ctx.fx.name(kind),
+          int,
+          choice,
+          ...linked ? { testLookup: ctx.state.parent } : {}
+        });
         ctx.state.seeds.push({ id, kind, int, choice });
       }
     },
     tests: (ctx) => {
       const allIds = [ctx.state.parent, ...ctx.state.seeds.map((s) => s.id)];
-      const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}')`;
+      const scope = `startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`;
       return [
         {
           name: "select narrows the row shape",
@@ -4838,9 +4854,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "contains / startsWith string functions",
           fn: async () => {
-            const contained = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => contains(f.name, ctx.fx.runPrefix)).execute();
+            const contained = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => contains(f.name, ctx.fx.scopePrefix)).execute();
             assertEquals(contained.length, 5, "all rows contain run prefix");
-            const prefixed = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => contains(f.name, `${ctx.fx.runPrefix}-c1`)).execute();
+            const prefixed = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => contains(f.name, `${ctx.fx.scopePrefix}-c1`)).execute();
             assertEquals(prefixed.length, 1, "startsWith narrows to c1");
           }
         },
@@ -4939,8 +4955,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     name: "query-fetchxml",
     title: "FetchXML builder end-to-end",
     async setup(ctx) {
-      ctx.state.lonelyParent = await seedParent(ctx, { int: 0 });
-      ctx.state.parent = await seedParent(ctx, { int: 100, choice: "A" });
+      ctx.state.lonelyName = ctx.fx.name("lonely");
+      ctx.state.parentName = ctx.fx.name("parent");
+      ctx.state.kidBase = `${ctx.fx.scopePrefix}-kid`;
+      ctx.state.lonelyParent = await seedParent(ctx, { name: ctx.state.lonelyName, int: 0 });
+      ctx.state.parent = await seedParent(ctx, { name: ctx.state.parentName, int: 100, choice: "A" });
       const seeds = [
         ["c1", 5, "A"],
         ["c2", 7, "C"],
@@ -4949,7 +4968,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       ctx.state.seeds = [];
       for (const [kind, int, choice] of seeds) {
         const id = await seedRow(ctx, {
-          name: ctx.fx.name(kind),
+          name: `${ctx.fx.scopePrefix}-${kind}`,
           int,
           choice,
           testLookup: ctx.state.parent
@@ -4958,7 +4977,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     },
     tests: (ctx) => {
-      const scopePrefix = ctx.fx.runPrefix;
+      const scopePrefix = ctx.fx.scopePrefix;
       const scoped = (f) => startsWith(f.name, scopePrefix);
       return [
         {
@@ -4986,7 +5005,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ childName: f.name })).join("inner", ctx.tables.TestTable0, "id", "testLookup", (sub) => sub.select((f) => ({ parentLabel: f.name }))).filter((f) => eq(f.id, ctx.state.seeds[0].id)).execute();
             assertEquals(rows.length, 1, "one joined row");
-            assertEquals(rows[0].parentLabel, `${ctx.fx.runPrefix}-parent-2`, "parent alias resolved");
+            assertEquals(rows[0].parentLabel, ctx.state.parentName, "parent alias resolved");
           }
         },
         {
@@ -4996,10 +5015,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const outer = await base("outer");
             assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)");
             const outerNames = new Set(outer.map((r) => r.parentName));
-            assertEquals([...outerNames].sort(), [`${ctx.fx.runPrefix}-parent-1`, `${ctx.fx.runPrefix}-parent-2`], "both parents present via outer join");
+            assertEquals([...outerNames].sort(), [ctx.state.lonelyName, ctx.state.parentName].sort(), "both parents present via outer join");
             const inner = await base("inner");
             assertEquals(inner.length, 3, "populated parent repeated per child");
-            assertEquals(inner.every((r) => r.parentName === `${ctx.fx.runPrefix}-parent-2`), true, "inner join hit the right parent");
+            assertEquals(inner.every((r) => r.parentName === ctx.state.parentName), true, "inner join hit the right parent");
           }
         },
         {
@@ -5261,7 +5280,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     },
     tests: (ctx) => {
-      const scope = `startswith(nnsyc200_name,'${ctx.fx.runPrefix}-bulk-')`;
+      const scope = `startswith(nnsyc200_name,'${ctx.fx.scopePrefix}-bulk')`;
       return [
         {
           name: "seeded bulk rows are all present",
@@ -5388,7 +5407,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     const runner = new Runner({ client, tables, cfg, fx });
     const reporter = new Reporter(runner, suites, {
       orgUrl: client.options.url ?? "unknown",
-      runPrefix: fx.runPrefix,
+      dataStem: fx.sessionPrefix,
       sweep: () => sweepOrphans(tables.TestTable)
     });
     reporter.mount(document.body);
