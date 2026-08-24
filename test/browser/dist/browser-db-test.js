@@ -3252,7 +3252,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T16:30:52.513Z"}
+      meta.textContent = `build ${"2026-08-24T16:41:51.574Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3341,7 +3341,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T16:30:52.513Z",
+          build: "2026-08-24T16:41:51.574Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3360,7 +3360,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T16:30:52.513Z"}\``,
+        `Build: \`${"2026-08-24T16:41:51.574Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -10226,7 +10226,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       onInsert: defaultOnInsert,
       onUpdate: defaultOnUpdate,
       onDelete: defaultOnDelete,
-      utils
+      utils,
+      // Begin syncing immediately on creation rather than waiting for the
+      // first subscriber to attach (the default for @tanstack/db collections).
+      startSync: true
     };
   }
 
@@ -10888,7 +10891,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         sync: syncConfig,
         onInsert: defaultMutation,
         onUpdate: defaultMutation,
-        onDelete: defaultMutation
+        onDelete: defaultMutation,
+        // Begin syncing immediately on creation rather than waiting for the
+        // first subscriber to attach (the default for @tanstack/db collections).
+        startSync: true
       };
     }
   }

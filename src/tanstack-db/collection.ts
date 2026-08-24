@@ -120,5 +120,8 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         onUpdate: defaultOnUpdate,
         onDelete: defaultOnDelete,
         utils,
+        // Begin syncing immediately on creation rather than waiting for the
+        // first subscriber to attach (the default for @tanstack/db collections).
+        startSync: true,
     }
 }

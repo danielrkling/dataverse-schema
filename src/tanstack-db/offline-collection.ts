@@ -462,6 +462,9 @@ export class DataverseSyncDB {
             onInsert: defaultMutation,
             onUpdate: defaultMutation,
             onDelete: defaultMutation,
+            // Begin syncing immediately on creation rather than waiting for the
+            // first subscriber to attach (the default for @tanstack/db collections).
+            startSync: true,
         } as CollectionConfig<Infer<T>, string | number, never>;
     }
 }
