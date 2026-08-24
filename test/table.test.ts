@@ -134,10 +134,13 @@ test("transformValueFromDataverse defaults fields absent from the payload", () =
   expect(result.createdOn).toBeInstanceOf(Date)
 })
 
-test("transformValueFromDataverse throws when a non-nullable datetime is null", () => {
-  expect(() => Account.transformValueFromDataverse({
-    accountid: "a1", name: "A", revenue: 0, statuscode: 1, createdon: null,
-  })).toThrow("Invalid datetime value")
+test("transformValueFromDataverse normalizes nulls for non-nullable fields", () => {
+  const result = Account.transformValueFromDataverse({
+    accountid: null, name: null, revenue: null, statuscode: 1, createdon: null,
+  })
+  expect(result.name).toBe("")
+  expect(result.revenue).toBe(0)
+  expect(result.createdOn).toBeInstanceOf(Date)
 })
 
 test("transformValueFromDataverse transforms expanded navigation records", () => {

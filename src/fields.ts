@@ -43,8 +43,10 @@ export type TransformContext = {
  *
  * ## Transform contract
  * - `transformValueFromDataverse(value, ctx?)` converts a raw API payload into the
- *   typed record value. Non-nullable fields **throw** when Dataverse returns null;
- *   use the `nullable*` variants to allow null.
+ *   typed record value. Dataverse represents empty columns as explicit `null` (or
+ *   omits the key entirely); non-nullable fields fold both into their field default.
+ *   Use the `nullable*` variants to preserve empties as `null`. Values that are
+ *   present but malformed still throw.
  * - `transformValueToDataverse(value, ctx?)` converts a record value into its API
  *   payload. It may return synchronously or return a `Promise`. Returning the
  *   {@link SKIP} symbol excludes the value from the request body (used by file/image
@@ -349,8 +351,7 @@ export class DateTimeField extends FieldBase<Date> {
     return new Date();
   }
   transformValueFromDataverse(value: any): Date {
-    if (value === undefined) return this.getDefault();
-    if (value === null) throw new Error(`Invalid datetime value: ${value}`);
+    if (value == null) return this.getDefault();
     const result = new Date(value);
     if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
     return result;
@@ -388,8 +389,7 @@ export class DateField extends FieldBase<Date> {
     return parseDateOnly(new Date().toISOString());
   }
   transformValueFromDataverse(value: any): Date {
-    if (value === undefined) return this.getDefault();
-    if (value === null) throw new Error(`Invalid date-only value: ${value}`);
+    if (value == null) return this.getDefault();
     return parseValidDateOnly(value);
   }
   transformValueToDataverse(value: any) {
@@ -567,8 +567,7 @@ export class JsonField<T> extends FieldBase<T> {
   }
 
   transformValueFromDataverse(value: any): T {
-    if (value === undefined) return this.getDefault();
-    if (value === null) throw new Error(`Invalid json value: ${value}`);
+    if (value == null) return this.getDefault();
     const raw = typeof value === "string" ? JSON.parse(value) : value;
     return v.parse(this.schema, raw);
   }
@@ -815,7 +814,8 @@ export function image(name: string, options?: FieldOptions<ImageRef | null>) {
 }
 
 /**
- * Creates a file column definition. File columns are read-only and store the file name.
+ * Creates a file column definition. The column value is server-managed; upload or
+ * clear file contents through the explicit `{ name?, data }` channel.
  *
  * @param name The Dataverse logical name of the file column.
  */

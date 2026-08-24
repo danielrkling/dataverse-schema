@@ -75,13 +75,9 @@ test("datetime transformValueFromDataverse converts string to Date", () => {
   expect(result.getFullYear()).toBe(2024)
 })
 
-test("datetime transformValueFromDataverse throws on null", () => {
+test("datetime transformValueFromDataverse folds null and absent into the default", () => {
   const f = datetime("createdon")
-  expect(() => f.transformValueFromDataverse(null)).toThrow("Invalid datetime value")
-})
-
-test("datetime transformValueFromDataverse defaults absent values", () => {
-  const f = datetime("createdon")
+  expect(f.transformValueFromDataverse(null)).toBeInstanceOf(Date)
   expect(f.transformValueFromDataverse(undefined)).toBeInstanceOf(Date)
 })
 
@@ -110,13 +106,9 @@ test("date field transformValueToDataverse formats as date-only", () => {
   expect(result).toBe("2024-01-15")
 })
 
-test("date field throws on null input", () => {
+test("date field folds null and absent into the default", () => {
   const f = date("birthdate")
-  expect(() => f.transformValueFromDataverse(null)).toThrow("Invalid date-only value")
-})
-
-test("date field defaults absent values", () => {
-  const f = date("birthdate")
+  expect(f.transformValueFromDataverse(null)).toBeInstanceOf(Date)
   expect(f.transformValueFromDataverse(undefined)).toBeInstanceOf(Date)
 })
 
@@ -513,7 +505,7 @@ test("json accepts schema via options and validates parsed values", () => {
   const Address = v.object({ street: v.string(), city: v.string() })
   const f = json("address_data", { schema: Address })
   expect(f.transformValueFromDataverse('{"street":"Main","city":"Springfield"}')).toEqual({ street: "Main", city: "Springfield" })
-  expect(() => f.transformValueFromDataverse(null)).toThrow("Invalid json value")
+  expect(f.transformValueFromDataverse(null)).toBeUndefined()
 })
 
 test("json supports default and readonly options", async () => {

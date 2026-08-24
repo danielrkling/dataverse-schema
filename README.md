@@ -42,7 +42,7 @@ const Address = new DataverseTable({
   },
 });
 type AddressType = Infer<typeof Address>;
-// { id: GUID; street: string | null; zip: number | null }
+// { id: GUID; street: string; zip: number }
 
 const Person = new DataverseTable({
   client,
@@ -64,8 +64,8 @@ const Person = new DataverseTable({
 type PersonType = Infer<typeof Person>;
 // {
 //   pk: GUID;
-//   name: string | null;
-//   age: number | null;
+//   name: string;
+//   age: number;
 //   active: boolean;
 //   dob: Date;
 //   gender: "M" | "F" | null;
@@ -86,8 +86,9 @@ import { DataverseClient } from "dataverse-schema";
 const client = new DataverseClient({
   url: "https://org.crm.dynamics.com",
   token: "Bearer ...",               // Optional: bearer token
-  impersonateByAAId: "aad-object-id", // Optional: Azure AD impersonation
-  impersonateByUserId: "user-guid",   // Optional: Dataverse user impersonation
+  impersonateByAAId: "aad-object-id", // Optional: Azure AD impersonation (CallerObjectId)
+  impersonateByUserId: "user-guid",   // Optional: Dataverse user impersonation (MSCRMCallerID)
+  prefer: ["return=representation"],  // Optional: OData Prefer header(s)
   headers: { "My-Custom-Header": "value" },
 });
 ```
@@ -96,11 +97,14 @@ const client = new DataverseClient({
 
 | Method | Description |
 |--------|-------------|
-| `getRecord(entitySet, id, query?)` | GET a single record |
-| `getRecords(entitySet, query?)` | GET multiple records (auto-paginates via `@odata.nextLink`) |
-| `postRecord(entitySet, value, query?)` | POST create record |
-| `patchRecord(entitySet, id, value, query?)` | PATCH update record |
-| `deleteRecord(entitySet, id)` | DELETE record |
+| `fetch(resource, options?)` | Raw request escape hatch (`raw: true` returns the `Response`) |
+| `getRecord(entitySet, id, options?)` | GET a single record |
+| `getRecords(entitySet, options?)` | GET multiple records (auto-paginates via `@odata.nextLink`) |
+| `iterateRecords(entitySet, options?)` | Async generator yielding one record at a time |
+| `iteratePages(entitySet, options?)` | Async generator yielding pages of records |
+| `postRecord(entitySet, value, options?)` | POST create record |
+| `patchRecord(entitySet, id, value, options?)` | PATCH update/upsert (honors `ifMatch`/`ifNoneMatch`) |
+| `deleteRecord(entitySet, id, options?)` | DELETE record (optional `ifMatch`) |
 | `updatePropertyValue(entitySet, id, propertyName, value)` | PUT a single property |
 | `deletePropertyValue(entitySet, id, propertyName)` | DELETE a property |
 | `getPropertyValue(entitySet, id, propertyName)` | GET a property value |
@@ -111,8 +115,16 @@ const client = new DataverseClient({
 | `associateRecord(entitySet, parentId, propName, childSet, childId)` | Associate via `/$ref` |
 | `dissociateRecord(entitySet, parentId, propName, childId?)` | Dissociate via `/$ref` |
 | `associateRecordToList(entitySet, parentId, propName, childSet, childPK, childIds)` | Sync collection associations |
-| `getAssociatedRecords(entitySet, id, navProp, query?)` | GET associated records |
-| `updateFileProperty(entitySet, id, propName, filename, body)` | Upload file |
+| `getAssociatedRecords(entitySet, id, navProp, options?)` | GET associated records |
+| `getAssociatedRecord(entitySet, id, navProp, options?)` | GET a single associated record |
+| `updateFileProperty(entitySet, id, propName, filename, body)` | Upload file content |
+| `createMultiple(entitySet, records)` | `CreateMultiple` action |
+| `updateMultiple(entitySet, records)` | `UpdateMultiple` action |
+| `deleteMultiple(entitySet, ids)` | `DeleteMultiple` action |
+| `executeAction(actionName, params?)` | Unbound action |
+| `executeBoundAction(entitySet, actionName, params?, id?)` | Bound action |
+| `executeFunction(functionName, params?)` | Unbound function |
+| `executeBoundFunction(entitySet, id, functionName, params?)` | Bound function |
 | `batch(fn)` | Group multiple requests into a `$batch` call |
 | `changeset(fn)` | Group requests into a transactional changeset within a batch |
 | `getImageFullSizeURL(entitySet, id, propName)` | Full-size image URL |
@@ -124,7 +136,7 @@ const client = new DataverseClient({
 // Insert (returns the new record GUID)
 const newId = await Person.createRecord({ name: "Jane", age: 30 });
 
-// Read (single)
+// Read (single) — returns null when the record does not exist
 const person = await Person.getRecord(newId);
 
 // Read (all with filters)
@@ -147,7 +159,7 @@ await Person.deleteRecord(newId, { ifMatch: 'W/"123456"', signal: controller.sig
 // Property-level operations
 await Person.updatePropertyValue("age", newId, 25);
 const age = await Person.getPropertyValue("age", newId);
-await Person.deletePropertyValue("age", newId);
+await Person.deletePropertyValue("age", newId); // throws for fields marked readonly
 
 // Activation
 await Person.activateRecord(newId);
@@ -156,6 +168,34 @@ await Person.deactivateRecord(newId);
 // Navigation
 await Person.associateRecord("primaryAddressId", newId, addressId);
 await Person.dissociateRecord("primaryAddressId", newId);
+```
+
+### Iterating Large Result Sets
+
+Both iterators lazily follow `@odata.nextLink`; a `break` stops further requests.
+
+```typescript
+// One record at a time — records within a page are yielded synchronously
+for await (const person of Person.iterateRecords({ filter: "age gt 20" }, { pageSize: 100 })) {
+  console.log(person.name);
+}
+
+// Or page by page
+for await (const page of Person.iteratePages({ filter: "age gt 20" }, { pageSize: 100 })) {
+  console.log(page.length); // sync array work per page
+}
+```
+
+### Bulk Operations
+
+```typescript
+// CreateMultiple / UpdateMultiple / DeleteMultiple (single API call each)
+await Account.createMultiple([{ name: "Acme" }, { name: "Beta" }]);
+await Account.updateMultiple([
+  { id: guid1, name: "Acme Updated" },
+  { id: guid2, name: "Beta Updated" },
+]);
+await Account.deleteMultiple([guid1, guid2]);
 ```
 
 ## Query Building
@@ -314,7 +354,7 @@ For operators not covered by the typed functions (e.g. `between`, `in`, `eq-user
 
 ### FetchXML Auto-Selection
 
-When `select()` is not called, the builder automatically includes all value fields (`string`, `number`, `boolean`, etc.), lookup ID fields, and file fields. Each result row includes an `ETAG` property (the string key `"$etag"`) for optimistic concurrency:
+When `select()` is not called, the builder automatically includes every value-kind field (`string`, `number`, `boolean`, date/datetime, choice/list/multiChoice, json, primary key, file, image) plus lookup ID fields; navigation properties are never expanded automatically. Each result row includes an `ETAG` property (the string key `"$etag"`) for optimistic concurrency:
 
 ```typescript
 import { ETAG } from "dataverse-schema";
@@ -371,6 +411,8 @@ const tableSchema = Person.getSchema();
 
 Use `v.parse` / `v.safeParse` (from `valibot`) against `field.schema` or `table.getSchema()` to validate values. Validation errors surface as valibot issues.
 
+The enum-like factories validate membership out of the box: `list()` rejects values outside its array, `choice()`/`nullableChoice()` reject labels outside their option map, and `multiChoice()` rejects arrays containing values outside its `choices`.
+
 ## Batching
 
 ```typescript
@@ -412,28 +454,61 @@ const PersonNameOnly = Person.pickProperties("name");
 | `boolean(name)` | `boolean` | `false` | Boolean field |
 | `nullableBoolean(name)` | `boolean \| null` | `null` | Nullable boolean |
 | `primaryKey(name)` | `GUID` | `crypto.randomUUID()` | Auto-generated UUID |
-| `date(name)` | `Date` | `new Date()` (zeroed) | Date-only (no time) |
+| `date(name)` | `Date` | today (fresh per call) | Date-only (no time) |
 | `datetime(name)` | `Date` | `new Date()` | Date/time |
 | `nullableDate(name)` | `Date \| null` | `null` | Nullable date-only |
 | `nullableDateTime(name)` | `Date \| null` | `null` | Nullable date/time |
 | `list(name, values)` | `T \| null` | `null` | Choice/picklist (array of allowed values) |
-| `choice(name, options)` | `T[keyof T]` (label) | first option | Choice/picklist (number→label map) |
-| `nullableChoice(name, options)` | `T[keyof T] \| null` | `null` | Nullable choice |
-| `json(name, schema)` | `T` | per schema | JSON column validated by a valibot schema |
-| `formatted(name)` | `string \| null` | `null` | Formatted value (read-only) |
-| `image(name)` | `ImageRef \| null` | `null` | Image (read-only; `url`, `fullSizeUrl`, `data`) |
-| `file(name)` | `FileRef \| null` | `null` | File name (read-only; `name`, `url`, `data`) |
+| `choice(name, choices)` | `T[keyof T]` (label) | first option | Choice/picklist (number→label map) |
+| `nullableChoice(name, choices)` | `T[keyof T] \| null` | `null` | Nullable choice |
+| `multiChoice(name, choices)` | `number[]` | `[]` | Multi-select picklist; reads CSV as `number[]`, writes CSV, empty selection writes `null`. Values are validated against `choices` |
+| `json(name, { schema })` | `T` | per schema | JSON column validated by a required valibot schema |
+| `formatted(name)` | `string \| null` | `null` | Formatted display value (always read-only) |
+| `image(name)` | `ImageRef \| null` | `null` | Image column (`url`, `fullSizeUrl`, `data`); upload/clear via the `data` channel |
+| `file(name)` | `FileRef \| null` | `null` | File column (`name`, `url`, `data`); upload/clear via the `data` channel |
 | `lookupId(name, getTable)` | `GUID \| null` | `null` | Lookup reference only |
 | `lookup(name, getTable)` | `T \| null` | `null` | Lookup with expanded data |
 | `collectionIds(name, getTable)` | `GUID[]` | `[]` | Collection of references |
 | `collection(name, getTable)` | `T[]` | `[]` | Collection with expanded data |
 
+All factories accept an optional trailing `options` object (`{ default?, readonly?, schema? }`) — including the navigation factories (`lookup`, `lookupId`, `collection`, `collectionIds`).
+
+Allowed values are exposed at runtime as frozen arrays: `list().list`, `choice().choices`, `nullableChoice().choices`, and `multiChoice().choices`.
+
+**Null & empty reads:** Dataverse represents empty columns as explicit `null` or omits them entirely. Non-nullable fields fold both into their default (e.g. `datetime()` → now, `string()` → `""`). Use the `nullable*` factories to preserve empties as `null`. Values that are present but malformed (e.g. an unparseable datetime string) always throw.
+
+**Circular table references:** `lookupId`/`collectionIds` thunks are intentionally untyped (`() => any`) so two tables can reference each other without creating TypeScript inference cycles. If two tables reference each other through `lookup`/`collection` on **both** ends, TypeScript cannot infer the mutually recursive types (TS7022) — break the cycle by using `lookupId`/`collectionIds` for one direction, or annotate one table explicitly.
+
 `ImageRef` and `FileRef` shapes:
 
 ```typescript
 type ImageRef = { readonly url?: string; readonly fullSizeUrl?: string; data?: Blob | null };
-type FileRef = { name: string; url?: string; data?: Blob | null };
+type FileRef = { name?: string; url?: string; data?: Blob | null };
 ```
+
+### Read-only & Server-Managed Fields
+
+Fields created with `{ readonly: true }` are never written: they are excluded from create/update request bodies, and calling `updatePropertyValue` or `deletePropertyValue` on them throws (`Cannot update readonly property` / `Cannot delete readonly property`). `formatted()` fields are always read-only because their value is computed by Dataverse.
+
+File and image columns are *server-managed* rather than read-only: their column value is never included in a request body. Instead, content flows through an explicit `data` channel — include `data` in the record value during `createRecord`, `updateRecord`, `upsertRecord`, or `updatePropertyValue`:
+
+```typescript
+// Upload on create/update
+const id = await Person.createRecord({ name: "Jane", doc: { name: "report.pdf", data: pdfBlob } });
+await Person.updateRecord(id, { pic: { data: imageBlob } });
+
+// Upload through the property-level API
+await Person.updatePropertyValue("doc", id, { name: "final.pdf", data: pdfBlob });
+
+// Clear explicitly with data: null
+await Person.updateRecord(id, { pic: { data: null } });
+
+// Dedicated helpers are also available
+await Person.deleteFile(id, "doc");
+await Person.deleteImage(id, "pic");
+```
+
+Values without an explicit `data` property (e.g. a stale `FileRef`/`ImageRef` read earlier in the session) are ignored — no accidental uploads or deletions.
 
 ## Dataverse Functions
 

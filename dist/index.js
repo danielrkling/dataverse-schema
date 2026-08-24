@@ -2600,8 +2600,10 @@ const SKIP = Symbol("skip");
 *
 * ## Transform contract
 * - `transformValueFromDataverse(value, ctx?)` converts a raw API payload into the
-*   typed record value. Non-nullable fields **throw** when Dataverse returns null;
-*   use the `nullable*` variants to allow null.
+*   typed record value. Dataverse represents empty columns as explicit `null` (or
+*   omits the key entirely); non-nullable fields fold both into their field default.
+*   Use the `nullable*` variants to preserve empties as `null`. Values that are
+*   present but malformed still throw.
 * - `transformValueToDataverse(value, ctx?)` converts a record value into its API
 *   payload. It may return synchronously or return a `Promise`. Returning the
 *   {@link SKIP} symbol excludes the value from the request body (used by file/image
@@ -2876,8 +2878,7 @@ var DateTimeField = class extends FieldBase {
 		return /* @__PURE__ */ new Date();
 	}
 	transformValueFromDataverse(value) {
-		if (value === void 0) return this.getDefault();
-		if (value === null) throw new Error(`Invalid datetime value: ${value}`);
+		if (value == null) return this.getDefault();
 		const result = new Date(value);
 		if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
 		return result;
@@ -2913,8 +2914,7 @@ var DateField = class extends FieldBase {
 		return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
 	}
 	transformValueFromDataverse(value) {
-		if (value === void 0) return this.getDefault();
-		if (value === null) throw new Error(`Invalid date-only value: ${value}`);
+		if (value == null) return this.getDefault();
 		return parseValidDateOnly(value);
 	}
 	transformValueToDataverse(value) {
@@ -3051,8 +3051,7 @@ var JsonField = class extends FieldBase {
 		}, options);
 	}
 	transformValueFromDataverse(value) {
-		if (value === void 0) return this.getDefault();
-		if (value === null) throw new Error(`Invalid json value: ${value}`);
+		if (value == null) return this.getDefault();
 		const raw = typeof value === "string" ? JSON.parse(value) : value;
 		return v.parse(this.schema, raw);
 	}
@@ -3280,7 +3279,8 @@ function image(name, options) {
 	return new ImageField(name, options);
 }
 /**
-* Creates a file column definition. File columns are read-only and store the file name.
+* Creates a file column definition. The column value is server-managed; upload or
+* clear file contents through the explicit `{ name?, data }` channel.
 *
 * @param name The Dataverse logical name of the file column.
 */
@@ -3370,14 +3370,26 @@ var CollectionProperty = class extends FieldBase {
 * Creates a one-to-many (collection) navigation property definition. The related records
 * can be expanded via OData `$expand` or fetched through the table API.
 *
+* The thunk is strongly typed so the related records appear in `Infer<typeof table>`.
+* Note: if two tables reference each other through the typed navigation factories
+* (`collection`/`lookup`) on **both** ends, TypeScript cannot implicitly infer the
+* mutually recursive types (TS7022) — break the cycle by using `collectionIds` or
+* `lookupId` (untyped thunks) for one direction, or annotate one table explicitly.
+*
 * @param name The Dataverse logical name of the collection navigation property.
 * @param getTable A thunk that returns the related table definition.
 *
 * @example
-* const Address = table(client, "addresses", { id: primaryKey("addressid"), street: string("street"), ... });
-* const Person = table(client, "people", {
-*   id: primaryKey("personid"),
-*   addresses: collection("person_addresses", () => Address),
+* const Address = new DataverseTable({
+*   client, entitySetName: "addresses", logicalName: "address",
+*   fields: { id: primaryKey("addressid"), street: string("street") },
+* });
+* const Person = new DataverseTable({
+*   client, entitySetName: "people", logicalName: "person",
+*   fields: {
+*     id: primaryKey("personid"),
+*     addresses: collection("person_addresses", () => Address),
+*   },
 * });
 * // Infer<typeof Person>["addresses"] → { id: GUID; street: string }[]
 */
@@ -3426,13 +3438,22 @@ var CollectionIdsProperty = class extends FieldBase {
 * this only stores the related record IDs (GUIDs), not the full records.
 *
 * @param name The Dataverse logical name of the navigation property.
-* @param getTable A thunk that returns the related table definition.
+* @param getTable A thunk that returns the related table definition. It is
+* intentionally untyped (`GetTable` → `() => any`): the related table only
+* contributes GUIDs here, and keeping the thunk non-generic lets two tables
+* reference each other without creating a TypeScript inference cycle.
 *
 * @example
-* const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
-* const Person = table(client, "people", {
-*   id: primaryKey("personid"),
-*   addressIds: collectionIds("person_addresses", () => Address),
+* const Address = new DataverseTable({
+*   client, entitySetName: "addresses", logicalName: "address",
+*   fields: { id: primaryKey("addressid") },
+* });
+* const Person = new DataverseTable({
+*   client, entitySetName: "people", logicalName: "person",
+*   fields: {
+*     id: primaryKey("personid"),
+*     addressIds: collectionIds("person_addresses", () => Address),
+*   },
 * });
 * // Infer<typeof Person>["addressIds"] → `${string}-${string}-${string}-${string}-${string}`[]
 */
@@ -3444,13 +3465,22 @@ function collectionIds(name, getTable, options) {
 * GUID of the related record (not the full expanded record).
 *
 * @param name The Dataverse logical name of the lookup column.
-* @param getTable A thunk that returns the related table definition.
+* @param getTable A thunk that returns the related table definition. It is
+* intentionally untyped (`GetTable` → `() => any`): the related table only
+* contributes a GUID here, and keeping the thunk non-generic lets two tables
+* reference each other without creating a TypeScript inference cycle.
 *
 * @example
-* const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
-* const Person = table(client, "people", {
-*   id: primaryKey("personid"),
-*   primaryAddressId: lookupId("primaryaddressid", () => Address),
+* const Address = new DataverseTable({
+*   client, entitySetName: "addresses", logicalName: "address",
+*   fields: { id: primaryKey("addressid") },
+* });
+* const Person = new DataverseTable({
+*   client, entitySetName: "people", logicalName: "person",
+*   fields: {
+*     id: primaryKey("personid"),
+*     primaryAddressId: lookupId("primaryaddressid", () => Address),
+*   },
 * });
 * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
 */
@@ -3491,14 +3521,26 @@ var LookupProperty = class extends FieldBase {
 * Creates a many-to-one (lookup) navigation property definition. The related record
 * can be expanded via OData `$expand` or fetched through the table API.
 *
+* The thunk is strongly typed so the related record appears in `Infer<typeof table>`.
+* Note: if two tables reference each other through the typed navigation factories
+* (`lookup`/`collection`) on **both** ends, TypeScript cannot implicitly infer the
+* mutually recursive types (TS7022) — break the cycle by using `lookupId` or
+* `collectionIds` (untyped thunks) for one direction, or annotate one table explicitly.
+*
 * @param name The Dataverse logical name of the lookup column.
 * @param getTable A thunk that returns the related table definition.
 *
 * @example
-* const Address = table(client, "addresses", { id: primaryKey("addressid"), ... });
-* const Person = table(client, "people", {
-*   id: primaryKey("personid"),
-*   primaryAddress: lookup("primaryaddressid", () => Address),
+* const Address = new DataverseTable({
+*   client, entitySetName: "addresses", logicalName: "address",
+*   fields: { id: primaryKey("addressid") },
+* });
+* const Person = new DataverseTable({
+*   client, entitySetName: "people", logicalName: "person",
+*   fields: {
+*     id: primaryKey("personid"),
+*     primaryAddress: lookup("primaryaddressid", () => Address),
+*   },
 * });
 * // Infer<typeof Person>["primaryAddress"] → { id: GUID; ... } | null
 */
