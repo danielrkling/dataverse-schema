@@ -3252,7 +3252,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T16:45:11.142Z"}
+      meta.textContent = `build ${"2026-08-24T17:19:16.025Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3341,7 +3341,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T16:45:11.142Z",
+          build: "2026-08-24T17:19:16.025Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3360,7 +3360,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T16:45:11.142Z"}\``,
+        `Build: \`${"2026-08-24T17:19:16.025Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -10145,39 +10145,84 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     const pk = table.primaryKey;
     const getKey = (item) => item[pk.key];
     const collectionId = table.entitySetName;
+    const channel = new BroadcastChannel(collectionId);
+    let disposed = false;
     let pollTimer = null;
     let syncFn = null;
+    let syncInFlight = false;
+    let syncController;
+    const broadcastMutations = (mutations) => {
+      if (disposed) return;
+      channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
+      channel.postMessage({ type: "MUTATIONS_ADDED", mutations });
+    };
     const defaultOnInsert = async ({ transaction }) => {
       const results = [];
+      const serialized = [];
       for (const mutation of transaction.mutations) {
         const guid = await table.createRecord(mutation.modified);
         results.push(guid);
+        serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: mutation.modified, entitySetName: collectionId });
       }
+      broadcastMutations(serialized);
       return results;
     };
     const defaultOnUpdate = async ({ transaction }) => {
       const results = [];
+      const serialized = [];
       for (const mutation of transaction.mutations) {
         await table.updateRecord(mutation.key, mutation.changes);
         results.push(mutation.key);
+        serialized.push({ id: mutation.mutationId, type: "update", key: mutation.key, value: mutation.changes, entitySetName: collectionId });
       }
+      broadcastMutations(serialized);
       return results;
     };
     const defaultOnDelete = async ({ transaction }) => {
       const results = [];
+      const serialized = [];
       for (const mutation of transaction.mutations) {
         await table.deleteRecord(mutation.key);
         results.push(mutation.key);
+        serialized.push({ id: mutation.mutationId, type: "delete", key: mutation.key, value: void 0, entitySetName: collectionId });
       }
+      broadcastMutations(serialized);
       return results;
     };
     const syncConfig = {
       sync: ({ begin, write, commit, markReady, collection }) => {
+        const handleTabMessage = (event) => {
+          if (disposed) return;
+          if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
+            syncController?.abort();
+          } else if (event.data?.type === "MUTATIONS_ADDED") {
+            const incoming = event.data.mutations.filter((m) => m.entitySetName === collectionId);
+            if (incoming.length === 0) return;
+            begin();
+            for (const m of incoming) {
+              if (m.type === "delete") {
+                const existing = collection.get(m.key);
+                if (existing) write({ type: "delete", value: existing });
+              } else if (m.type === "update") {
+                const existing = collection.get(m.key);
+                if (existing) write({ type: "update", value: { ...existing, ...m.value } });
+              } else {
+                write({ type: "insert", value: m.value });
+              }
+            }
+            commit();
+            void syncFn?.();
+          }
+        };
+        channel.addEventListener("message", handleTabMessage);
         syncFn = async () => {
+          if (syncInFlight) return;
+          syncInFlight = true;
+          syncController = new AbortController();
           try {
             const keysToDelete = new Set(collection.keys());
             begin();
-            for await (const record of table.iterateRecords()) {
+            for await (const record of table.iterateRecords(void 0, { signal: syncController.signal })) {
               const key = table.getPrimaryId(record);
               const existingRecord = collection.get(key);
               if (existingRecord) {
@@ -10196,6 +10241,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           } catch (err) {
             console.warn(`[dataverse-collection] sync failed for "${collectionId}":`, err);
           } finally {
+            syncInFlight = false;
+            syncController = void 0;
             markReady();
           }
         };
@@ -10204,10 +10251,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           syncFn?.();
         }, syncInterval);
         return () => {
+          disposed = true;
           if (pollTimer) {
             clearInterval(pollTimer);
             pollTimer = null;
           }
+          channel.removeEventListener("message", handleTabMessage);
+          channel.close();
         };
       },
       rowUpdateMode: "partial"
@@ -10545,6 +10595,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     closed = false;
     activeFetchControllers = /* @__PURE__ */ new Set();
     collectionCleanups = /* @__PURE__ */ new Set();
+    // Schedules a wake-up for the soonest delayed retry so a failed mutation
+    // re-attempts even while the app is idle and online. Cleared on each
+    // queueMutations/flush and on close().
+    retryTimer;
     channelMessageHandler;
     constructor(name, tables, version) {
       this.name = name;
@@ -10560,10 +10614,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
     sequence = 0;
     serializeMutation(mutation) {
+      const value = mutation.type === "update" ? mutation.changes : mutation.modified;
       return {
         id: mutation.mutationId,
         type: mutation.type,
-        value: mutation.modified,
+        value,
         key: mutation.key,
         entitySetName: mutation.collection.id,
         timestamp: mutation.createdAt.valueOf(),
@@ -10613,6 +10668,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       if (this.closed) return;
       this.closed = true;
       this.abortActiveFetches();
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+      }
       for (const cleanup of [...this.collectionCleanups]) cleanup();
       this.collectionCleanups.clear();
       this.channel.removeEventListener("message", this.channelMessageHandler);
@@ -10664,6 +10723,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               );
               mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
               await db.put(this.MUTATION_QUEUE_NAME, mutation);
+              if (navigator.onLine) {
+                if (this.retryTimer) clearTimeout(this.retryTimer);
+                this.retryTimer = setTimeout(() => {
+                  this.retryTimer = void 0;
+                  void this.flushQueue();
+                }, delay);
+              }
               break;
             }
           }
@@ -10702,6 +10768,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
     async queueMutations(mutations) {
       if (mutations.length === 0) return;
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+      }
       try {
         const db = await this.getDB();
         const storeNames = [
@@ -10826,13 +10896,25 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const handleTabMessage = (event) => {
             if (event.data?.type === "MUTATIONS_ADDED") {
               begin();
+              const localWrites = [];
               for (const mutation of event.data.mutations) {
                 if (table.entitySetName === mutation.entitySetName) {
                   write({ type: mutation.type, value: mutation.value, metadata: { source: "tab" } });
+                  localWrites.push(async () => {
+                    const db = await this.getDB();
+                    const tx = db.transaction(mutation.entitySetName, "readwrite");
+                    if (mutation.type === "delete") {
+                      tx.store.delete(mutation.key);
+                    } else {
+                      tx.store.put(mutation.value);
+                    }
+                    await tx.done;
+                  });
                 }
               }
               commit();
               scheduleNextSync(50);
+              for (const w of localWrites) void w().catch(() => void 0);
             }
           };
           this.channel.addEventListener("message", handleTabMessage);
@@ -11368,10 +11450,67 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     ]
   };
 
+  const onlineCrossTabSuite = {
+    name: "online-cross-tab",
+    title: "Cross-tab (online collection) BroadcastChannel propagation",
+    async setup(ctx) {
+      ctx.state.row = await seedRow(ctx, { int: 5, text: "x-tab-online", choice: "B" });
+    },
+    tests: (ctx) => [
+      {
+        name: "a mutation on one online collection is reflected in a sibling",
+        fn: async () => {
+          const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const a = createCollection(cfgA);
+          const b = createCollection(cfgB);
+          const restoreVis = forceVisible();
+          try {
+            await waitFor(() => a.size >= 1 && b.size >= 1, 8e3);
+            const name = ctx.fx.name("xtab-online");
+            const id = crypto.randomUUID();
+            a.insert({ id, name, int: 8, text: "from-a" });
+            await waitFor(() => [...b.values()].some((v) => v.name === name), 8e3);
+            const inB = [...b.values()].find((v) => v.name === name);
+            assert(inB, "sibling online collection received the mutation via BroadcastChannel");
+            assertEquals(inB.int, 8, "propagated row keeps its values");
+          } finally {
+            restoreVis();
+            a.delete?.(ctx.state.row);
+            b.delete?.(ctx.state.row);
+          }
+        }
+      },
+      {
+        name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
+        fn: async () => {
+          const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const a = createCollection(cfgA);
+          const b = createCollection(cfgB);
+          const restoreVis = forceVisible();
+          try {
+            await waitFor(() => a.size >= 1 && b.size >= 1, 8e3);
+            const name = ctx.fx.name("xtab-online-abort");
+            const id = crypto.randomUUID();
+            a.insert({ id, name, int: 9, text: "z" });
+            await waitFor(() => [...b.values()].some((v) => v.name === name), 8e3);
+            assert([...b.values()].some((v) => v.name === name), "b saw the row (abort broadcast path exercised)");
+          } finally {
+            restoreVis();
+            a.delete?.(ctx.state.row);
+            b.delete?.(ctx.state.row);
+          }
+        }
+      }
+    ]
+  };
+
   const suites = [
     onlineCollectionSuite,
     offlineQueueSuite,
     crossTabSuite,
+    onlineCrossTabSuite,
     durabilitySuite
   ];
 

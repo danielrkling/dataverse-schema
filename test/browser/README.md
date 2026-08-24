@@ -118,5 +118,6 @@ disconnection is required.
 | Online collection | `dataverseCollectionOptions` builds a `Collection`; `forceSync()` pulls external changes; insert/update/delete through the collection round-trip to Dataverse; `utils.table` wiring |
 | Offline queue | `DataverseSyncDB` + `createCollectionOptions`; online insert flushes immediately; offline insert is queued in IndexedDB and NOT sent; `online` event flushes the queue; `getQueueCount`/`getErroredMutations`; retry + discard of errored mutations |
 | Cross-tab | Two collections on the same `DataverseSyncDB` observe each other via `BroadcastChannel` (`MUTATIONS_ADDED` / `ABORT_ACTIVE_FETCHES`) |
+| Cross-tab (online) | Same propagation for the online `dataverseCollectionOptions` collection, which now also uses a `BroadcastChannel` keyed by the collection id |
 | Durability | A queued offline mutation survives reopening the same DB name (IndexedDB persistence) and flushes on reconnect; the cache store is rebuilt after a fresh sync |
 

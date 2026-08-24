@@ -50,6 +50,10 @@ export class DataverseSyncDB {
     private closed = false
     private activeFetchControllers = new Set<AbortController>()
     private collectionCleanups = new Set<() => void>()
+    // Schedules a wake-up for the soonest delayed retry so a failed mutation
+    // re-attempts even while the app is idle and online. Cleared on each
+    // queueMutations/flush and on close().
+    private retryTimer: ReturnType<typeof setTimeout> | undefined
     private readonly channelMessageHandler: (event: MessageEvent) => void
 
     constructor(name: string, tables: DataverseTable<GenericProperties>[], version: number) {
@@ -69,10 +73,15 @@ export class DataverseSyncDB {
 
     sequence = 0;
     serializeMutation(mutation: PendingMutation<any>): QueuedMutation {
+        // For updates, persist only the changed columns (`changes`) rather than
+        // the entire row (`modified`). This keeps the IndexedDB payloads small
+        // and means flushQueue's updateRecord call sends a delta instead of a
+        // full-row PATCH that could clobber unrelated fields.
+        const value = mutation.type === "update" ? mutation.changes : mutation.modified;
         return {
             id: mutation.mutationId,
             type: mutation.type,
-            value: mutation.modified,
+            value,
             key: mutation.key,
             entitySetName: mutation.collection.id,
             timestamp: mutation.createdAt.valueOf(),
@@ -112,6 +121,9 @@ export class DataverseSyncDB {
 
                     for (const table of self.tables.values()) {
                         if (!database.objectStoreNames.contains(table.entitySetName)) {
+                            // keyPath uses the TypeScript property name (e.g. "id"),
+                            // which is the same key getKey() reads — consistent with
+                            // the logical column mapping done elsewhere.
                             database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
                         }
                     }
@@ -135,6 +147,10 @@ export class DataverseSyncDB {
         if (this.closed) return;
         this.closed = true;
         this.abortActiveFetches();
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+        }
         for (const cleanup of [...this.collectionCleanups]) cleanup();
         this.collectionCleanups.clear();
         this.channel.removeEventListener("message", this.channelMessageHandler);
@@ -146,6 +162,10 @@ export class DataverseSyncDB {
 
 
     private async flushQueue() {
+        // The Web Lock is keyed by the database name (this.name). Cross-tab
+        // serialization of flushQueue relies on this name being unique per
+        // DataverseSyncDB instance — two DBs with the same name share the lock
+        // (and the BroadcastChannel), which is what enables multi-tab safety.
         await navigator.locks.request(this.name, async () => {
             const db = await this.getDB();
 
@@ -196,6 +216,16 @@ export class DataverseSyncDB {
                         );
                         mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
                         await db.put(this.MUTATION_QUEUE_NAME, mutation)
+                        // Self-heal: wake flushQueue when this retry is due, so a
+                        // failed mutation re-attempts even with no further user
+                        // activity (the lock + online guard keep it safe).
+                        if (navigator.onLine) {
+                            if (this.retryTimer) clearTimeout(this.retryTimer);
+                            this.retryTimer = setTimeout(() => {
+                                this.retryTimer = undefined;
+                                void this.flushQueue();
+                            }, delay);
+                        }
                         break;
                     }
 
@@ -241,6 +271,12 @@ export class DataverseSyncDB {
 
     async queueMutations(mutations: QueuedMutation[]) {
         if (mutations.length === 0) return;
+        // A freshly arrived mutation may make a previously-delayed retry due now;
+        // drop any pending retry wake-up so the upcoming flush re-evaluates.
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+        }
         try {
             const db = await this.getDB();
             const storeNames = [
@@ -382,13 +418,29 @@ export class DataverseSyncDB {
                 const handleTabMessage = (event: MessageEvent) => {
                     if (event.data?.type === "MUTATIONS_ADDED") {
                         begin();
+                        const localWrites: Array<() => Promise<void>> = [];
                         for (const mutation of event.data.mutations) {
                             if (table.entitySetName === mutation.entitySetName) {
                                 write({ type: mutation.type, value: mutation.value, metadata: { source: "tab" } });
+                                // Also persist into the local IndexedDB cache so a
+                                // reload keeps the row until the next remote sync.
+                                localWrites.push(async () => {
+                                    const db = await this.getDB();
+                                    const tx = db.transaction(mutation.entitySetName, "readwrite");
+                                    if (mutation.type === "delete") {
+                                        tx.store.delete(mutation.key);
+                                    } else {
+                                        tx.store.put(mutation.value);
+                                    }
+                                    await tx.done;
+                                });
                             }
                         }
                         commit();
                         scheduleNextSync(50)
+                        // Best-effort: don't let a cache write failure break the
+                        // in-memory collection update above. Fire-and-forget.
+                        for (const w of localWrites) void w().catch(() => undefined);
                     }
                 };
 
