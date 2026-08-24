@@ -567,6 +567,13 @@ const merged = mergeRecords(oldRecords, newRecords);
 const mapped = mapChoices(rawData);
 ```
 
+## `@tanstack/db` integration
+
+This library also ships a `@tanstack/db` adapter (`dataverse-schema/tanstack-db`) with
+online (polling) and offline-capable (IndexedDB-queued, cross-tab) collection builders.
+See [`src/tanstack-db/README.md`](./src/tanstack-db/README.md) for full usage, options,
+and durability/retry behavior.
+
 ## Contributions
 
 Contributions are welcome! Please submit pull requests or create issues to suggest improvements or report bugs.
