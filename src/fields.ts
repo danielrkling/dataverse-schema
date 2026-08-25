@@ -213,7 +213,7 @@ export class ListField<T extends string | number> extends FieldBase<T | null> {
   kind = "value" as const;
   type = "list" as const;
   readonly list: readonly T[];
-  constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>) {
+  constructor(name: string, list: ReadonlyArray<T>, options?: FieldOptions<T | null>) {
     const values = Object.freeze([...list]) as readonly T[];
     super(name, {
       defaultValue: null,
@@ -684,7 +684,7 @@ export function primaryKey(name: string, options?: FieldOptions<GUID>) {
  * });
  * // Infer<typeof table>["gender"] → 1 | 2 | null
  */
-export function list<T extends string | number>(name: string, list: Array<T>, options?: FieldOptions<T | null>) {
+export function list<const T extends string | number>(name: string, list: ReadonlyArray<T>, options?: FieldOptions<T | null>) {
   return new ListField<T>(name, list, options);
 }
 

@@ -156,7 +156,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * });
    */
   async getRecords(
-    queryOptions?: ODataTableQueryOptions,
+    queryOptions?: ODataTableQueryOptions<TProperties>,
     options?: TableRequestOptions,
   ): Promise<Infer<TProperties>[]> {
     return this.client
@@ -182,7 +182,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * }
    */
   async *iterateRecords(
-    queryOptions?: ODataTableQueryOptions,
+    queryOptions?: ODataTableQueryOptions<TProperties>,
     options?: TableRequestOptions,
   ): AsyncGenerator<Infer<TProperties>> {
     for await (const record of this.client.iterateRecords(
@@ -212,7 +212,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * }
    */
   async *iteratePages(
-    queryOptions?: ODataTableQueryOptions,
+    queryOptions?: ODataTableQueryOptions<TProperties>,
     options?: TableRequestOptions,
   ): AsyncGenerator<Infer<TProperties>[]> {
     for await (const page of this.client.iteratePages(
@@ -753,7 +753,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
 
 function tableQuery(
   table: DataverseTable<GenericProperties>,
-  options?: ODataTableQueryOptions,
+  options?: ODataTableQueryOptions<any>,
 ): string {
   return serializeODataSelect(buildTableQueryAst(table, options));
 }

@@ -115,7 +115,7 @@ test("filter-only join preserves result type", () => {
   const q = fetchXml(Person)
     .select(f => ({ personName: f.name }))
     .join("exists", Address, "id", "pk", (sub) =>
-      sub.filter(f => eq(f.id, "some-id"))
+      sub.filter(f => eq(f.id, "00000000-0000-0000-0000-000000000000"))
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 

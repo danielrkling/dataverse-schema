@@ -996,13 +996,27 @@ function renderFilterFetchXml(node) {
 
 //#endregion
 //#region src/query/filter/expr.ts
+function toRef(field) {
+	if (field instanceof FieldRef) return field;
+	const f = field;
+	return new FieldRef(f, f.fromDataverseName ?? f.logicalName);
+}
+/** Returns a ref if the value is a field reference or raw property instance, otherwise null. */
+function asRef(value) {
+	if (value instanceof FieldRef) return value;
+	if (value && typeof value === "object") {
+		const v = value;
+		if (typeof (v.fromDataverseName ?? v.logicalName) === "string") return toRef(value);
+	}
+	return null;
+}
 function pathOf(field) {
-	return field.path;
+	return toRef(field).path;
 }
 /** Converts typed field values (e.g. choice labels) into their Dataverse representation before rendering. */
 function toFilterValue(field, value) {
+	const f = toRef(field).field;
 	if (value == null || typeof value !== "string") return value;
-	const f = field.field;
 	if (f?.type !== "choice") return value;
 	return f.transformValueToDataverse(value);
 }
@@ -1033,89 +1047,39 @@ function fn(field, fnName, operator, values) {
 		values: values.map((v) => toFilterValue(field, v))
 	});
 }
-function eq(field, value) {
-	if (value instanceof FieldRef) return new FilterExpr({
+function compare(field, operator, value) {
+	const other = asRef(value);
+	if (other) return new FilterExpr({
 		type: "compare",
 		field: pathOf(field),
-		operator: "eq",
-		otherField: pathOf(value)
+		operator,
+		otherField: other.path
 	});
+	const ref = toRef(field);
 	return new FilterExpr({
 		type: "comparison",
-		field: pathOf(field),
-		operator: "eq",
-		value: toFilterValue(field, value)
+		field: ref.path,
+		operator,
+		value: toFilterValue(ref, value)
 	});
+}
+function eq(field, value) {
+	return compare(field, "eq", value);
 }
 function ne(field, value) {
-	if (value instanceof FieldRef) return new FilterExpr({
-		type: "compare",
-		field: pathOf(field),
-		operator: "ne",
-		otherField: pathOf(value)
-	});
-	return new FilterExpr({
-		type: "comparison",
-		field: pathOf(field),
-		operator: "ne",
-		value: toFilterValue(field, value)
-	});
+	return compare(field, "ne", value);
 }
 function gt(field, value) {
-	if (value instanceof FieldRef) return new FilterExpr({
-		type: "compare",
-		field: pathOf(field),
-		operator: "gt",
-		otherField: pathOf(value)
-	});
-	return new FilterExpr({
-		type: "comparison",
-		field: pathOf(field),
-		operator: "gt",
-		value: toFilterValue(field, value)
-	});
+	return compare(field, "gt", value);
 }
 function ge(field, value) {
-	if (value instanceof FieldRef) return new FilterExpr({
-		type: "compare",
-		field: pathOf(field),
-		operator: "ge",
-		otherField: pathOf(value)
-	});
-	return new FilterExpr({
-		type: "comparison",
-		field: pathOf(field),
-		operator: "ge",
-		value: toFilterValue(field, value)
-	});
+	return compare(field, "ge", value);
 }
 function lt(field, value) {
-	if (value instanceof FieldRef) return new FilterExpr({
-		type: "compare",
-		field: pathOf(field),
-		operator: "lt",
-		otherField: pathOf(value)
-	});
-	return new FilterExpr({
-		type: "comparison",
-		field: pathOf(field),
-		operator: "lt",
-		value: toFilterValue(field, value)
-	});
+	return compare(field, "lt", value);
 }
 function le(field, value) {
-	if (value instanceof FieldRef) return new FilterExpr({
-		type: "compare",
-		field: pathOf(field),
-		operator: "le",
-		otherField: pathOf(value)
-	});
-	return new FilterExpr({
-		type: "comparison",
-		field: pathOf(field),
-		operator: "le",
-		value: toFilterValue(field, value)
-	});
+	return compare(field, "le", value);
 }
 function isNull(field) {
 	return new FilterExpr({

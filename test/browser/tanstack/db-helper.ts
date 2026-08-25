@@ -1,4 +1,4 @@
-import { DataverseSyncDB, type QueuedMutation } from "../../../src/tanstack-db/index"
+import { DataverseSyncDB, type QueuedMutation } from "../../../src/tanstack-db"
 
 /**
  * Builds a DataverseSyncDB with a per-run-unique name so multiple harness

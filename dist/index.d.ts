@@ -73,6 +73,11 @@ type FilterNode = {
 };
 //#endregion
 //#region src/query/filter/expr.d.ts
+/**
+ * A field reference for filter expressions: either a typed `FieldRef` (from a
+ * query builder proxy) or a raw field instance belonging to the root entity.
+ */
+type FilterField = FieldRef<any> | QueryProperty;
 type NonNullType<T> = T extends Date | null ? Date : Exclude<T, null>;
 declare class FilterExpr {
   private node;
@@ -82,89 +87,91 @@ declare class FilterExpr {
   toFetchXml(): string;
   getNode(): FilterNode;
 }
-declare function eq<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
-declare function ne<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr;
-declare function gt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-declare function ge<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-declare function lt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-declare function le<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr;
-declare function isNull(field: FieldRef<any>): FilterExpr;
-declare function isNotNull(field: FieldRef<any>): FilterExpr;
-declare function contains<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
-declare function startsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
-declare function endsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr;
+/** A typed field reference (`FieldRef`) or a raw root-level field instance. Both carry the value type `T`. */
+type TypedField<T> = FieldRef<T> | FieldBase<T>;
+declare function eq<T>(field: TypedField<T>, value: NoInfer<T> | null | FilterField): FilterExpr;
+declare function ne<T>(field: TypedField<T>, value: NoInfer<T> | null | FilterField): FilterExpr;
+declare function gt<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr;
+declare function ge<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr;
+declare function lt<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr;
+declare function le<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr;
+declare function isNull(field: FilterField): FilterExpr;
+declare function isNotNull(field: FilterField): FilterExpr;
+declare function contains(field: FilterField, value: string): FilterExpr;
+declare function startsWith(field: FilterField, value: string): FilterExpr;
+declare function endsWith(field: FilterField, value: string): FilterExpr;
 declare function and(...conditions: (FilterExpr | string)[]): FilterExpr;
 declare function or(...conditions: (FilterExpr | string)[]): FilterExpr;
 declare function not(condition: FilterExpr | string): FilterExpr;
 declare function isActive(): FilterExpr;
 declare function isInactive(): FilterExpr;
-declare function Above(field: FieldRef<any>, value: string): FilterExpr;
-declare function AboveOrEqual(field: FieldRef<any>, value: string): FilterExpr;
-declare function Between(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr;
-declare function ContainsValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
-declare function DoesNotContainValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr;
-declare function EqualBusinessId(field: FieldRef<any>): FilterExpr;
-declare function EqualUserId(field: FieldRef<any>): FilterExpr;
-declare function EqualUserLanguage(field: FieldRef<any>): FilterExpr;
-declare function EqualUserOrUserHierarchy(field: FieldRef<any>): FilterExpr;
-declare function EqualUserOrUserHierarchyAndTeams(field: FieldRef<any>): FilterExpr;
-declare function EqualUserOrUserTeams(field: FieldRef<any>): FilterExpr;
-declare function In<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
-declare function InFiscalPeriod(field: FieldRef<any>, value: number): FilterExpr;
-declare function InFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
-declare function InFiscalYear(field: FieldRef<any>, value: number): FilterExpr;
-declare function InOrAfterFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
-declare function InOrBeforeFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr;
-declare function Last7Days(field: FieldRef<any>): FilterExpr;
-declare function LastFiscalPeriod(field: FieldRef<any>): FilterExpr;
-declare function LastFiscalYear(field: FieldRef<any>): FilterExpr;
-declare function LastMonth(field: FieldRef<any>): FilterExpr;
-declare function LastWeek(field: FieldRef<any>): FilterExpr;
-declare function LastXDays(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastXFiscalYears(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastXHours(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastXMonths(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastXWeeks(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastXYears(field: FieldRef<any>, value: number): FilterExpr;
-declare function LastYear(field: FieldRef<any>): FilterExpr;
-declare function Next7Days(field: FieldRef<any>): FilterExpr;
-declare function NextFiscalPeriod(field: FieldRef<any>): FilterExpr;
-declare function NextFiscalYear(field: FieldRef<any>): FilterExpr;
-declare function NextMonth(field: FieldRef<any>): FilterExpr;
-declare function NextWeek(field: FieldRef<any>): FilterExpr;
-declare function NextXDays(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextXFiscalYears(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextXHours(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextXMonths(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextXWeeks(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextXYears(field: FieldRef<any>, value: number): FilterExpr;
-declare function NextYear(field: FieldRef<any>): FilterExpr;
-declare function NotBetween(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr;
-declare function NotEqualBusinessId(field: FieldRef<any>): FilterExpr;
-declare function NotEqualUserId(field: FieldRef<any>): FilterExpr;
-declare function NotIn<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr;
-declare function NotUnder(field: FieldRef<any>, value: string): FilterExpr;
-declare function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr;
-declare function OlderThanXHours(field: FieldRef<any>, value: number): FilterExpr;
-declare function OlderThanXMinutes(field: FieldRef<any>, value: number): FilterExpr;
-declare function OlderThanXMonths(field: FieldRef<any>, value: number): FilterExpr;
-declare function OlderThanXWeeks(field: FieldRef<any>, value: number): FilterExpr;
-declare function OlderThanXYears(field: FieldRef<any>, value: number): FilterExpr;
-declare function On(field: FieldRef<any>, value: string): FilterExpr;
-declare function OnOrAfter(field: FieldRef<any>, value: string): FilterExpr;
-declare function OnOrBefore(field: FieldRef<any>, value: string): FilterExpr;
-declare function ThisFiscalPeriod(field: FieldRef<any>): FilterExpr;
-declare function ThisFiscalYear(field: FieldRef<any>): FilterExpr;
-declare function ThisMonth(field: FieldRef<any>): FilterExpr;
-declare function ThisWeek(field: FieldRef<any>): FilterExpr;
-declare function ThisYear(field: FieldRef<any>): FilterExpr;
-declare function Today(field: FieldRef<any>): FilterExpr;
-declare function Tomorrow(field: FieldRef<any>): FilterExpr;
-declare function Under(field: FieldRef<any>, value: string): FilterExpr;
-declare function UnderOrEqual(field: FieldRef<any>, value: string): FilterExpr;
-declare function Yesterday(field: FieldRef<any>): FilterExpr;
+declare function Above(field: FilterField, value: string): FilterExpr;
+declare function AboveOrEqual(field: FilterField, value: string): FilterExpr;
+declare function Between(field: FilterField, value1: string | number, value2: string | number): FilterExpr;
+declare function ContainsValues(field: FilterField, values: (string | number)[]): FilterExpr;
+declare function DoesNotContainValues(field: FilterField, values: (string | number)[]): FilterExpr;
+declare function EqualBusinessId(field: FilterField): FilterExpr;
+declare function EqualUserId(field: FilterField): FilterExpr;
+declare function EqualUserLanguage(field: FilterField): FilterExpr;
+declare function EqualUserOrUserHierarchy(field: FilterField): FilterExpr;
+declare function EqualUserOrUserHierarchyAndTeams(field: FilterField): FilterExpr;
+declare function EqualUserOrUserTeams(field: FilterField): FilterExpr;
+declare function In<T extends string | number>(field: TypedField<T>, values: NoInfer<T>[]): FilterExpr;
+declare function InFiscalPeriod(field: FilterField, value: number): FilterExpr;
+declare function InFiscalPeriodAndYear(field: FilterField, fiscalPeriod: number, fiscalYear: number): FilterExpr;
+declare function InFiscalYear(field: FilterField, value: number): FilterExpr;
+declare function InOrAfterFiscalPeriodAndYear(field: FilterField, fiscalPeriod: number, fiscalYear: number): FilterExpr;
+declare function InOrBeforeFiscalPeriodAndYear(field: FilterField, fiscalPeriod: number, fiscalYear: number): FilterExpr;
+declare function Last7Days(field: FilterField): FilterExpr;
+declare function LastFiscalPeriod(field: FilterField): FilterExpr;
+declare function LastFiscalYear(field: FilterField): FilterExpr;
+declare function LastMonth(field: FilterField): FilterExpr;
+declare function LastWeek(field: FilterField): FilterExpr;
+declare function LastXDays(field: FilterField, value: number): FilterExpr;
+declare function LastXFiscalPeriods(field: FilterField, value: number): FilterExpr;
+declare function LastXFiscalYears(field: FilterField, value: number): FilterExpr;
+declare function LastXHours(field: FilterField, value: number): FilterExpr;
+declare function LastXMonths(field: FilterField, value: number): FilterExpr;
+declare function LastXWeeks(field: FilterField, value: number): FilterExpr;
+declare function LastXYears(field: FilterField, value: number): FilterExpr;
+declare function LastYear(field: FilterField): FilterExpr;
+declare function Next7Days(field: FilterField): FilterExpr;
+declare function NextFiscalPeriod(field: FilterField): FilterExpr;
+declare function NextFiscalYear(field: FilterField): FilterExpr;
+declare function NextMonth(field: FilterField): FilterExpr;
+declare function NextWeek(field: FilterField): FilterExpr;
+declare function NextXDays(field: FilterField, value: number): FilterExpr;
+declare function NextXFiscalPeriods(field: FilterField, value: number): FilterExpr;
+declare function NextXFiscalYears(field: FilterField, value: number): FilterExpr;
+declare function NextXHours(field: FilterField, value: number): FilterExpr;
+declare function NextXMonths(field: FilterField, value: number): FilterExpr;
+declare function NextXWeeks(field: FilterField, value: number): FilterExpr;
+declare function NextXYears(field: FilterField, value: number): FilterExpr;
+declare function NextYear(field: FilterField): FilterExpr;
+declare function NotBetween(field: FilterField, value1: string | number, value2: string | number): FilterExpr;
+declare function NotEqualBusinessId(field: FilterField): FilterExpr;
+declare function NotEqualUserId(field: FilterField): FilterExpr;
+declare function NotIn<T extends string | number>(field: TypedField<T>, values: NoInfer<T>[]): FilterExpr;
+declare function NotUnder(field: FilterField, value: string): FilterExpr;
+declare function OlderThanXDays(field: FilterField, value: number): FilterExpr;
+declare function OlderThanXHours(field: FilterField, value: number): FilterExpr;
+declare function OlderThanXMinutes(field: FilterField, value: number): FilterExpr;
+declare function OlderThanXMonths(field: FilterField, value: number): FilterExpr;
+declare function OlderThanXWeeks(field: FilterField, value: number): FilterExpr;
+declare function OlderThanXYears(field: FilterField, value: number): FilterExpr;
+declare function On(field: FilterField, value: string): FilterExpr;
+declare function OnOrAfter(field: FilterField, value: string): FilterExpr;
+declare function OnOrBefore(field: FilterField, value: string): FilterExpr;
+declare function ThisFiscalPeriod(field: FilterField): FilterExpr;
+declare function ThisFiscalYear(field: FilterField): FilterExpr;
+declare function ThisMonth(field: FilterField): FilterExpr;
+declare function ThisWeek(field: FilterField): FilterExpr;
+declare function ThisYear(field: FilterField): FilterExpr;
+declare function Today(field: FilterField): FilterExpr;
+declare function Tomorrow(field: FilterField): FilterExpr;
+declare function Under(field: FilterField, value: string): FilterExpr;
+declare function UnderOrEqual(field: FilterField, value: string): FilterExpr;
+declare function Yesterday(field: FilterField): FilterExpr;
 //#endregion
 //#region src/query/shared/aggregation.d.ts
 declare class GroupByExpr<V = any> {
@@ -390,12 +397,12 @@ declare function buildLambdaProxy<P extends GenericProperties>(alias: string, ta
 declare function any<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
 declare function all<P extends GenericProperties>(proxy: ODataCollectionNavProxy<P>, condition: (x: ODataLambdaProxy<P>) => string | FilterExpr): FilterExpr;
 declare function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): InitialQuery<T>;
-type ODataTableQueryOptions = {
-  filter?: string;
+type ODataTableQueryOptions<T extends GenericProperties = GenericProperties> = {
+  filter?: string | FilterExpr | ((f: ODataFieldProxy<T>) => string | FilterExpr);
   orderby?: Partial<Record<string, "asc" | "desc">> | string;
   top?: number;
 };
-declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions): ODataSelectAst;
+declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions<T>): ODataSelectAst;
 //#endregion
 //#region src/table.d.ts
 type TableRequestOptions = {
@@ -493,7 +500,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    *   top: 10,
    * });
    */
-  getRecords(queryOptions?: ODataTableQueryOptions, options?: TableRequestOptions): Promise<Infer<TProperties>[]>;
+  getRecords(queryOptions?: ODataTableQueryOptions<TProperties>, options?: TableRequestOptions): Promise<Infer<TProperties>[]>;
   /**
    * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
    * Each record is transformed like {@link getRecords}. Records within a page are
@@ -508,7 +515,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    *   console.log(account.name);
    * }
    */
-  iterateRecords(queryOptions?: ODataTableQueryOptions, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>>;
+  iterateRecords(queryOptions?: ODataTableQueryOptions<TProperties>, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>>;
   /**
    * Iterates over pages of records, lazily following `@odata.nextLink` pagination.
    * Each yielded page is transformed like {@link getRecords}. The next page is
@@ -524,7 +531,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    *   for (const account of page) console.log(account.name);
    * }
    */
-  iteratePages(queryOptions?: ODataTableQueryOptions, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>[]>;
+  iteratePages(queryOptions?: ODataTableQueryOptions<TProperties>, options?: TableRequestOptions): AsyncGenerator<Infer<TProperties>[]>;
   /**
    * Retrieves the value of a single property for a record by ID.
    * Works for value properties, lookup IDs, lookups (returns expanded record), and collections.
@@ -877,7 +884,7 @@ declare class ListField<T extends string | number> extends FieldBase<T | null> {
   kind: "value";
   type: "list";
   readonly list: readonly T[];
-  constructor(name: string, list: Array<T>, options?: FieldOptions<T | null>);
+  constructor(name: string, list: ReadonlyArray<T>, options?: FieldOptions<T | null>);
 }
 /**
  * Field for Dataverse multi-select choice (MultiSelectPicklist) columns.
@@ -1098,7 +1105,7 @@ declare function primaryKey(name: string, options?: FieldOptions<GUID>): Primary
  * });
  * // Infer<typeof table>["gender"] → 1 | 2 | null
  */
-declare function list<T extends string | number>(name: string, list: Array<T>, options?: FieldOptions<T | null>): ListField<T>;
+declare function list<const T extends string | number>(name: string, list: ReadonlyArray<T>, options?: FieldOptions<T | null>): ListField<T>;
 /**
  * Creates a multi-select choice column definition (MultiSelectPicklist).
  * Reads the Dataverse CSV format (`"3,4,5"`) as a `number[]` and writes
@@ -2317,4 +2324,4 @@ declare class EntityQueryBuilder<TProps extends GenericProperties, TResult exten
 }
 declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FormattedField, GUID, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, SelectQuery, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, SelectQuery, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };

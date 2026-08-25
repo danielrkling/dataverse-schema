@@ -1,5 +1,5 @@
 import { createCollection } from "@tanstack/db"
-import { DataverseSyncDB } from "../../../../src/tanstack-db/index"
+import { DataverseSyncDB } from "../../../../src/tanstack-db"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"

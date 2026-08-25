@@ -647,20 +647,20 @@ export function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>
   return new InitialQueryImpl(table) as any
 }
 
-export type ODataTableQueryOptions = {
-  filter?: string
+export type ODataTableQueryOptions<T extends GenericProperties = GenericProperties> = {
+  filter?: string | FilterExpr | ((f: ODataFieldProxy<T>) => string | FilterExpr)
   orderby?: Partial<Record<string, "asc" | "desc">> | string
   top?: number
 }
 
 export function buildTableQueryAst<T extends GenericProperties>(
   table: DataverseTable<T>,
-  options?: ODataTableQueryOptions,
+  options?: ODataTableQueryOptions<T>,
 ): ODataSelectAst {
   const query = new ODataQuery(table)
   query.select()
 
-  if (options?.filter) query.filter(options.filter)
+  if (options?.filter) query.filter(options.filter as any)
   if (options?.top !== undefined) query.top(options.top)
   if (typeof options?.orderby === "string") {
     for (const value of options.orderby.split(",")) {

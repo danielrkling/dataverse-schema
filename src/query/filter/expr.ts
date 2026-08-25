@@ -3,22 +3,45 @@ import { FilterNode, FilterValue } from "./ast"
 import { renderFilterOdata } from "./render-odata"
 import { renderFilterFetchXml } from "./render-fetchxml"
 import { NumberField } from "../../fields"
-import type { FieldPath } from "../path"
+import type { FieldBase } from "../../fields"
+import type { FieldPath, QueryProperty } from "../path"
 
 export { FieldRef } from "../shared/field-ref"
 
+/**
+ * A field reference for filter expressions: either a typed `FieldRef` (from a
+ * query builder proxy) or a raw field instance belonging to the root entity.
+ */
+export type FilterField = FieldRef<any> | QueryProperty
+
 type NonNullType<T> = T extends Date | null ? Date : Exclude<T, null>
 
-function pathOf(field: FieldRef<any>): FieldPath {
-  return field.path
+function toRef(field: FilterField): FieldRef<any> {
+  if (field instanceof FieldRef) return field
+  const f = field as QueryProperty
+  return new FieldRef(f, f.fromDataverseName ?? f.logicalName)
+}
+
+/** Returns a ref if the value is a field reference or raw property instance, otherwise null. */
+function asRef(value: unknown): FieldRef<any> | null {
+  if (value instanceof FieldRef) return value as FieldRef<any>
+  if (value && typeof value === "object") {
+    const v = value as Partial<QueryProperty>
+    if (typeof (v.fromDataverseName ?? v.logicalName) === "string") return toRef(value as FilterField)
+  }
+  return null
+}
+
+function pathOf(field: FilterField): FieldPath {
+  return toRef(field).path
 }
 
 /** Converts typed field values (e.g. choice labels) into their Dataverse representation before rendering. */
-function toFilterValue(field: FieldRef<any>, value: unknown): FilterValue {
+function toFilterValue(field: FilterField, value: unknown): FilterValue {
+  const f = toRef(field).field
   if (value == null || typeof value !== "string") return value as FilterValue
-  const f = field.field as any
   if (f?.type !== "choice") return value as FilterValue
-  return f.transformValueToDataverse(value)
+  return f.transformValueToDataverse(value) as FilterValue
 }
 
 export class FilterExpr {
@@ -41,69 +64,63 @@ export class FilterExpr {
   }
 }
 
-function fn(field: FieldRef<any>, fnName: string, operator: string, values: FilterValue[]): FilterExpr {
+function fn(field: FilterField, fnName: string, operator: string, values: FilterValue[]): FilterExpr {
   return new FilterExpr({ type: "fn", field: pathOf(field), fnName, operator, values: values.map(v => toFilterValue(field, v)) })
 }
 
-export function eq<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) })
+function compare(field: FilterField, operator: string, value: unknown): FilterExpr {
+  const other = asRef(value)
+  if (other) {
+    return new FilterExpr({ type: "compare", field: pathOf(field), operator, otherField: other.path })
   }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value: toFilterValue(field, value) })
+  const ref = toRef(field)
+  return new FilterExpr({ type: "comparison", field: ref.path, operator, value: toFilterValue(ref, value) })
 }
 
-export function ne<T>(field: FieldRef<T>, value: T | null | FieldRef<any>): FilterExpr {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ne", otherField: pathOf(value) })
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ne", value: toFilterValue(field, value) })
+/** A typed field reference (`FieldRef`) or a raw root-level field instance. Both carry the value type `T`. */
+type TypedField<T> = FieldRef<T> | FieldBase<T>
+
+export function eq<T>(field: TypedField<T>, value: NoInfer<T> | null | FilterField): FilterExpr {
+  return compare(field, "eq", value)
 }
 
-export function gt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) })
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value: toFilterValue(field, value) })
+export function ne<T>(field: TypedField<T>, value: NoInfer<T> | null | FilterField): FilterExpr {
+  return compare(field, "ne", value)
 }
 
-export function ge<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "ge", otherField: pathOf(value) })
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "ge", value: toFilterValue(field, value) })
+export function gt<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr {
+  return compare(field, "gt", value)
 }
 
-export function lt<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) })
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value: toFilterValue(field, value) })
+export function ge<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr {
+  return compare(field, "ge", value)
 }
 
-export function le<T extends number | string | Date | null>(field: FieldRef<T>, value: NonNullType<T> | FieldRef<any>): FilterExpr {
-  if (value instanceof FieldRef) {
-    return new FilterExpr({ type: "compare", field: pathOf(field), operator: "le", otherField: pathOf(value) })
-  }
-  return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "le", value: toFilterValue(field, value) })
+export function lt<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr {
+  return compare(field, "lt", value)
 }
 
-export function isNull(field: FieldRef<any>): FilterExpr {
+export function le<T extends number | string | Date | null>(field: TypedField<T>, value: NoInfer<NonNullType<T>> | FilterField): FilterExpr {
+  return compare(field, "le", value)
+}
+
+export function isNull(field: FilterField): FilterExpr {
   return new FilterExpr({ type: "null", field: pathOf(field), positive: true })
 }
 
-export function isNotNull(field: FieldRef<any>): FilterExpr {
+export function isNotNull(field: FilterField): FilterExpr {
   return new FilterExpr({ type: "null", field: pathOf(field), positive: false })
 }
 
-export function contains<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr {
+export function contains(field: FilterField, value: string): FilterExpr {
   return new FilterExpr({ type: "contains", field: pathOf(field), value })
 }
 
-export function startsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr {
+export function startsWith(field: FilterField, value: string): FilterExpr {
   return new FilterExpr({ type: "startsWith", field: pathOf(field), value })
 }
 
-export function endsWith<T extends string | null>(field: FieldRef<T>, value: string): FilterExpr {
+export function endsWith(field: FilterField, value: string): FilterExpr {
   return new FilterExpr({ type: "endsWith", field: pathOf(field), value })
 }
 
@@ -132,270 +149,270 @@ export function isInactive(): FilterExpr {
   return eq(FieldRef.fromPath(new NumberField("statecode"), "statecode"), 1)
 }
 
-export function Above(field: FieldRef<any>, value: string): FilterExpr {
+export function Above(field: FilterField, value: string): FilterExpr {
   return fn(field, "Above", "above", [value])
 }
 
-export function AboveOrEqual(field: FieldRef<any>, value: string): FilterExpr {
+export function AboveOrEqual(field: FilterField, value: string): FilterExpr {
   return fn(field, "AboveOrEqual", "above-or-equal", [value])
 }
 
-export function Between(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr {
+export function Between(field: FilterField, value1: string | number, value2: string | number): FilterExpr {
   return fn(field, "Between", "between", [value1, value2])
 }
 
-export function ContainsValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr {
+export function ContainsValues(field: FilterField, values: (string | number)[]): FilterExpr {
   return fn(field, "ContainsValues", "in", values)
 }
 
-export function DoesNotContainValues(field: FieldRef<any>, values: (string | number)[]): FilterExpr {
+export function DoesNotContainValues(field: FilterField, values: (string | number)[]): FilterExpr {
   return fn(field, "DoesNotContainValues", "not-in", values)
 }
 
-export function EqualBusinessId(field: FieldRef<any>): FilterExpr {
+export function EqualBusinessId(field: FilterField): FilterExpr {
   return fn(field, "EqualBusinessId", "eq-businessid", [])
 }
 
-export function EqualUserId(field: FieldRef<any>): FilterExpr {
+export function EqualUserId(field: FilterField): FilterExpr {
   return fn(field, "EqualUserId", "eq-userid", [])
 }
 
-export function EqualUserLanguage(field: FieldRef<any>): FilterExpr {
+export function EqualUserLanguage(field: FilterField): FilterExpr {
   return fn(field, "EqualUserLanguage", "eq-userlanguage", [])
 }
 
-export function EqualUserOrUserHierarchy(field: FieldRef<any>): FilterExpr {
+export function EqualUserOrUserHierarchy(field: FilterField): FilterExpr {
   return fn(field, "EqualUserOrUserHierarchy", "eq-useroruserhierarchy", [])
 }
 
-export function EqualUserOrUserHierarchyAndTeams(field: FieldRef<any>): FilterExpr {
+export function EqualUserOrUserHierarchyAndTeams(field: FilterField): FilterExpr {
   return fn(field, "EqualUserOrUserHierarchyAndTeams", "eq-useroruserhierarchyandteams", [])
 }
 
-export function EqualUserOrUserTeams(field: FieldRef<any>): FilterExpr {
+export function EqualUserOrUserTeams(field: FilterField): FilterExpr {
   return fn(field, "EqualUserOrUserTeams", "eq-useroruserteams", [])
 }
 
-export function In<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr {
+export function In<T extends string | number>(field: TypedField<T>, values: NoInfer<T>[]): FilterExpr {
   return fn(field, "In", "in", values)
 }
 
-export function InFiscalPeriod(field: FieldRef<any>, value: number): FilterExpr {
+export function InFiscalPeriod(field: FilterField, value: number): FilterExpr {
   return fn(field, "InFiscalPeriod", "in-fiscal-period", [value])
 }
 
-export function InFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr {
+export function InFiscalPeriodAndYear(field: FilterField, fiscalPeriod: number, fiscalYear: number): FilterExpr {
   return fn(field, "InFiscalPeriodAndYear", "in-fiscal-period-and-year", [fiscalPeriod, fiscalYear])
 }
 
-export function InFiscalYear(field: FieldRef<any>, value: number): FilterExpr {
+export function InFiscalYear(field: FilterField, value: number): FilterExpr {
   return fn(field, "InFiscalYear", "in-fiscal-year", [value])
 }
 
-export function InOrAfterFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr {
+export function InOrAfterFiscalPeriodAndYear(field: FilterField, fiscalPeriod: number, fiscalYear: number): FilterExpr {
   return fn(field, "InOrAfterFiscalPeriodAndYear", "in-or-after-fiscal-period-and-year", [fiscalPeriod, fiscalYear])
 }
 
-export function InOrBeforeFiscalPeriodAndYear(field: FieldRef<any>, fiscalPeriod: number, fiscalYear: number): FilterExpr {
+export function InOrBeforeFiscalPeriodAndYear(field: FilterField, fiscalPeriod: number, fiscalYear: number): FilterExpr {
   return fn(field, "InOrBeforeFiscalPeriodAndYear", "in-or-before-fiscal-period-and-year", [fiscalPeriod, fiscalYear])
 }
 
-export function Last7Days(field: FieldRef<any>): FilterExpr {
+export function Last7Days(field: FilterField): FilterExpr {
   return fn(field, "Last7Days", "last-seven-days", [])
 }
 
-export function LastFiscalPeriod(field: FieldRef<any>): FilterExpr {
+export function LastFiscalPeriod(field: FilterField): FilterExpr {
   return fn(field, "LastFiscalPeriod", "last-fiscal-period", [])
 }
 
-export function LastFiscalYear(field: FieldRef<any>): FilterExpr {
+export function LastFiscalYear(field: FilterField): FilterExpr {
   return fn(field, "LastFiscalYear", "last-fiscal-year", [])
 }
 
-export function LastMonth(field: FieldRef<any>): FilterExpr {
+export function LastMonth(field: FilterField): FilterExpr {
   return fn(field, "LastMonth", "last-month", [])
 }
 
-export function LastWeek(field: FieldRef<any>): FilterExpr {
+export function LastWeek(field: FilterField): FilterExpr {
   return fn(field, "LastWeek", "last-week", [])
 }
 
-export function LastXDays(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXDays(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXDays", "last-x-days", [value])
 }
 
-export function LastXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXFiscalPeriods(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXFiscalPeriods", "last-x-fiscal-periods", [value])
 }
 
-export function LastXFiscalYears(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXFiscalYears(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXFiscalYears", "last-x-fiscal-years", [value])
 }
 
-export function LastXHours(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXHours(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXHours", "last-x-hours", [value])
 }
 
-export function LastXMonths(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXMonths(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXMonths", "last-x-months", [value])
 }
 
-export function LastXWeeks(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXWeeks(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXWeeks", "last-x-weeks", [value])
 }
 
-export function LastXYears(field: FieldRef<any>, value: number): FilterExpr {
+export function LastXYears(field: FilterField, value: number): FilterExpr {
   return fn(field, "LastXYears", "last-x-years", [value])
 }
 
-export function LastYear(field: FieldRef<any>): FilterExpr {
+export function LastYear(field: FilterField): FilterExpr {
   return fn(field, "LastYear", "last-year", [])
 }
 
-export function Next7Days(field: FieldRef<any>): FilterExpr {
+export function Next7Days(field: FilterField): FilterExpr {
   return fn(field, "Next7Days", "next-seven-days", [])
 }
 
-export function NextFiscalPeriod(field: FieldRef<any>): FilterExpr {
+export function NextFiscalPeriod(field: FilterField): FilterExpr {
   return fn(field, "NextFiscalPeriod", "next-fiscal-period", [])
 }
 
-export function NextFiscalYear(field: FieldRef<any>): FilterExpr {
+export function NextFiscalYear(field: FilterField): FilterExpr {
   return fn(field, "NextFiscalYear", "next-fiscal-year", [])
 }
 
-export function NextMonth(field: FieldRef<any>): FilterExpr {
+export function NextMonth(field: FilterField): FilterExpr {
   return fn(field, "NextMonth", "next-month", [])
 }
 
-export function NextWeek(field: FieldRef<any>): FilterExpr {
+export function NextWeek(field: FilterField): FilterExpr {
   return fn(field, "NextWeek", "next-week", [])
 }
 
-export function NextXDays(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXDays(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXDays", "next-x-days", [value])
 }
 
-export function NextXFiscalPeriods(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXFiscalPeriods(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXFiscalPeriods", "next-x-fiscal-periods", [value])
 }
 
-export function NextXFiscalYears(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXFiscalYears(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXFiscalYears", "next-x-fiscal-years", [value])
 }
 
-export function NextXHours(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXHours(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXHours", "next-x-hours", [value])
 }
 
-export function NextXMonths(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXMonths(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXMonths", "next-x-months", [value])
 }
 
-export function NextXWeeks(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXWeeks(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXWeeks", "next-x-weeks", [value])
 }
 
-export function NextXYears(field: FieldRef<any>, value: number): FilterExpr {
+export function NextXYears(field: FilterField, value: number): FilterExpr {
   return fn(field, "NextXYears", "next-x-years", [value])
 }
 
-export function NextYear(field: FieldRef<any>): FilterExpr {
+export function NextYear(field: FilterField): FilterExpr {
   return fn(field, "NextYear", "next-year", [])
 }
 
-export function NotBetween(field: FieldRef<any>, value1: string | number, value2: string | number): FilterExpr {
+export function NotBetween(field: FilterField, value1: string | number, value2: string | number): FilterExpr {
   return fn(field, "NotBetween", "not-between", [value1, value2])
 }
 
-export function NotEqualBusinessId(field: FieldRef<any>): FilterExpr {
+export function NotEqualBusinessId(field: FilterField): FilterExpr {
   return fn(field, "NotEqualBusinessId", "neq-businessid", [])
 }
 
-export function NotEqualUserId(field: FieldRef<any>): FilterExpr {
+export function NotEqualUserId(field: FilterField): FilterExpr {
   return fn(field, "NotEqualUserId", "neq-userid", [])
 }
 
-export function NotIn<T extends string | number>(field: FieldRef<T>, values: T[]): FilterExpr {
+export function NotIn<T extends string | number>(field: TypedField<T>, values: NoInfer<T>[]): FilterExpr {
   return fn(field, "NotIn", "not-in", values)
 }
 
-export function NotUnder(field: FieldRef<any>, value: string): FilterExpr {
+export function NotUnder(field: FilterField, value: string): FilterExpr {
   return fn(field, "NotUnder", "not-under", [value])
 }
 
-export function OlderThanXDays(field: FieldRef<any>, value: number): FilterExpr {
+export function OlderThanXDays(field: FilterField, value: number): FilterExpr {
   return fn(field, "OlderThanXDays", "olderthan-x-days", [value])
 }
 
-export function OlderThanXHours(field: FieldRef<any>, value: number): FilterExpr {
+export function OlderThanXHours(field: FilterField, value: number): FilterExpr {
   return fn(field, "OlderThanXHours", "olderthan-x-hours", [value])
 }
 
-export function OlderThanXMinutes(field: FieldRef<any>, value: number): FilterExpr {
+export function OlderThanXMinutes(field: FilterField, value: number): FilterExpr {
   return fn(field, "OlderThanXMinutes", "olderthan-x-minutes", [value])
 }
 
-export function OlderThanXMonths(field: FieldRef<any>, value: number): FilterExpr {
+export function OlderThanXMonths(field: FilterField, value: number): FilterExpr {
   return fn(field, "OlderThanXMonths", "olderthan-x-months", [value])
 }
 
-export function OlderThanXWeeks(field: FieldRef<any>, value: number): FilterExpr {
+export function OlderThanXWeeks(field: FilterField, value: number): FilterExpr {
   return fn(field, "OlderThanXWeeks", "olderthan-x-weeks", [value])
 }
 
-export function OlderThanXYears(field: FieldRef<any>, value: number): FilterExpr {
+export function OlderThanXYears(field: FilterField, value: number): FilterExpr {
   return fn(field, "OlderThanXYears", "olderthan-x-years", [value])
 }
 
-export function On(field: FieldRef<any>, value: string): FilterExpr {
+export function On(field: FilterField, value: string): FilterExpr {
   return fn(field, "On", "on", [value])
 }
 
-export function OnOrAfter(field: FieldRef<any>, value: string): FilterExpr {
+export function OnOrAfter(field: FilterField, value: string): FilterExpr {
   return fn(field, "OnOrAfter", "on-or-after", [value])
 }
 
-export function OnOrBefore(field: FieldRef<any>, value: string): FilterExpr {
+export function OnOrBefore(field: FilterField, value: string): FilterExpr {
   return fn(field, "OnOrBefore", "on-or-before", [value])
 }
 
-export function ThisFiscalPeriod(field: FieldRef<any>): FilterExpr {
+export function ThisFiscalPeriod(field: FilterField): FilterExpr {
   return fn(field, "ThisFiscalPeriod", "this-fiscal-period", [])
 }
 
-export function ThisFiscalYear(field: FieldRef<any>): FilterExpr {
+export function ThisFiscalYear(field: FilterField): FilterExpr {
   return fn(field, "ThisFiscalYear", "this-fiscal-year", [])
 }
 
-export function ThisMonth(field: FieldRef<any>): FilterExpr {
+export function ThisMonth(field: FilterField): FilterExpr {
   return fn(field, "ThisMonth", "this-month", [])
 }
 
-export function ThisWeek(field: FieldRef<any>): FilterExpr {
+export function ThisWeek(field: FilterField): FilterExpr {
   return fn(field, "ThisWeek", "this-week", [])
 }
 
-export function ThisYear(field: FieldRef<any>): FilterExpr {
+export function ThisYear(field: FilterField): FilterExpr {
   return fn(field, "ThisYear", "this-year", [])
 }
 
-export function Today(field: FieldRef<any>): FilterExpr {
+export function Today(field: FilterField): FilterExpr {
   return fn(field, "Today", "today", [])
 }
 
-export function Tomorrow(field: FieldRef<any>): FilterExpr {
+export function Tomorrow(field: FilterField): FilterExpr {
   return fn(field, "Tomorrow", "tomorrow", [])
 }
 
-export function Under(field: FieldRef<any>, value: string): FilterExpr {
+export function Under(field: FilterField, value: string): FilterExpr {
   return fn(field, "Under", "under", [value])
 }
 
-export function UnderOrEqual(field: FieldRef<any>, value: string): FilterExpr {
+export function UnderOrEqual(field: FilterField, value: string): FilterExpr {
   return fn(field, "UnderOrEqual", "under-or-equal", [value])
 }
 
-export function Yesterday(field: FieldRef<any>): FilterExpr {
+export function Yesterday(field: FilterField): FilterExpr {
   return fn(field, "Yesterday", "yesterday", [])
 }

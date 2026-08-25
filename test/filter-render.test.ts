@@ -2,12 +2,31 @@ import { expect, test } from "vitest"
 import {
   eq, ne, gt, and, or, not, contains, startsWith, endsWith, isNull, isNotNull,
   Between, In, ContainsValues, EqualUserId, LastXDays, Today, FieldRef,
-  choice, nullableChoice,
+  choice, nullableChoice, string, number, datetime,
 } from "../src"
 
 const ref = (name: string) => new FieldRef(name)
 
 // --- Choice label transformation ---
+
+test("raw field instances are accepted and treated as root-level", () => {
+  const name = string("fullname")
+  expect(eq(name, "John").toOdata()).toBe("(fullname eq 'John')")
+  expect(eq(name, "John").toFetchXml()).toBe(`<condition attribute="fullname" operator="eq" value="John" />`)
+
+  const revenue = number("revenue")
+  expect(gt(revenue, 100).toOdata()).toBe("(revenue gt 100)")
+
+  const status = choice("statuscode", { 1: "Active", 2: "Inactive" } as const)
+  expect(eq(status, "Active").toOdata()).toBe("(statuscode eq 1)")
+  expect(EqualUserId(revenue).toOdata()).toBe("Microsoft.Dynamics.CRM.EqualUserId(PropertyName='revenue')")
+  expect(EqualUserId(revenue).toFetchXml()).toBe(`<condition attribute="revenue" operator="eq-userid" />`)
+
+  // field-to-field comparison with raw instances
+  const createdOn = datetime("createdon")
+  expect(and(eq(name, revenue), gt(createdOn, createdOn)).toOdata())
+    .toBe("((fullname eq revenue) and (createdon gt createdon))")
+})
 
 test("choice labels are transformed to option values in comparisons", () => {
   const status = FieldRef.fromPath(choice("statuscode", { 1: "Active", 2: "Inactive" }), "statuscode")

@@ -6,17 +6,13 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/index.mjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.mts",
-      "import": "./dist/index.mjs"
-    },
-    "./tanstack-db": {
-      "types": "./dist/tanstack-db/index.d.mts",
-      "import": "./dist/tanstack-db/index.mjs"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "keywords": [
@@ -38,7 +34,7 @@
   },
   "homepage": "https://github.com/danielrkling/dataverse-schema#readme",
   "devDependencies": {
-    "@tanstack/db": "^0.6.16",
+    "@tanstack/db": "^0.7.2",
     "@vitest/coverage-v8": "^3.2.7",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.1.0",
@@ -53,7 +49,7 @@
     "valibot": "^1.4.2"
   },
   "peerDependencies": {
-    "@tanstack/db": ">=0.5.0"
+    "@tanstack/db": "^0.7.2"
   },
   "peerDependenciesMeta": {
     "@tanstack/db": {

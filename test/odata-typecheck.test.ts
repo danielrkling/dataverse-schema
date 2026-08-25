@@ -2,7 +2,8 @@ import { expectTypeOf, test } from "vitest"
 import {
   Infer, GUID, DataverseTable, DataverseClient,
   primaryKey, string, number, choice, datetime, lookup, collection,
-  fetchOdata, eq, ne, gt, any, all, groupby, sum, count, FieldRef, FilterExpr,
+  fetchOdata, eq, ne, gt, and, any, all, groupby, sum, count, FieldRef, FilterExpr,
+  EqualUserId,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -107,6 +108,31 @@ test("multiple expands accumulate into the row type", () => {
 })
 
 // --- filter inference ---
+
+test("table query options accept FilterExpr and typed proxy callbacks", () => {
+  const opts: NonNullable<Parameters<typeof Account.getRecords>[0]> = {
+    filter: f => {
+      expectTypeOf(eq(f.name, "Acme")).toEqualTypeOf<FilterExpr>()
+      return and(eq(f.name, "Acme"), gt(f.revenue, 10))
+    },
+  }
+  expectTypeOf(opts.filter).not.toBeUndefined()
+  void (() => {
+    // raw field instances are typed by their field class
+    expectTypeOf(eq(string("fullname"), "Acme")).toEqualTypeOf<FilterExpr>()
+    expectTypeOf(eq(choice("statuscode", { 1: "Active", 2: "Inactive" } as const), "Active")).toEqualTypeOf<FilterExpr>()
+    // @ts-expect-error number field rejects string values
+    eq(number("revenue"), "oops")
+    // @ts-expect-error string field rejects number values
+    eq(string("fullname"), 5)
+    // @ts-expect-error unknown choice label
+    eq(choice("statuscode", { 1: "Active", 2: "Inactive" } as const), "Bogus")
+    // @ts-expect-error bogus is not a field on the proxy
+    Account.getRecords({ filter: f => eq(f.bogus, 1) })
+    // @ts-expect-error revenue is a number field
+    Account.getRecords({ filter: f => eq(f.revenue, "oops") })
+  })
+})
 
 test("filter callbacks receive typed field references", () => {
   const q = fetchOdata(Account).select("name").filter(f => {

@@ -4,7 +4,6 @@ export default defineConfig({
   // 1. Define your entry points exactly like you did in Vite
   entry: {
     index: 'src/index.ts',
-    'tanstack-db/index': 'src/tanstack-db/index.ts' 
   },
   
   // 2. Output ES modules (.mjs)
@@ -13,7 +12,7 @@ export default defineConfig({
   // 3. Enable automatic isolated type-bundling
   dts: true,
   deps:{
-    neverBundle:['@tanstack/db', 'valibot', 'dataverse-schema']
+    neverBundle:['@tanstack/db', 'valibot']
   }, 
 
   // 5. Build configuration optimization

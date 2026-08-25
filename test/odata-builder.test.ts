@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseClient, primaryKey, string, number, choice,
   lookup, collection, fetchOdata, any, all, eq, ne, gt, and, FieldRef,
-  groupby, sum, count, average, min, max, buildTableQueryAst,
+  groupby, sum, count, average, min, max, buildTableQueryAst, EqualUserId,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -245,4 +245,18 @@ test("default table query stays flat regardless of navigation properties", () =>
   const ast = buildTableQueryAst(Parent)
   expect(ast.select!.length).toBeGreaterThan(0)
   expect(ast.expands ?? []).toHaveLength(0)
+})
+
+test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () => {
+  const astExpr = buildTableQueryAst(Account, { filter: f => eq(f.name, "Contoso") })
+  expect(astExpr.filters).toHaveLength(1)
+  expect(astExpr.filters![0]).toMatchObject({ type: "comparison", operator: "eq", value: "Contoso" })
+
+  const astCallback = buildTableQueryAst(Account, { filter: f => and(eq(f.name, "Contoso"), eq(f.status, "Active")) })
+  expect(astCallback.filters).toHaveLength(1)
+  expect(astCallback.filters![0].type).toBe("and")
+
+  const astFn = buildTableQueryAst(Account, { filter: f => EqualUserId(f.revenue) })
+  expect(astFn.filters).toHaveLength(1)
+  expect(astFn.filters![0]).toMatchObject({ type: "fn", fnName: "EqualUserId", values: [] })
 })

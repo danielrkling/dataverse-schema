@@ -76,6 +76,11 @@ test("choice and list infer label/element unions", () => {
   expectTypeOf(nf.getDefault()).toEqualTypeOf<"Low" | "High" | null>()
   const lf = list("gendercode", ["M", "F"] as const)
   expectTypeOf(lf.getDefault()).toEqualTypeOf<"M" | "F" | null>()
+  // readonly arrays are accepted, and literals infer without `as const`
+  const rf = list("gendercode", ["M", "F"] as ReadonlyArray<"M" | "F">)
+  expectTypeOf(rf.getDefault()).toEqualTypeOf<"M" | "F" | null>()
+  const nf2 = list("gendercode", ["M", "F"])
+  expectTypeOf(nf2.getDefault()).toEqualTypeOf<"M" | "F" | null>()
 })
 
 test("json infers the schema output type", () => {
