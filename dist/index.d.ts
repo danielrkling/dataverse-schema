@@ -399,7 +399,8 @@ declare function all<P extends GenericProperties>(proxy: ODataCollectionNavProxy
 declare function fetchOdata<T extends GenericProperties>(table: DataverseTable<T>): InitialQuery<T>;
 type ODataTableQueryOptions<T extends GenericProperties = GenericProperties> = {
   filter?: string | FilterExpr | ((f: ODataFieldProxy<T>) => string | FilterExpr);
-  orderby?: Partial<Record<string, "asc" | "desc">> | string;
+  /** Object keys are TypeScript property names (mapped to logical names at runtime); strings pass through raw. */
+  orderby?: Partial<Record<keyof T & string, "asc" | "desc">> | string;
   top?: number;
 };
 declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions<T>): ODataSelectAst;

@@ -45,3 +45,46 @@ test("offline collection rows infer Infer<fields>", () => {
   }
   void check
 })
+
+test("collection accepts explicit id and query options", () => {
+  const check = () => {
+    // Two collections over the same entitySet with different filters
+    const gold = createCollection(dataverseCollectionOptions({
+      table: Account,
+      id: "accounts-gold",
+      query: { filter: "tier eq 1" },
+    }))
+    const silver = createCollection(dataverseCollectionOptions({
+      table: Account,
+      id: "accounts-silver",
+      query: { filter: "tier eq 2", orderby: { name: "asc" } },
+    }))
+
+    // orderby keys are checked against the table's property names
+    const bad = () => dataverseCollectionOptions({
+      table: Account,
+      id: "accounts-bad",
+      // @ts-expect-error "notAField" is not a property of the table's fields
+      query: { orderby: { notAField: "asc" } },
+    })
+    void bad
+
+    type GoldRow = NonNullable<ReturnType<typeof gold.get>>
+    expectTypeOf<GoldRow["tier"]>().toEqualTypeOf<"Gold" | "Silver">()
+    type SilverRow = NonNullable<ReturnType<typeof silver.get>>
+    expectTypeOf<SilverRow["id"]>().toEqualTypeOf<GUID>()
+  }
+  void check
+
+  const offlineCheck = () => {
+    const db = new DataverseSyncDB("probe-db-2", [Account], 1)
+    const collection = createCollection(db.createCollectionOptions({
+      table: Account,
+      id: "accounts-active",
+      query: { filter: "statecode eq 0" },
+    }))
+    type ColRow = NonNullable<ReturnType<typeof collection.get>>
+    expectTypeOf<ColRow["name"]>().toEqualTypeOf<string>()
+  }
+  void offlineCheck
+})

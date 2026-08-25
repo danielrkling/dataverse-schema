@@ -1,6 +1,6 @@
 import { type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
 import { IDBPDatabase, openDB } from "idb";
-import { getEtag, type DataverseTable, type GenericProperties, type Infer } from "./index";
+import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
 
 const DEFAULT_SYNC_INTERVAL = 30000;
 const DEFAULT_POLL_INTERVAL = 30000;
@@ -10,6 +10,17 @@ const RETRY_MAX_DELAY = 60000;
 
 export type DataverseCollectionConfig<T extends GenericProperties> = {
     table: DataverseTable<T>;
+    /**
+     * Unique collection id. Defaults to the table's entitySetName — provide an
+     * explicit id when creating multiple collections over the same entity
+     * (e.g. with different query filters), otherwise they will collide.
+     */
+    id?: string;
+    /**
+     * Query options limiting which records the collection syncs (filter,
+     * select, orderby, …). Applied to every remote sync pull.
+     */
+    query?: ODataTableQueryOptions<T>;
     syncInterval?: number;
     /** When true, the collection rejects all insert/update/delete mutations. */
     readonly?: boolean;
@@ -64,10 +75,19 @@ export class MutationPersistenceError extends Error {
 export function dataverseCollectionOptions<T extends GenericProperties>(
     config: DataverseCollectionConfig<T>,
 ): CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>> {
-    const { table, syncInterval = DEFAULT_SYNC_INTERVAL, readonly = false, ...rest } = config;
+    const {
+        table,
+        id: explicitId,
+        query,
+        syncInterval = DEFAULT_SYNC_INTERVAL,
+        readonly = false,
+        ...rest
+    } = config;
     const pk = table.primaryKey;
     const getKey = ((item: Infer<T>) => (item as any)[pk.key]);
-    const collectionId = table.entitySetName;
+    // Multiple collections may target the same entitySet with different
+    // filters — the id (explicit or derived) is what keeps them distinct.
+    const collectionId = explicitId ?? table.entitySetName;
 
     // Cross-tab coordination: mirror the offline adapter's BroadcastChannel so
     // mutations in one tab are reflected in other tabs immediately (and so
@@ -161,16 +181,38 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
             };
             channel.addEventListener("message", handleTabMessage);
 
+            // Re-pull as soon as connectivity returns rather than waiting for
+            // the next poll tick.
+            const handleOnline = () => { void syncFn?.(); };
+            // Guarded so non-DOM runtimes (unit tests, Node) don't blow up;
+            // in the browser globalThis IS the event target for "online".
+            if (typeof globalThis.addEventListener === "function") {
+                globalThis.addEventListener("online", handleOnline);
+            }
+            const removeOnlineListener = () => {
+                if (typeof globalThis.removeEventListener === "function") {
+                    globalThis.removeEventListener("online", handleOnline);
+                }
+            };
+
             syncFn = async () => {
                 // Guard against concurrent syncs (forceSync + poll tick) touching
                 // the same collection's synced transaction at once.
                 if (syncInFlight) return;
+                // Skip remote pulls while offline (e.g. WiFi down). Note DevTools
+                // network throttling does NOT flip navigator.onLine, so this guard
+                // won't pause polling under emulated offline — those failed pulls
+                // are caught and logged below instead.
+                if (!navigator.onLine) {
+                    markReady();
+                    return;
+                }
                 syncInFlight = true;
                 syncController = new AbortController();
                 try {
                     const keysToDelete = new Set(collection.keys())
                     begin();
-                    for await (const record of table.iterateRecords(undefined, { signal: syncController.signal })) {
+                    for await (const record of table.iterateRecords(query, { signal: syncController.signal })) {
                         const key = table.getPrimaryId(record)!
                         const existingRecord = collection.get(key)
                         if (existingRecord) {
@@ -209,6 +251,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
                     pollTimer = null;
                 }
                 channel.removeEventListener("message", handleTabMessage);
+                removeOnlineListener();
                 channel.close();
             };
         },
@@ -247,6 +290,14 @@ export class DataverseSyncDB {
 
     channel: BroadcastChannel
     private closed = false
+    // Per-collection cache stores (keyed by collection id). Unlike the table
+    // stores derived from entitySetName, these exist so multiple filtered
+    // collections over the same entity don't overwrite each other's snapshots.
+    private collectionStores = new Set<string>()
+    private collectionStorePromises = new Map<string, Promise<void>>()
+    // The version passed to openDB — grows when a late-registered collection
+    // needs its own object store and the DB must be reopened to create it.
+    private dbVersion: number
     private activeFetchControllers = new Set<AbortController>()
     private collectionCleanups = new Set<() => void>()
     // Schedules a wake-up for the soonest delayed retry so a failed mutation
@@ -259,6 +310,7 @@ export class DataverseSyncDB {
         this.name = name;
         this.channel = new BroadcastChannel(name)
         this.version = version;
+        this.dbVersion = version;
         this.tables = new Map(tables.map((v) => [v.entitySetName, v]));
 
         // Listen for tab sync & cancellation signals across browser tabs
@@ -294,14 +346,17 @@ export class DataverseSyncDB {
     async getDB() {
         if (!this.db) {
             const self = this
-            this.db = await openDB(this.name, this.version, {
+            this.db = await openDB(this.name, this.dbVersion, {
                 upgrade(database, oldVersion, _newVersion, transaction) {
                     // Queue stores are durable application state. Table stores are
                     // disposable cache state and are rebuilt by the next sync.
+                    // Per-collection cache stores (see ensureCollectionStore)
+                    // are preserved too.
                     for (const storeName of Array.from(database.objectStoreNames)) {
                         if (
                             storeName !== self.MUTATION_QUEUE_NAME &&
-                            storeName !== self.ERRORED_MUTATIONS_NAME
+                            storeName !== self.ERRORED_MUTATIONS_NAME &&
+                            !self.collectionStores.has(storeName)
                         ) {
                             database.deleteObjectStore(storeName);
                         }
@@ -330,6 +385,30 @@ export class DataverseSyncDB {
             });
         }
         return this.db;
+    }
+
+    /**
+     * Registers a per-collection cache store (keyed by collection id). If the
+     * database is already open without this store, it is reopened with a
+     * bumped version so the upgrade callback can create it. The returned
+     * promise resolves once the store is safe to read/write.
+     */
+    private ensureCollectionStore(name: string): Promise<void> {
+        let p = this.collectionStorePromises.get(name);
+        if (!p) {
+            p = (async () => {
+                this.collectionStores.add(name);
+                let db = await this.getDB();
+                if (!db.objectStoreNames.contains(name)) {
+                    db.close();
+                    this.db = undefined;
+                    this.dbVersion = db.version + 1;
+                    await this.getDB();
+                }
+            })();
+            this.collectionStorePromises.set(name, p);
+        }
+        return p;
     }
 
     /**
@@ -509,16 +588,24 @@ export class DataverseSyncDB {
         if (this.closed) throw new Error("DataverseSyncDB is closed");
         const {
             table,
+            id: explicitId,
+            query,
             syncInterval = DEFAULT_POLL_INTERVAL,
             readOnlyWhenOffline = false,
             readonly = false,
             requireVisible = true,
             ...rest
         } = config;
-        this.tables.set(table.entitySetName, table);
+        // Widened deliberately: the sync DB stores heterogeneous tables.
+        this.tables.set(table.entitySetName, table as DataverseTable<GenericProperties>);
         const pk = table.primaryKey;
         const getKey = (item: Infer<T>) => (item as any)[pk.key];
-        const collectionId = table.entitySetName;
+        // Multiple collections may target the same entitySet with different
+        // filters — the id (explicit or derived) is what keeps them distinct.
+        // The IndexedDB cache store is also keyed by this id so two filtered
+        // collections over one entity don't overwrite each other's snapshots.
+        const collectionId = explicitId ?? table.entitySetName;
+        const cacheReady = this.ensureCollectionStore(collectionId);
 
         let pollTimer: ReturnType<typeof setTimeout> | undefined;
         let syncFromDataverse: ((signal: AbortSignal) => Promise<void>);
@@ -575,8 +662,9 @@ export class DataverseSyncDB {
             sync: ({ begin, write, commit, markReady, collection }) => {
                 syncFromDataverse = async (signal: AbortSignal) => {
                     try {
+                        await cacheReady;
                         // Pass down signal to underlying API client
-                        const records = await table.getRecords(undefined, { signal });
+                        const records = await table.getRecords(query, { signal });
 
                         if (signal.aborted) return;
 
@@ -603,7 +691,7 @@ export class DataverseSyncDB {
                         }
                         commit();
                         const db = await this.getDB();
-                        const tx = db.transaction(table.entitySetName, "readwrite");
+                        const tx = db.transaction(collectionId, "readwrite");
                         await tx.store.clear();
                         for (const record of records) {
                             tx.store.put(record);
@@ -628,8 +716,9 @@ export class DataverseSyncDB {
                                 // Also persist into the local IndexedDB cache so a
                                 // reload keeps the row until the next remote sync.
                                 localWrites.push(async () => {
+                                    await cacheReady;
                                     const db = await this.getDB();
-                                    const tx = db.transaction(mutation.entitySetName, "readwrite");
+                                    const tx = db.transaction(collectionId, "readwrite");
                                     if (mutation.type === "delete") {
                                         tx.store.delete(mutation.key);
                                     } else {
@@ -650,8 +739,9 @@ export class DataverseSyncDB {
                 this.channel.addEventListener("message", handleTabMessage);
 
                 const syncFromIDB = async () => {
+                    await cacheReady;
                     const db = await this.getDB();
-                    const cached = (await db.getAll(table.entitySetName)) as Infer<T>[];
+                    const cached = (await db.getAll(collectionId)) as Infer<T>[];
                     if (!disposed && cached.length > 0) {
                         begin();
                         for (const item of cached) {
