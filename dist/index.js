@@ -2169,8 +2169,8 @@ var DataverseTable = class DataverseTable {
 			signal: options?.signal,
 			query: tableQuery(this)
 		});
-		const guid = this.getPrimaryId(record);
 		const transformed = this.transformValueFromDataverse(record);
+		const guid = this.getPrimaryId(transformed);
 		const ctx = {
 			table: this,
 			client: this.client,
@@ -2247,15 +2247,18 @@ var DataverseTable = class DataverseTable {
 			client: this.client,
 			recordId: id
 		};
+		if (!id) return this.createRecord(value, options);
 		const transformed = await this.transformValueToDataverse(value, ctx);
-		const result = await this.client.patchRecord(this.entitySetName, id ?? "", transformed, {
+		const record = await this.client.patchRecord(this.entitySetName, id, transformed, {
 			ifMatch: options?.ifMatch,
 			ifNoneMatch: options?.ifNoneMatch,
 			signal: options?.signal,
 			query: tableQuery(this)
 		});
+		const result = this.transformValueFromDataverse(record);
+		ctx.recordId = this.getPrimaryId(result);
 		await this._afterSave(ctx, value);
-		return this.transformValueFromDataverse(result);
+		return result;
 	}
 	/**
 	* Deletes a record by its primary key. Supports optimistic concurrency via the

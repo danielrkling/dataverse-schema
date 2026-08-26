@@ -2458,8 +2458,8 @@
         // $select keeps all columns in the response.
         { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
       );
-      const guid = this.getPrimaryId(record);
       const transformed = this.transformValueFromDataverse(record);
+      const guid = this.getPrimaryId(transformed);
       const ctx = { table: this, client: this.client, recordId: guid };
       await this._afterSave(ctx, value);
       return transformed;
@@ -2524,15 +2524,20 @@
      */
     async upsertRecord(id, value, options) {
       const ctx = { table: this, client: this.client, recordId: id };
+      if (!id) {
+        return this.createRecord(value, options);
+      }
       const transformed = await this.transformValueToDataverse(value, ctx);
-      const result = await this.client.patchRecord(
+      const record = await this.client.patchRecord(
         this.entitySetName,
-        id ?? "",
+        id,
         transformed,
         { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
       );
+      const result = this.transformValueFromDataverse(record);
+      ctx.recordId = this.getPrimaryId(result);
       await this._afterSave(ctx, value);
-      return this.transformValueFromDataverse(result);
+      return result;
     }
     /**
      * Deletes a record by its primary key. Supports optimistic concurrency via the
@@ -4405,7 +4410,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-26T14:51:59.137Z"}
+      meta.textContent = `build ${"2026-08-26T15:15:02.945Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4494,7 +4499,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-26T14:51:59.137Z",
+          build: "2026-08-26T15:15:02.945Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4513,7 +4518,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-26T14:51:59.137Z"}\``,
+        `Build: \`${"2026-08-26T15:15:02.945Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

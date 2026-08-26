@@ -400,8 +400,8 @@ export class DataverseTable<TProperties extends GenericProperties> {
       // $select keeps all columns in the response.
       { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) },
     );
-    const guid = this.getPrimaryId(record)!
     const transformed = this.transformValueFromDataverse(record);
+    const guid = this.getPrimaryId(transformed)!
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
     await this._afterSave(ctx, value);
     return transformed;
@@ -469,15 +469,21 @@ export class DataverseTable<TProperties extends GenericProperties> {
   async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>> {
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
 
+    if (!id){
+      return this.createRecord(value,options)
+    }
+
     const transformed = await this.transformValueToDataverse(value, ctx);
-    const result = await this.client.patchRecord(
+    const record = await this.client.patchRecord(
       this.entitySetName,
-      id ?? "",
+      id,
       transformed,
       { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) },
     );
+    const result = this.transformValueFromDataverse(record);
+    ctx.recordId = this.getPrimaryId(result)!
     await this._afterSave(ctx, value);
-    return this.transformValueFromDataverse(result);
+    return result
 
   }
 
