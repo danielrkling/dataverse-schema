@@ -421,6 +421,12 @@ type DataverseTableOptions<TProperties extends GenericProperties> = {
   logicalName: string;
   fields: TProperties;
   schema?: ValidationSchema<Infer<TProperties>>;
+  /**
+   * Overrides the auto-detected primary key (normally found by scanning
+   * `fields` for a `primaryKey()` field). Useful for derived/projected tables
+   * whose `fields` exclude the pk — Dataverse returns the pk attribute in
+   * responses regardless of `$select`, so row identity still works.
+   */
   primaryKey?: {
     key: string;
     property: PrimaryKeyField;
@@ -461,7 +467,11 @@ declare class DataverseTable<TProperties extends GenericProperties> {
   entitySetName: string;
   kind: "table";
   type: "table";
-  schema?: ValidationSchema<Infer<TProperties>>;
+  /**
+   * Whole-record valibot schema for this table — either the explicit
+   * `schema` option or one composed from the individual field schemas.
+   */
+  schema: ValidationSchema<Infer<TProperties>>;
   primaryKey: {
     key: string;
     property: PrimaryKeyField;
@@ -472,7 +482,6 @@ declare class DataverseTable<TProperties extends GenericProperties> {
   constructor(options: DataverseTableOptions<TProperties> & {
     schema?: ValidationSchema<Infer<TProperties>>;
   });
-  getSchema(): v.BaseSchema<unknown, Infer<TProperties>, v.BaseIssue<unknown>>;
   getDefault(value?: Partial<Infer<TProperties>>): Infer<TProperties>;
   /**
    * Retrieves a single record by its primary key (GUID) or alternate key.
@@ -710,6 +719,10 @@ declare class DataverseTable<TProperties extends GenericProperties> {
   deleteMultiple(ids: string[]): Promise<any>;
   /**
    * Extracts the primary key GUID from a record object, or `undefined` if not present.
+   *
+   * Note: Dataverse always returns the primary key attribute in responses,
+   * independent of `$select` — so this works even for tables whose `fields`
+   * don't declare the pk.
    *
    * @example
    * const account = await Account.getRecord("some-guid");

@@ -1978,6 +1978,10 @@ var DataverseTable = class DataverseTable {
 	entitySetName;
 	kind = "table";
 	type = "table";
+	/**
+	* Whole-record valibot schema for this table — either the explicit
+	* `schema` option or one composed from the individual field schemas.
+	*/
 	schema;
 	primaryKey;
 	/**
@@ -1988,7 +1992,7 @@ var DataverseTable = class DataverseTable {
 		this.entitySetName = options.entitySetName;
 		this.logicalName = options.logicalName;
 		this.fields = options.fields;
-		this.schema = options.schema;
+		this.schema = options.schema ?? composeFieldSchemas(this.fields);
 		if (options.primaryKey) this.primaryKey = options.primaryKey;
 		else {
 			const pk = Object.entries(this.fields).find((f) => f[1].type === "primaryKey");
@@ -1998,12 +2002,6 @@ var DataverseTable = class DataverseTable {
 				property: pk[1]
 			};
 		}
-	}
-	getSchema() {
-		if (this.schema) return this.schema;
-		const shape = {};
-		for (const [key, field] of Object.entries(this.fields)) shape[key] = field.schema;
-		return v.object(shape);
 	}
 	getDefault(value) {
 		const result = {};
@@ -2382,6 +2380,10 @@ var DataverseTable = class DataverseTable {
 	/**
 	* Extracts the primary key GUID from a record object, or `undefined` if not present.
 	*
+	* Note: Dataverse always returns the primary key attribute in responses,
+	* independent of `$select` — so this works even for tables whose `fields`
+	* don't declare the pk.
+	*
 	* @example
 	* const account = await Account.getRecord("some-guid");
 	* const pk = Account.getPrimaryId(account); // GUID | undefined
@@ -2392,7 +2394,8 @@ var DataverseTable = class DataverseTable {
 	transformValueFromDataverse(value) {
 		if (value === null) return null;
 		const result = {};
-		const recordId = value[this.primaryKey.property.fromDataverseName];
+		const pk = this.primaryKey;
+		const recordId = value[pk.property.fromDataverseName];
 		const ctx = recordId ? {
 			table: this,
 			client: this.client,
@@ -2402,6 +2405,7 @@ var DataverseTable = class DataverseTable {
 			const raw = value[property.fromDataverseName];
 			result[key] = property.transformValueFromDataverse(raw, ctx);
 		}
+		if (!(pk.key in result) && recordId !== void 0) result[pk.key] = recordId;
 		result[ETAG] = value["@odata.etag"];
 		return result;
 	}
@@ -2496,6 +2500,15 @@ var DataverseTable = class DataverseTable {
 	/** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
 	T;
 };
+/**
+* Composes a whole-record valibot schema from the individual field schemas.
+* Used as the default table schema when no explicit `schema` option is given.
+*/
+function composeFieldSchemas(fields) {
+	const shape = {};
+	for (const [key, field] of Object.entries(fields)) shape[key] = field.schema;
+	return v.object(shape);
+}
 function tableQuery(table, options) {
 	return serializeODataSelect(buildTableQueryAst(table, options));
 }

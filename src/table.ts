@@ -34,6 +34,12 @@ export type DataverseTableOptions<TProperties extends GenericProperties> = {
   logicalName: string;
   fields: TProperties;
   schema?: ValidationSchema<Infer<TProperties>>;
+  /**
+   * Overrides the auto-detected primary key (normally found by scanning
+   * `fields` for a `primaryKey()` field). Useful for derived/projected tables
+   * whose `fields` exclude the pk — Dataverse returns the pk attribute in
+   * responses regardless of `$select`, so row identity still works.
+   */
   primaryKey?: { key: string; property: PrimaryKeyField };
 };
 
@@ -72,7 +78,11 @@ export class DataverseTable<TProperties extends GenericProperties> {
   entitySetName: string;
   kind = "table" as const;
   type = "table" as const;
-  schema?: ValidationSchema<Infer<TProperties>>;
+  /**
+   * Whole-record valibot schema for this table — either the explicit
+   * `schema` option or one composed from the individual field schemas.
+   */
+  schema: ValidationSchema<Infer<TProperties>>;
   primaryKey: { key: string; property: PrimaryKeyField };
 
   /**
@@ -83,7 +93,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     this.entitySetName = options.entitySetName;
     this.logicalName = options.logicalName;
     this.fields = options.fields;
-    this.schema = options.schema;
+    this.schema = options.schema ?? composeFieldSchemas(this.fields);
     if (options.primaryKey) {
       this.primaryKey = options.primaryKey;
     } else {
@@ -91,15 +101,6 @@ export class DataverseTable<TProperties extends GenericProperties> {
       if (!pk) throw new Error("No Primary Key found in schema");
       this.primaryKey = { key: pk[0], property: pk[1] as PrimaryKeyField };
     }
-  }
-
-  getSchema(): v.BaseSchema<unknown, Infer<TProperties>, v.BaseIssue<unknown>> {
-    if (this.schema) return this.schema
-    const shape: Record<string, v.BaseSchema<any, any, any>> = {}
-    for (const [key, field] of Object.entries(this.fields)) {
-      shape[key] = (field as FieldBase<any>).schema
-    }
-    return v.object(shape) as any
   }
 
   getDefault(value?: Partial<Infer<TProperties>>): Infer<TProperties> {
@@ -625,6 +626,10 @@ export class DataverseTable<TProperties extends GenericProperties> {
   /**
    * Extracts the primary key GUID from a record object, or `undefined` if not present.
    *
+   * Note: Dataverse always returns the primary key attribute in responses,
+   * independent of `$select` — so this works even for tables whose `fields`
+   * don't declare the pk.
+   *
    * @example
    * const account = await Account.getRecord("some-guid");
    * const pk = Account.getPrimaryId(account); // GUID | undefined
@@ -642,6 +647,13 @@ export class DataverseTable<TProperties extends GenericProperties> {
     for (const [key, property] of Object.entries(this.fields)) {
       const raw = value[property.fromDataverseName];
       result[key] = property.transformValueFromDataverse(raw, ctx);
+    }
+    // Dataverse always returns the pk independent of $select, so preserve it
+    // on the transformed record even when the pk field isn't declared in
+    // `fields` (keeps getPrimaryId / collection getKey working for projected
+    // tables).
+    if (!(pk.key in result) && recordId !== undefined) {
+      result[pk.key] = recordId;
     }
     result[ETAG] = value["@odata.etag"];
     return result as Infer<TProperties>;
@@ -750,6 +762,20 @@ export class DataverseTable<TProperties extends GenericProperties> {
 }
 
 
+
+/**
+ * Composes a whole-record valibot schema from the individual field schemas.
+ * Used as the default table schema when no explicit `schema` option is given.
+ */
+function composeFieldSchemas<TProperties extends GenericProperties>(
+  fields: TProperties,
+): ValidationSchema<Infer<TProperties>> {
+  const shape: Record<string, v.BaseSchema<any, any, any>> = {}
+  for (const [key, field] of Object.entries(fields)) {
+    shape[key] = (field as FieldBase<any>).schema
+  }
+  return v.object(shape) as any
+}
 
 function tableQuery(
   table: DataverseTable<GenericProperties>,

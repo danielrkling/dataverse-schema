@@ -62,8 +62,8 @@ test("table exposes client, entitySetName and logicalName", () => {
 
 // --- Schema & defaults ---
 
-test("getSchema composes valibot object schema from fields", () => {
-  const schema = Account.getSchema()
+test("table.schema composes valibot object schema from fields", () => {
+  const schema = Account.schema
   const result = v.safeParse(schema, {
     id: "123e4567-e89b-12d3-a456-426614174000",
     name: "Acme",
@@ -78,13 +78,13 @@ test("getSchema composes valibot object schema from fields", () => {
   expect(result.success).toBe(true)
 })
 
-test("getSchema returns custom schema when provided", () => {
+test("table.schema returns custom schema when provided", () => {
   const custom = v.object({ name: v.string() })
   const t = new DataverseTable({
     client, entitySetName: "accounts", logicalName: "account",
     fields: Account.fields, schema: custom as any,
   })
-  expect(t.getSchema()).toBe(custom)
+  expect(t.schema).toBe(custom)
 })
 
 test("getDefault returns defaults for every field", () => {

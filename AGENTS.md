@@ -148,11 +148,11 @@ test/
 - Validation uses [valibot](https://valibot.dev/); validation errors surface as valibot issues, not the Standard Schema V1 shape
 
 ### Classes and Patterns
-- **DataverseTable<TProperties>** is the central class. It is constructed with an options object: `{ client, entitySetName, logicalName, fields, schema?, primaryKey? }`. It provides `getSchema()`, `getDefault()`, CRUD methods (`getRecord`, `getRecords`, `createRecord`, `updateRecord`, `upsertRecord`, `deleteRecord`, `activateRecord`, `deactivateRecord`), query building (`getRecords` with options, or `fetchOdata`/`fetchXml`), navigation property handling, actions/functions, and bulk operations (`createMultiple`, `updateMultiple`, `deleteMultiple`). There is **no** `table()` factory function — always use `new DataverseTable({...})`.
+- **DataverseTable<TProperties>** is the central class. It is constructed with an options object: `{ client, entitySetName, logicalName, fields, schema?, primaryKey? }`. It provides `schema`, `getDefault()`, CRUD methods (`getRecord`, `getRecords`, `createRecord`, `updateRecord`, `upsertRecord`, `deleteRecord`, `activateRecord`, `deactivateRecord`), query building (`getRecords` with options, or `fetchOdata`/`fetchXml`), navigation property handling, actions/functions, and bulk operations (`createMultiple`, `updateMultiple`, `deleteMultiple`). There is **no** `table()` factory function — always use `new DataverseTable({...})`.
 
 - **Mutation options**: `createRecord`, `updateRecord`, `upsertRecord`, and `deleteRecord` accept a trailing `MutationOptions` object (`{ ifMatch?, ifNoneMatch?, signal? }`). `updateRecord` defaults `ifMatch` to `"*"` when omitted (updates only if the record exists). The client layer keeps HTTP-verb method names (`postRecord`, `patchRecord`, `deleteRecord`); `patchRecord` takes `ifMatch`/`ifNoneMatch` (so it can act as update, upsert, or idempotent create depending on the headers), while `deleteRecord`/`updatePropertyValue` take `ifMatch` only, and `getRecord` takes `ifNoneMatch` (conditional GET).
 - **Field classes** extend `FieldBase<T>`. They override `getDefault()`, `transformValueFromDataverse()`, `transformValueToDataverse()`, and may define `afterSave()`.
-- **Validation is valibot-based**: each field accepts a `schema` option that is a `v.BaseSchema`. `ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>`. Tables may pass an optional `schema` for whole-record validation. Use `field.schema` / `table.getSchema()` to access the compiled schema.
+- **Validation is valibot-based**: each field accepts a `schema` option that is a `v.BaseSchema`. `ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>`. Tables may pass an optional `schema` for whole-record validation. Use `field.schema` / `table.schema` to access the compiled schema.
 - **Fluent/builder pattern**: Query builders (`ODataQuery`, `EntityQueryBuilder`) return `this` for chaining. `fetchOdata(table)` and `fetchXml(table)` return initial builders; call `.select()`/`.apply()` first, then `.filter()`, `.orderby()`, `.top()`, `.expand()`, `.execute()`.
 - **Lazy initialization**: Navigation properties use `#getTable` thunk + lazy `#table` cache (see `LookupProperty`, `CollectionProperty`)
 - **Proxy pattern**: OData and FetchXML builders use proxy objects (`ODataFieldProxy`, `FieldProxy`) for type-safe field references via `FieldRef`
@@ -162,7 +162,7 @@ test/
 - All fields carry a [valibot](https://valibot.dev/) schema (`ValidationSchema<T>`)
 - Compose field validation by passing a `schema` option to the factory, e.g. `string("fullname", { schema: v.pipe(v.string(), v.minLength(2)) })`
 - Table-level validation: pass a `schema` to the `DataverseTable` options
-- Access compiled schemas with `field.schema` / `table.getSchema()`; parse/validate values with valibot (`v.parse`, `v.safeParse`)
+- Access compiled schemas with `field.schema` / `table.schema`; parse/validate values with valibot (`v.parse`, `v.safeParse`)
 - Built-in field factories already apply sensible defaults (e.g. `number()` → `v.number()`, `string()` → `v.string()`); override via the `schema` option
 
 ### Testing Patterns

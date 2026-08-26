@@ -660,6 +660,17 @@ export class DataverseSyncDB {
 
         const syncConfig: SyncConfig<Infer<T>> = {
             sync: ({ begin, write, commit, markReady, collection }) => {
+                // The collection must become ready even when the remote sync is
+                // skipped (offline at load, hidden tab). Otherwise anything
+                // awaiting collection readiness hangs forever.
+                let markedReady = false;
+                const markReadyOnce = () => {
+                    if (!markedReady) {
+                        markedReady = true;
+                        markReady();
+                    }
+                };
+
                 syncFromDataverse = async (signal: AbortSignal) => {
                     try {
                         await cacheReady;
@@ -702,7 +713,7 @@ export class DataverseSyncDB {
                             console.warn(`[dataverse-offline] Remote sync failed for "${collectionId}":`, err);
                         }
                     } finally {
-                        markReady();
+                        markReadyOnce();
                     }
                 };
 
@@ -755,6 +766,10 @@ export class DataverseSyncDB {
                     if (!disposed) {
                         console.warn(`[dataverse-offline] Cache sync failed for "${collectionId}":`, err);
                     }
+                }).finally(() => {
+                    // Hydration finished (or failed) — the collection is usable
+                    // from cache even if the remote pull was skipped offline.
+                    markReadyOnce();
                 });
 
                 window.addEventListener("online", flushAndSync);
