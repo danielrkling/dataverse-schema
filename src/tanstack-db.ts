@@ -51,6 +51,7 @@ export type QueuedMutation = {
     type: "insert" | "update" | "delete";
     key: string;
     value?: any;
+    changes: any;
     entitySetName: string;
     timestamp: number;
     sequence: number;
@@ -328,11 +329,11 @@ export class DataverseSyncDB {
         // the entire row (`modified`). This keeps the IndexedDB payloads small
         // and means flushQueue's updateRecord call sends a delta instead of a
         // full-row PATCH that could clobber unrelated fields.
-        const value = mutation.type === "update" ? mutation.changes : mutation.modified;
         return {
             id: mutation.mutationId,
             type: mutation.type,
-            value,
+            value: mutation.modified,
+            changes: mutation.changes,
             key: mutation.key,
             entitySetName: mutation.collection.id,
             timestamp: mutation.createdAt.valueOf(),
@@ -471,7 +472,7 @@ export class DataverseSyncDB {
                     if (mutation.type === "insert") {
                         await table.createRecord(mutation.value);
                     } else if (mutation.type === "update") {
-                        await table.updateRecord(mutation.key, mutation.value, { ifMatch: mutation.ifMatch });
+                        await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
                     } else if (mutation.type === "delete") {
                         await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
                     }
