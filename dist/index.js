@@ -2164,23 +2164,42 @@ var DataverseTable = class DataverseTable {
 	* const newId = await Person.createRecord({ name: "John", age: 30 });
 	*/
 	async createRecord(value, options) {
-		const pkName = this.primaryKey.property.logicalName;
-		const guid = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), {
-			query: selectQuery(pkName),
-			signal: options?.signal
-		}))?.[pkName];
+		const record = await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), {
+			returnRepresentation: true,
+			signal: options?.signal,
+			query: tableQuery(this)
+		});
+		const guid = this.getPrimaryId(record);
+		const transformed = this.transformValueFromDataverse(record);
 		const ctx = {
 			table: this,
 			client: this.client,
 			recordId: guid
 		};
 		await this._afterSave(ctx, value);
-		return guid;
+		return transformed;
 	}
 	/**
 	* Updates an existing record by ID. Supports optimistic concurrency via the
 	* `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
 	* to `"*"`, which updates the record only if it already exists.
+	*
+	* @param id The record's primary key.
+	* @param value The fields to update (partial record data).
+	* @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
+	*
+	* @example
+	* await Person.updateRecord("some-guid", { name: "Jane" });
+	* // Conditional update:
+	* await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
+	*/
+	/**
+	* Updates an existing record by ID. Supports optimistic concurrency via the
+	* `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+	* to `"*"`, which updates the record only if it already exists.
+	*
+	* Returns the full record as returned by Dataverse after the write
+	* (transformed), including the fresh `$etag` and any server-computed fields.
 	*
 	* @param id The record's primary key.
 	* @param value The fields to update (partial record data).
@@ -2198,13 +2217,14 @@ var DataverseTable = class DataverseTable {
 			client: this.client,
 			recordId: id
 		};
-		await this.client.patchRecord(this.entitySetName, id, await this.transformValueToDataverse(value, ctx), {
+		const result = await this.client.patchRecord(this.entitySetName, id, await this.transformValueToDataverse(value, ctx), {
 			ifMatch: options?.ifMatch ?? "*",
 			ifNoneMatch: options?.ifNoneMatch,
-			signal: options?.signal
+			signal: options?.signal,
+			query: tableQuery(this)
 		});
 		await this._afterSave(ctx, value);
-		return id;
+		return this.transformValueFromDataverse(result);
 	}
 	/**
 	* Creates or updates a record. If `id` is provided the record is updated via
@@ -2222,30 +2242,20 @@ var DataverseTable = class DataverseTable {
 	* await Person.upsertRecord(existingId, { name: "Jane" });
 	*/
 	async upsertRecord(id, value, options) {
-		const pkName = this.primaryKey.property.logicalName;
 		const ctx = {
 			table: this,
 			client: this.client,
-			recordId: ""
+			recordId: id
 		};
-		if (id) {
-			ctx.recordId = id;
-			const transformed = await this.transformValueToDataverse(value, ctx);
-			await this.client.patchRecord(this.entitySetName, id, transformed, {
-				query: selectQuery(pkName),
-				ifMatch: options?.ifMatch,
-				ifNoneMatch: options?.ifNoneMatch,
-				signal: options?.signal
-			});
-		} else {
-			id = (await this.client.postRecord(this.entitySetName, await this.transformValueToDataverse(value), {
-				query: selectQuery(pkName),
-				signal: options?.signal
-			}))[pkName];
-			ctx.recordId = id;
-		}
+		const transformed = await this.transformValueToDataverse(value, ctx);
+		const result = await this.client.patchRecord(this.entitySetName, id ?? "", transformed, {
+			ifMatch: options?.ifMatch,
+			ifNoneMatch: options?.ifNoneMatch,
+			signal: options?.signal,
+			query: tableQuery(this)
+		});
 		await this._afterSave(ctx, value);
-		return id;
+		return this.transformValueFromDataverse(result);
 	}
 	/**
 	* Deletes a record by its primary key. Supports optimistic concurrency via the
@@ -2511,12 +2521,6 @@ function composeFieldSchemas(fields) {
 }
 function tableQuery(table, options) {
 	return serializeODataSelect(buildTableQueryAst(table, options));
-}
-function selectQuery(field) {
-	return serializeODataSelect({
-		kind: "select",
-		select: [field]
-	});
 }
 /**
 * Represents a Dataverse many-to-many intersect (association) table.
@@ -3339,7 +3343,7 @@ var CollectionProperty = class extends FieldBase {
 	}
 	async afterSave(ctx, value) {
 		if (!Array.isArray(value)) return;
-		const ids = await Promise.all(value.map((v) => this.table.upsertRecord(void 0, v)));
+		const ids = await Promise.all(value.map((v) => this.table.upsertRecord(void 0, v).then((r) => this.table.getPrimaryId(r))));
 		await ctx.client.associateRecordToList(ctx.table.entitySetName, ctx.recordId, this.schemaName, this.table.entitySetName, this.table.primaryKey.property.logicalName, ids);
 	}
 };
@@ -3489,7 +3493,7 @@ var LookupProperty = class extends FieldBase {
 	async afterSave(ctx, value) {
 		if (value === null) await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName);
 		else {
-			const childId = await this.table.upsertRecord(void 0, value);
+			const childId = this.table.getPrimaryId(await this.table.upsertRecord(void 0, value));
 			await ctx.client.associateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName, this.table.entitySetName, childId);
 		}
 	}

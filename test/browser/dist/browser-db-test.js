@@ -1948,6 +1948,10 @@
     entitySetName;
     kind = "table";
     type = "table";
+    /**
+     * Whole-record valibot schema for this table — either the explicit
+     * `schema` option or one composed from the individual field schemas.
+     */
     schema;
     primaryKey;
     /**
@@ -1958,7 +1962,7 @@
       this.entitySetName = options.entitySetName;
       this.logicalName = options.logicalName;
       this.fields = options.fields;
-      this.schema = options.schema;
+      this.schema = options.schema ?? composeFieldSchemas(this.fields);
       if (options.primaryKey) {
         this.primaryKey = options.primaryKey;
       } else {
@@ -1966,14 +1970,6 @@
         if (!pk) throw new Error("No Primary Key found in schema");
         this.primaryKey = { key: pk[0], property: pk[1] };
       }
-    }
-    getSchema() {
-      if (this.schema) return this.schema;
-      const shape = {};
-      for (const [key, field] of Object.entries(this.fields)) {
-        shape[key] = field.schema;
-      }
-      return object(shape);
     }
     getDefault(value) {
       const result = {};
@@ -2194,16 +2190,19 @@
      * const newId = await Person.createRecord({ name: "John", age: 30 });
      */
     async createRecord(value, options) {
-      const pkName = this.primaryKey.property.logicalName;
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        { query: selectQuery(pkName), signal: options?.signal }
+        // Request the full representation so we can hand back the created record
+        // (with server-computed fields and the fresh etag). Omitting the
+        // $select keeps all columns in the response.
+        { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
       );
-      const guid = record?.[pkName];
+      const guid = this.getPrimaryId(record);
+      const transformed = this.transformValueFromDataverse(record);
       const ctx = { table: this, client: this.client, recordId: guid };
       await this._afterSave(ctx, value);
-      return guid;
+      return transformed;
     }
     /**
      * Updates an existing record by ID. Supports optimistic concurrency via the
@@ -2219,17 +2218,34 @@
      * // Conditional update:
      * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
      */
+    /**
+     * Updates an existing record by ID. Supports optimistic concurrency via the
+     * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+     * to `"*"`, which updates the record only if it already exists.
+     *
+     * Returns the full record as returned by Dataverse after the write
+     * (transformed), including the fresh `$etag` and any server-computed fields.
+     *
+     * @param id The record's primary key.
+     * @param value The fields to update (partial record data).
+     * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
+     *
+     * @example
+     * await Person.updateRecord("some-guid", { name: "Jane" });
+     * // Conditional update:
+     * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
+     */
     async updateRecord(id, value, options) {
       if (!id) throw new Error("No ID provided");
       const ctx = { table: this, client: this.client, recordId: id };
-      await this.client.patchRecord(
+      const result = await this.client.patchRecord(
         this.entitySetName,
         id,
         await this.transformValueToDataverse(value, ctx),
-        { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal }
+        { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
       );
       await this._afterSave(ctx, value);
-      return id;
+      return this.transformValueFromDataverse(result);
     }
     /**
      * Creates or updates a record. If `id` is provided the record is updated via
@@ -2247,28 +2263,16 @@
      * await Person.upsertRecord(existingId, { name: "Jane" });
      */
     async upsertRecord(id, value, options) {
-      const pkName = this.primaryKey.property.logicalName;
-      const ctx = { table: this, client: this.client, recordId: "" };
-      if (id) {
-        ctx.recordId = id;
-        const transformed = await this.transformValueToDataverse(value, ctx);
-        await this.client.patchRecord(
-          this.entitySetName,
-          id,
-          transformed,
-          { query: selectQuery(pkName), ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal }
-        );
-      } else {
-        const record = await this.client.postRecord(
-          this.entitySetName,
-          await this.transformValueToDataverse(value),
-          { query: selectQuery(pkName), signal: options?.signal }
-        );
-        id = record[pkName];
-        ctx.recordId = id;
-      }
+      const ctx = { table: this, client: this.client, recordId: id };
+      const transformed = await this.transformValueToDataverse(value, ctx);
+      const result = await this.client.patchRecord(
+        this.entitySetName,
+        id ?? "",
+        transformed,
+        { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
+      );
       await this._afterSave(ctx, value);
-      return id;
+      return this.transformValueFromDataverse(result);
     }
     /**
      * Deletes a record by its primary key. Supports optimistic concurrency via the
@@ -2410,6 +2414,10 @@
     /**
      * Extracts the primary key GUID from a record object, or `undefined` if not present.
      *
+     * Note: Dataverse always returns the primary key attribute in responses,
+     * independent of `$select` — so this works even for tables whose `fields`
+     * don't declare the pk.
+     *
      * @example
      * const account = await Account.getRecord("some-guid");
      * const pk = Account.getPrimaryId(account); // GUID | undefined
@@ -2426,6 +2434,9 @@
       for (const [key, property] of Object.entries(this.fields)) {
         const raw = value[property.fromDataverseName];
         result[key] = property.transformValueFromDataverse(raw, ctx);
+      }
+      if (!(pk.key in result) && recordId !== void 0) {
+        result[pk.key] = recordId;
       }
       result[ETAG] = value["@odata.etag"];
       return result;
@@ -2480,10 +2491,16 @@
      * // Extended has all original fields plus `customField`
      */
     appendProperties(properties) {
-      return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, primaryKey: this.primaryKey, fields: {
-        ...this.fields,
-        ...properties
-      } });
+      return new DataverseTable({
+        client: this.client,
+        entitySetName: this.entitySetName,
+        logicalName: this.logicalName,
+        primaryKey: this.primaryKey,
+        fields: {
+          ...this.fields,
+          ...properties
+        }
+      });
     }
     async deleteFile(id, fieldName) {
       const field = this.fields[fieldName];
@@ -2514,13 +2531,15 @@
     /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
     T;
   }
+  function composeFieldSchemas(fields) {
+    const shape = {};
+    for (const [key, field] of Object.entries(fields)) {
+      shape[key] = field.schema;
+    }
+    return object(shape);
+  }
   function tableQuery(table, options) {
     return serializeODataSelect(buildTableQueryAst(table, options));
-  }
-  function selectQuery(field) {
-    return serializeODataSelect({
-      select: [field]
-    });
   }
 
   const DATE_SCHEMA = date$1();
@@ -2882,7 +2901,7 @@
     async afterSave(ctx, value) {
       if (!Array.isArray(value)) return;
       const ids = await Promise.all(
-        value.map((v2) => this.table.upsertRecord(void 0, v2))
+        value.map((v2) => this.table.upsertRecord(void 0, v2).then((r) => this.table.getPrimaryId(r)))
       );
       await ctx.client.associateRecordToList(
         ctx.table.entitySetName,
@@ -2926,7 +2945,7 @@
       if (value === null) {
         await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName);
       } else {
-        const childId = await this.table.upsertRecord(void 0, value);
+        const childId = this.table.getPrimaryId(await this.table.upsertRecord(void 0, value));
         await ctx.client.associateRecord(
           ctx.table.entitySetName,
           ctx.recordId,
@@ -3270,7 +3289,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T17:36:40.849Z"}
+      meta.textContent = `build ${"2026-08-26T14:52:05.461Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3359,7 +3378,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T17:36:40.849Z",
+          build: "2026-08-26T14:52:05.461Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3378,7 +3397,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T17:36:40.849Z"}\``,
+        `Build: \`${"2026-08-26T14:52:05.461Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -3949,6 +3968,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
   }
   const UINT8ARRAY_NORMALIZE_THRESHOLD = 128;
   function normalizeValue(value) {
+    if (typeof value !== `object` || value === null) {
+      return value;
+    }
     if (value instanceof Date) {
       return value.getTime();
     }
@@ -5189,7 +5211,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       if (filteredChanges.length > 0 || changes.length === 0) {
         originalCallback(filteredChanges);
+        return true;
       }
+      return false;
     };
   }
   function getOrderedKeys(collection, orderBy, limit, whereFilter, optimizedOnly) {
@@ -5479,11 +5503,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           committedSyncedTransactions,
           uncommittedSyncedTransactions,
           hasTruncateSync,
-          hasImmediateSync
+          hasImmediateSync,
+          layoutChanged
         } = this.pendingSyncedTransactions.reduce(
           (acc, t) => {
             if (t.committed) {
               acc.committedSyncedTransactions.push(t);
+              acc.layoutChanged ||= t.layoutChanged;
               if (t.truncate) {
                 acc.hasTruncateSync = true;
               }
@@ -5499,7 +5525,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             committedSyncedTransactions: [],
             uncommittedSyncedTransactions: [],
             hasTruncateSync: false,
-            hasImmediateSync: false
+            hasImmediateSync: false,
+            layoutChanged: false
           }
         );
         if (!hasPersistingTransaction || hasTruncateSync || hasImmediateSync) {
@@ -5824,7 +5851,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (events.length > 0) {
             this.indexes.updateIndexes(events);
           }
-          this.changes.emitEvents(events, true);
+          this.changes.emitEvents(events, true, layoutChanged);
           this.pendingSyncedTransactions = uncommittedSyncedTransactions;
           this.preSyncVisibleState.clear();
           Promise.resolve().then(() => {
@@ -6642,7 +6669,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         this.trackSentKeys(changes);
       };
       this.callback = callbackWithSentKeysTracking;
-      this.filteredCallback = options.whereExpression ? createFilteredCallback(this.callback, options) : this.callback;
+      this.filteredCallback = options.whereExpression ? createFilteredCallback(this.callback, options) : (changes) => {
+        this.callback(changes);
+        return true;
+      };
       this.truncateCleanup = this.collection.on(`truncate`, () => {
         this.handleTruncate();
       });
@@ -6712,9 +6742,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     flushTruncateBuffer() {
       this.isBufferingForTruncate = false;
       const merged = this.truncateBuffer.flat();
-      if (merged.length > 0) {
-        this.filteredCallback(merged);
-      }
+      if (merged.length > 0) this.filteredCallback(merged);
       this.truncateBuffer = [];
     }
     setOrderByIndex(index) {
@@ -6756,12 +6784,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       if (syncResult instanceof Promise) {
         this.pendingLoadSubsetPromises.add(syncResult);
         this.setStatus(`loadingSubset`);
-        syncResult.finally(() => {
+        const finish = () => {
           this.pendingLoadSubsetPromises.delete(syncResult);
           if (this.pendingLoadSubsetPromises.size === 0) {
             this.setStatus(`ready`);
           }
-        });
+        };
+        void syncResult.then(finish, finish);
       }
     }
     hasLoadedInitialState() {
@@ -6776,8 +6805,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         if (newChanges.length > 0) {
           this.truncateBuffer.push(newChanges);
         }
+        return false;
       } else {
-        this.filteredCallback(newChanges);
+        return this.filteredCallback(newChanges);
       }
     }
     /**
@@ -7061,6 +7091,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.changeSubscriptions = /* @__PURE__ */ new Set();
       this.batchedEvents = [];
       this.shouldBatchEvents = false;
+      this.layoutChangeListeners = /* @__PURE__ */ new Set();
+      this.stateRevision = 0;
+      this.layoutRevision = 0;
     }
     setDeps(deps) {
       this.lifecycle = deps.lifecycle;
@@ -7088,7 +7121,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     /**
      * Emit events either immediately or batch them for later emission
      */
-    emitEvents(changes, forceEmit = false) {
+    emitEvents(changes, forceEmit = false, layoutChanged = false) {
+      if (changes.length > 0) this.stateRevision++;
+      if (layoutChanged) this.layoutRevision++;
       if (this.shouldBatchEvents && !forceEmit) {
         this.batchedEvents.push(...changes);
         return;
@@ -7101,13 +7136,21 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         this.batchedEvents = [];
         this.shouldBatchEvents = false;
       }
-      if (rawEvents.length === 0) {
+      if (rawEvents.length === 0 && !layoutChanged) {
         return;
+      }
+      if (rawEvents.length === 0) {
+        for (const listener of this.layoutChangeListeners) listener();
       }
       const enrichedEvents = rawEvents.map((change) => this.enrichChangeWithVirtualProps(change));
       for (const subscription of this.changeSubscriptions) {
         subscription.emitEvents(enrichedEvents);
       }
+    }
+    /** Subscribe to layout-only publications. Internal observer channel. */
+    subscribeLayoutChanges(listener) {
+      this.layoutChangeListeners.add(listener);
+      return () => this.layoutChangeListeners.delete(listener);
     }
     /**
      * Subscribe to changes in the collection
@@ -7459,7 +7502,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           }
         });
         this.setStatus(`cleaned-up`);
-        this.events.cleanup();
+        if (this.changes.activeSubscribersCount === 0) {
+          this.events.cleanup();
+        }
         return true;
       } else {
         this.scheduleIdleCleanup();
@@ -7509,6 +7554,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.lifecycle = deps.lifecycle;
       this._events = deps.events;
     }
+    /** Mark the active sync transaction as changing collection layout. */
+    markLayoutChange() {
+      this.getActivePendingSyncTransaction().layoutChanged = true;
+    }
     /**
      * Start the sync process for this collection
      * This is called when the collection is first accessed or preloaded
@@ -7525,6 +7574,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             begin: (options) => {
               this.state.pendingSyncedTransactions.push({
                 committed: false,
+                layoutChanged: false,
                 operations: [],
                 deletedKeys: /* @__PURE__ */ new Set(),
                 rowMetadataWrites: /* @__PURE__ */ new Map(),
@@ -7769,6 +7819,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     get isLoadingSubset() {
       return this.pendingLoadSubsetPromises.size > 0;
     }
+    /** Wait for the subset loads that are active during the current operation. */
+    waitForCurrentLoadSubset() {
+      if (this.pendingLoadSubsetPromises.size === 0) return true;
+      return this.waitForPendingLoadSubset();
+    }
+    async waitForPendingLoadSubset() {
+      do {
+        await Promise.all([...this.pendingLoadSubsetPromises]);
+      } while (this.pendingLoadSubsetPromises.size > 0);
+    }
     /**
      * Tracks a load promise for isLoadingSubset state.
      * @internal This is for internal coordination (e.g., live-query glue code), not for general use.
@@ -7785,7 +7845,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           loadingSubsetTransition: `start`
         });
       }
-      promise.finally(() => {
+      const finish = () => {
         const loadingEnding = this.pendingLoadSubsetPromises.size === 1 && this.pendingLoadSubsetPromises.has(promise);
         this.pendingLoadSubsetPromises.delete(promise);
         if (loadingEnding) {
@@ -7797,7 +7857,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             loadingSubsetTransition: `end`
           });
         }
-      });
+      };
+      void promise.then(finish, finish);
     }
     /**
      * Requests the sync layer to load more data.
@@ -9803,6 +9864,29 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       return this._changes.activeSubscribersCount;
     }
     /**
+     * Monotonic revision of the collection's visible state; advances once per
+     * committed batch of changes, even while nothing is subscribed.
+     * Internal — used by the live-query observer's snapshot cache.
+     */
+    get _stateRevision() {
+      return this._changes.stateRevision;
+    }
+    /**
+     * Monotonic revision of explicit layout-only publications.
+     * Internal — used to distinguish them from empty ready events.
+     */
+    get _layoutRevision() {
+      return this._changes.layoutRevision;
+    }
+    /** Subscribe to layout-only publications. Internal observer channel. */
+    _subscribeLayoutChanges(listener) {
+      return this._changes.subscribeLayoutChanges(listener);
+    }
+    /** Mark the active sync transaction as layout-changing. Internal. */
+    _markLayoutChange() {
+      this._sync.markLayoutChange();
+    }
+    /**
      * Register a callback to be executed when the collection first becomes ready
      * Useful for preloading collections
      * @param callback Function to call when the collection first becomes ready
@@ -10157,153 +10241,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
   }
 
-  const DEFAULT_SYNC_INTERVAL = 3e4;
-  function dataverseCollectionOptions(config) {
-    const { table, syncInterval = DEFAULT_SYNC_INTERVAL, readonly = false, ...rest } = config;
-    const pk = table.primaryKey;
-    const getKey = (item) => item[pk.key];
-    const collectionId = table.entitySetName;
-    const channel = new BroadcastChannel(collectionId);
-    let disposed = false;
-    let pollTimer = null;
-    let syncFn = null;
-    let syncInFlight = false;
-    let syncController;
-    const broadcastMutations = (mutations) => {
-      if (disposed) return;
-      channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
-      channel.postMessage({ type: "MUTATIONS_ADDED", mutations });
-    };
-    const defaultOnInsert = async ({ transaction }) => {
-      if (readonly) throw new Error("Collection is read-only");
-      const results = [];
-      const serialized = [];
-      for (const mutation of transaction.mutations) {
-        const guid = await table.createRecord(mutation.modified);
-        results.push(guid);
-        serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: mutation.modified, entitySetName: collectionId });
-      }
-      broadcastMutations(serialized);
-      return results;
-    };
-    const defaultOnUpdate = async ({ transaction }) => {
-      if (readonly) throw new Error("Collection is read-only");
-      const results = [];
-      const serialized = [];
-      for (const mutation of transaction.mutations) {
-        await table.updateRecord(mutation.key, mutation.changes);
-        results.push(mutation.key);
-        serialized.push({ id: mutation.mutationId, type: "update", key: mutation.key, value: mutation.changes, entitySetName: collectionId });
-      }
-      broadcastMutations(serialized);
-      return results;
-    };
-    const defaultOnDelete = async ({ transaction }) => {
-      if (readonly) throw new Error("Collection is read-only");
-      const results = [];
-      const serialized = [];
-      for (const mutation of transaction.mutations) {
-        await table.deleteRecord(mutation.key);
-        results.push(mutation.key);
-        serialized.push({ id: mutation.mutationId, type: "delete", key: mutation.key, value: void 0, entitySetName: collectionId });
-      }
-      broadcastMutations(serialized);
-      return results;
-    };
-    const syncConfig = {
-      sync: ({ begin, write, commit, markReady, collection }) => {
-        const handleTabMessage = (event) => {
-          if (disposed) return;
-          if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
-            syncController?.abort();
-          } else if (event.data?.type === "MUTATIONS_ADDED") {
-            const incoming = event.data.mutations.filter((m) => m.entitySetName === collectionId);
-            if (incoming.length === 0) return;
-            begin();
-            for (const m of incoming) {
-              if (m.type === "delete") {
-                const existing = collection.get(m.key);
-                if (existing) write({ type: "delete", value: existing });
-              } else if (m.type === "update") {
-                const existing = collection.get(m.key);
-                if (existing) write({ type: "update", value: { ...existing, ...m.value } });
-              } else {
-                write({ type: "insert", value: m.value });
-              }
-            }
-            commit();
-            void syncFn?.();
-          }
-        };
-        channel.addEventListener("message", handleTabMessage);
-        syncFn = async () => {
-          if (syncInFlight) return;
-          syncInFlight = true;
-          syncController = new AbortController();
-          try {
-            const keysToDelete = new Set(collection.keys());
-            begin();
-            for await (const record of table.iterateRecords(void 0, { signal: syncController.signal })) {
-              const key = table.getPrimaryId(record);
-              const existingRecord = collection.get(key);
-              if (existingRecord) {
-                if (getEtag(record) !== getEtag(existingRecord)) {
-                  write({ type: "update", value: record });
-                }
-                keysToDelete.delete(key);
-              } else {
-                write({ type: "insert", value: record });
-              }
-            }
-            for (const key of keysToDelete) {
-              write({ type: "delete", value: collection.get(key) });
-            }
-            commit();
-          } catch (err) {
-            console.warn(`[dataverse-collection] sync failed for "${collectionId}":`, err);
-          } finally {
-            syncInFlight = false;
-            syncController = void 0;
-            markReady();
-          }
-        };
-        syncFn();
-        pollTimer = setInterval(() => {
-          syncFn?.();
-        }, syncInterval);
-        return () => {
-          disposed = true;
-          if (pollTimer) {
-            clearInterval(pollTimer);
-            pollTimer = null;
-          }
-          channel.removeEventListener("message", handleTabMessage);
-          channel.close();
-        };
-      },
-      rowUpdateMode: "partial"
-    };
-    const utils = {
-      forceSync: async () => {
-        await syncFn?.();
-      },
-      table
-    };
-    return {
-      ...rest,
-      id: collectionId,
-      getKey,
-      sync: syncConfig,
-      onInsert: defaultOnInsert,
-      onUpdate: defaultOnUpdate,
-      onDelete: defaultOnDelete,
-      utils,
-      // Begin syncing immediately on creation rather than waiting for the
-      // first subscriber to attach (the default for @tanstack/db collections).
-      startSync: true
-    };
-  }
-
   const instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
 
   let idbProxyableTypes;
@@ -10594,6 +10531,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       },
   }));
 
+  const DEFAULT_SYNC_INTERVAL = 3e4;
   const DEFAULT_POLL_INTERVAL = 3e4;
   const MAX_MUTATION_ATTEMPTS = 3;
   const RETRY_BASE_DELAY = 1e3;
@@ -10606,6 +10544,177 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.name = "MutationPersistenceError";
     }
   }
+  function dataverseCollectionOptions(config) {
+    const {
+      table,
+      id: explicitId,
+      query,
+      syncInterval = DEFAULT_SYNC_INTERVAL,
+      readonly = false,
+      ...rest
+    } = config;
+    const pk = table.primaryKey;
+    const getKey = (item) => item[pk.key];
+    const collectionId = explicitId ?? table.entitySetName;
+    const channel = new BroadcastChannel(collectionId);
+    let disposed = false;
+    let pollTimer = null;
+    let syncFn = null;
+    let syncInFlight = false;
+    let syncController;
+    const broadcastMutations = (mutations) => {
+      if (disposed) return;
+      channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
+      channel.postMessage({ type: "MUTATIONS_ADDED", mutations });
+    };
+    const defaultOnInsert = async ({ transaction }) => {
+      if (readonly) throw new Error("Collection is read-only");
+      const results = [];
+      const serialized = [];
+      for (const mutation of transaction.mutations) {
+        const record = await table.createRecord(mutation.modified);
+        const guid = table.getPrimaryId(record);
+        results.push(guid);
+        serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: record, entitySetName: collectionId });
+      }
+      broadcastMutations(serialized);
+      return results;
+    };
+    const defaultOnUpdate = async ({ transaction }) => {
+      if (readonly) throw new Error("Collection is read-only");
+      const results = [];
+      const serialized = [];
+      for (const mutation of transaction.mutations) {
+        const record = await table.updateRecord(mutation.key, mutation.changes);
+        const guid = table.getPrimaryId(record);
+        results.push(guid);
+        serialized.push({ id: mutation.mutationId, type: "update", key: guid, value: record, entitySetName: collectionId });
+      }
+      broadcastMutations(serialized);
+      void utils.forceSync();
+      return results;
+    };
+    const defaultOnDelete = async ({ transaction }) => {
+      if (readonly) throw new Error("Collection is read-only");
+      const results = [];
+      const serialized = [];
+      for (const mutation of transaction.mutations) {
+        await table.deleteRecord(mutation.key);
+        results.push(mutation.key);
+        serialized.push({ id: mutation.mutationId, type: "delete", key: mutation.key, value: void 0, entitySetName: collectionId });
+      }
+      broadcastMutations(serialized);
+      return results;
+    };
+    const syncConfig = {
+      sync: ({ begin, write, commit, markReady, collection }) => {
+        const handleTabMessage = (event) => {
+          if (disposed) return;
+          if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
+            syncController?.abort();
+          } else if (event.data?.type === "MUTATIONS_ADDED") {
+            const incoming = event.data.mutations.filter((m) => m.entitySetName === collectionId);
+            if (incoming.length === 0) return;
+            begin();
+            for (const m of incoming) {
+              if (m.type === "delete") {
+                const existing = collection.get(m.key);
+                if (existing) write({ type: "delete", value: existing });
+              } else if (m.type === "update") {
+                const existing = collection.get(m.key);
+                if (existing) write({ type: "update", value: { ...existing, ...m.value } });
+              } else {
+                write({ type: "insert", value: m.value });
+              }
+            }
+            commit();
+            void syncFn?.();
+          }
+        };
+        channel.addEventListener("message", handleTabMessage);
+        const handleOnline = () => {
+          void syncFn?.();
+        };
+        if (typeof globalThis.addEventListener === "function") {
+          globalThis.addEventListener("online", handleOnline);
+        }
+        const removeOnlineListener = () => {
+          if (typeof globalThis.removeEventListener === "function") {
+            globalThis.removeEventListener("online", handleOnline);
+          }
+        };
+        syncFn = async () => {
+          if (syncInFlight) return;
+          if (!navigator.onLine) {
+            markReady();
+            return;
+          }
+          syncInFlight = true;
+          syncController = new AbortController();
+          try {
+            const keysToDelete = new Set(collection.keys());
+            begin();
+            for await (const record of table.iterateRecords(query, { signal: syncController.signal })) {
+              const key = table.getPrimaryId(record);
+              const existingRecord = collection.get(key);
+              if (existingRecord) {
+                if (getEtag(record) !== getEtag(existingRecord)) {
+                  write({ type: "update", value: record });
+                }
+                keysToDelete.delete(key);
+              } else {
+                write({ type: "insert", value: record });
+              }
+            }
+            for (const key of keysToDelete) {
+              write({ type: "delete", value: collection.get(key) });
+            }
+            commit();
+          } catch (err) {
+            console.warn(`[dataverse-collection] sync failed for "${collectionId}":`, err);
+          } finally {
+            syncInFlight = false;
+            syncController = void 0;
+            markReady();
+          }
+        };
+        syncFn();
+        pollTimer = setInterval(() => {
+          syncFn?.();
+        }, syncInterval);
+        return () => {
+          disposed = true;
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+          channel.removeEventListener("message", handleTabMessage);
+          removeOnlineListener();
+          channel.close();
+        };
+      },
+      rowUpdateMode: "partial"
+    };
+    const utils = {
+      forceSync: async () => {
+        await syncFn?.();
+      },
+      table
+    };
+    return {
+      ...rest,
+      id: collectionId,
+      getKey,
+      sync: syncConfig,
+      onInsert: defaultOnInsert,
+      onUpdate: defaultOnUpdate,
+      onDelete: defaultOnDelete,
+      utils,
+      // Begin syncing immediately on creation rather than waiting for the
+      // first subscriber to attach (the default for @tanstack/db collections).
+      startSync: true
+    };
+  }
   class DataverseSyncDB {
     name;
     version;
@@ -10614,8 +10723,22 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     ERRORED_MUTATIONS_NAME = "Errored Mutations";
     channel;
     closed = false;
+    // Per-collection cache stores (keyed by collection id). Unlike the table
+    // stores derived from entitySetName, these exist so multiple filtered
+    // collections over the same entity don't overwrite each other's snapshots.
+    collectionStores = /* @__PURE__ */ new Set();
+    collectionStorePromises = /* @__PURE__ */ new Map();
+    // The version passed to openDB — grows when a late-registered collection
+    // needs its own object store and the DB must be reopened to create it.
+    dbVersion;
     activeFetchControllers = /* @__PURE__ */ new Set();
     collectionCleanups = /* @__PURE__ */ new Set();
+    // Last etag we successfully wrote for each record key. Lets a queued update
+    // that was built against a stale optimistic snapshot borrow the fresher etag
+    // produced by an earlier update in the same flush (or a prior flush), so
+    // consecutive conditional updates don't 412 each other. Seeded from the
+    // mutation's own ifMatch when empty.
+    keyEtags = /* @__PURE__ */ new Map();
     // Schedules a wake-up for the soonest delayed retry so a failed mutation
     // re-attempts even while the app is idle and online. Cleared on each
     // queueMutations/flush and on close().
@@ -10625,6 +10748,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.name = name;
       this.channel = new BroadcastChannel(name);
       this.version = version;
+      this.dbVersion = version;
       this.tables = new Map(tables.map((v) => [v.entitySetName, v]));
       this.channelMessageHandler = (event) => {
         if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
@@ -10635,11 +10759,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
     sequence = 0;
     serializeMutation(mutation) {
-      const value = mutation.type === "update" ? mutation.changes : mutation.modified;
       return {
         id: mutation.mutationId,
         type: mutation.type,
-        value,
+        value: mutation.modified,
+        changes: mutation.changes,
         key: mutation.key,
         entitySetName: mutation.collection.id,
         timestamp: mutation.createdAt.valueOf(),
@@ -10652,10 +10776,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     async getDB() {
       if (!this.db) {
         const self = this;
-        this.db = await openDB(this.name, this.version, {
+        this.db = await openDB(this.name, this.dbVersion, {
           upgrade(database, oldVersion, _newVersion, transaction) {
             for (const storeName of Array.from(database.objectStoreNames)) {
-              if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME) {
+              if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) {
                 database.deleteObjectStore(storeName);
               }
             }
@@ -10675,6 +10799,29 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         });
       }
       return this.db;
+    }
+    /**
+     * Registers a per-collection cache store (keyed by collection id). If the
+     * database is already open without this store, it is reopened with a
+     * bumped version so the upgrade callback can create it. The returned
+     * promise resolves once the store is safe to read/write.
+     */
+    ensureCollectionStore(name) {
+      let p = this.collectionStorePromises.get(name);
+      if (!p) {
+        p = (async () => {
+          this.collectionStores.add(name);
+          let db = await this.getDB();
+          if (!db.objectStoreNames.contains(name)) {
+            db.close();
+            this.db = void 0;
+            this.dbVersion = db.version + 1;
+            await this.getDB();
+          }
+        })();
+        this.collectionStorePromises.set(name, p);
+      }
+      return p;
     }
     /**
      * Instantly aborts any in-flight remote server GET requests across all collections.
@@ -10700,6 +10847,25 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.db?.close();
       this.db = void 0;
     }
+    /**
+     * Writes a server-returned record into the offline cache store backing a
+     * collection. Mirrors {@link queueMutations} (which persists the optimistic
+     * value into the same `entitySetName` store), so a reload restores the
+     * authoritative row — including the fresh `$etag` and any server-computed
+     * fields — rather than the stale optimistic snapshot.
+     */
+    async writeCacheRecord(db, entitySetName, record) {
+      if (!record) return;
+      const tx = db.transaction(entitySetName, "readwrite");
+      await tx.store.put(record);
+      await tx.done;
+    }
+    /** Removes a record from the offline cache store (used after a delete). */
+    async deleteCacheRecord(db, entitySetName, key) {
+      const tx = db.transaction(entitySetName, "readwrite");
+      await tx.store.delete(key);
+      await tx.done;
+    }
     async flushQueue() {
       await navigator.locks.request(this.name, async () => {
         const db = await this.getDB();
@@ -10718,13 +10884,29 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
             continue;
           }
+          if (mutation.type === "update" || mutation.type === "delete") {
+            const fresh = this.keyEtags.get(mutation.key);
+            if (fresh && fresh !== mutation.ifMatch) {
+              mutation.ifMatch = fresh;
+            }
+          }
           try {
             if (mutation.type === "insert") {
-              await table.createRecord(mutation.value);
+              const record = await table.createRecord(mutation.value);
+              await this.writeCacheRecord(db, mutation.entitySetName, record);
             } else if (mutation.type === "update") {
-              await table.updateRecord(mutation.key, mutation.value, { ifMatch: mutation.ifMatch });
+              const record = await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
+              const etag = getEtag(record);
+              if (etag) {
+                this.keyEtags.set(mutation.key, etag);
+                mutation.ifMatch = etag;
+                await db.put(this.MUTATION_QUEUE_NAME, mutation);
+              }
+              await this.writeCacheRecord(db, mutation.entitySetName, record);
             } else if (mutation.type === "delete") {
               await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
+              this.keyEtags.delete(mutation.key);
+              await this.deleteCacheRecord(db, mutation.entitySetName, mutation.key);
             }
             await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
           } catch (e) {
@@ -10822,6 +11004,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       if (this.closed) throw new Error("DataverseSyncDB is closed");
       const {
         table,
+        id: explicitId,
+        query,
         syncInterval = DEFAULT_POLL_INTERVAL,
         readOnlyWhenOffline = false,
         readonly = false,
@@ -10831,7 +11015,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.tables.set(table.entitySetName, table);
       const pk = table.primaryKey;
       const getKey = (item) => item[pk.key];
-      const collectionId = table.entitySetName;
+      const collectionId = explicitId ?? table.entitySetName;
+      const cacheReady = this.ensureCollectionStore(collectionId);
       let pollTimer;
       let syncFromDataverse;
       let syncController;
@@ -10879,9 +11064,17 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       };
       const syncConfig = {
         sync: ({ begin, write, commit, markReady, collection }) => {
+          let markedReady = false;
+          const markReadyOnce = () => {
+            if (!markedReady) {
+              markedReady = true;
+              markReady();
+            }
+          };
           syncFromDataverse = async (signal) => {
             try {
-              const records = await table.getRecords(void 0, { signal });
+              await cacheReady;
+              const records = await table.getRecords(query, { signal });
               if (signal.aborted) return;
               const keysToDelete = /* @__PURE__ */ new Set([
                 ...collection.keys()
@@ -10904,7 +11097,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               }
               commit();
               const db = await this.getDB();
-              const tx = db.transaction(table.entitySetName, "readwrite");
+              const tx = db.transaction(collectionId, "readwrite");
               await tx.store.clear();
               for (const record of records) {
                 tx.store.put(record);
@@ -10915,7 +11108,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                 console.warn(`[dataverse-offline] Remote sync failed for "${collectionId}":`, err);
               }
             } finally {
-              markReady();
+              markReadyOnce();
             }
           };
           const handleTabMessage = (event) => {
@@ -10926,8 +11119,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                 if (table.entitySetName === mutation.entitySetName) {
                   write({ type: mutation.type, value: mutation.value, metadata: { source: "tab" } });
                   localWrites.push(async () => {
+                    await cacheReady;
                     const db = await this.getDB();
-                    const tx = db.transaction(mutation.entitySetName, "readwrite");
+                    const tx = db.transaction(collectionId, "readwrite");
                     if (mutation.type === "delete") {
                       tx.store.delete(mutation.key);
                     } else {
@@ -10944,8 +11138,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           };
           this.channel.addEventListener("message", handleTabMessage);
           const syncFromIDB = async () => {
+            await cacheReady;
             const db = await this.getDB();
-            const cached = await db.getAll(table.entitySetName);
+            const cached = await db.getAll(collectionId);
             if (!disposed && cached.length > 0) {
               begin();
               for (const item of cached) {
@@ -10958,6 +11153,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             if (!disposed) {
               console.warn(`[dataverse-offline] Cache sync failed for "${collectionId}":`, err);
             }
+          }).finally(() => {
+            markReadyOnce();
           });
           window.addEventListener("online", flushAndSync);
           document.addEventListener("visibilitychange", flushAndSync);
@@ -11018,11 +11215,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
   }
 
   async function seedRow(ctx, overrides = {}) {
-    const id = await ctx.tables.TestTable.createRecord({
+    const record = await ctx.tables.TestTable.createRecord({
       name: ctx.fx.name("row"),
       ...overrides
     });
-    return ctx.fx.track(id);
+    return ctx.fx.track(ctx.tables.TestTable.getPrimaryId(record));
   }
 
   function makeSyncDB(tables, version = 1) {
@@ -11325,6 +11522,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               type: "update",
               key: id,
               value: { id, int: 2 },
+              changes: { int: 2 },
               entitySetName: ctx.tables.TestTable.entitySetName,
               timestamp: Date.now(),
               sequence: 0,

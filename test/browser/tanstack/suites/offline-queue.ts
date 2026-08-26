@@ -151,6 +151,7 @@ export const offlineQueueSuite: Suite = {
             type: "update",
             key: id,
             value: { id, int: 2 },
+            changes: { int: 2 },
             entitySetName: ctx.tables.TestTable.entitySetName,
             timestamp: Date.now(),
             sequence: 0,

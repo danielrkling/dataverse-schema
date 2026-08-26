@@ -31,8 +31,7 @@ export const errorsSuite: Suite = {
       fn: async () => {
         await assertRejects(
           async () => {
-            const id = await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" as never })
-            if (id) await ctx.tables.TestTable.deleteRecord(id)
+            await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" as never })
           },
           "Unknown choice label",
         )

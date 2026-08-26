@@ -588,7 +588,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    * @example
    * const newId = await Person.createRecord({ name: "John", age: 30 });
    */
-  createRecord(value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID>;
+  createRecord(value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>>;
   /**
    * Updates an existing record by ID. Supports optimistic concurrency via the
    * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
@@ -603,7 +603,24 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    * // Conditional update:
    * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
    */
-  updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID>;
+  /**
+   * Updates an existing record by ID. Supports optimistic concurrency via the
+   * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+   * to `"*"`, which updates the record only if it already exists.
+   *
+   * Returns the full record as returned by Dataverse after the write
+   * (transformed), including the fresh `$etag` and any server-computed fields.
+   *
+   * @param id The record's primary key.
+   * @param value The fields to update (partial record data).
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
+   *
+   * @example
+   * await Person.updateRecord("some-guid", { name: "Jane" });
+   * // Conditional update:
+   * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
+   */
+  updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>>;
   /**
    * Creates or updates a record. If `id` is provided the record is updated via
    * PATCH; otherwise a new record is created via POST. Navigation properties
@@ -619,7 +636,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    * // Update
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
-  upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID>;
+  upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>>;
   /**
    * Deletes a record by its primary key. Supports optimistic concurrency via the
    * `ifMatch` option (If-Match header).

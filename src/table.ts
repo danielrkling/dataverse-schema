@@ -15,7 +15,7 @@ import {
   Infer,
   NarrowKeysByValue,
 } from "./types";
-import { ETAG } from "./util";
+import { ETAG, select } from "./util";
 
 export type TableRequestOptions = {
   pageSize?: number;
@@ -246,8 +246,8 @@ export class DataverseTable<TProperties extends GenericProperties> {
       return this.client
         .getPropertyValue(this.entitySetName, id, propertyName)
         .then((v) => prop.transformValueFromDataverse(v)) as Infer<
-        TProperties[TKey]
-      >;
+          TProperties[TKey]
+        >;
     }
     if (prop.type === "collection" || prop.type === "collectionIds") {
       return this.client
@@ -391,17 +391,20 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * @example
    * const newId = await Person.createRecord({ name: "John", age: 30 });
    */
-  async createRecord(value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID> {
-    const pkName = this.primaryKey.property.logicalName;
+  async createRecord(value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>> {
     const record = await this.client.postRecord(
       this.entitySetName,
       await this.transformValueToDataverse(value),
-      { query: selectQuery(pkName), signal: options?.signal },
+      // Request the full representation so we can hand back the created record
+      // (with server-computed fields and the fresh etag). Omitting the
+      // $select keeps all columns in the response.
+      { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) },
     );
-    const guid = record?.[pkName] as GUID;
+    const guid = this.getPrimaryId(record)!
+    const transformed = this.transformValueFromDataverse(record);
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
     await this._afterSave(ctx, value);
-    return guid;
+    return transformed;
   }
 
   /**
@@ -418,17 +421,34 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * // Conditional update:
    * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
    */
-  async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID> {
+  /**
+   * Updates an existing record by ID. Supports optimistic concurrency via the
+   * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+   * to `"*"`, which updates the record only if it already exists.
+   *
+   * Returns the full record as returned by Dataverse after the write
+   * (transformed), including the fresh `$etag` and any server-computed fields.
+   *
+   * @param id The record's primary key.
+   * @param value The fields to update (partial record data).
+   * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
+   *
+   * @example
+   * await Person.updateRecord("some-guid", { name: "Jane" });
+   * // Conditional update:
+   * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
+   */
+  async updateRecord(id: DataverseKey, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>> {
     if (!id) throw new Error("No ID provided")
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
-    await this.client.patchRecord(
+    const result = await this.client.patchRecord(
       this.entitySetName,
       id,
       await this.transformValueToDataverse(value, ctx),
-      { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal },
+      { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) },
     );
     await this._afterSave(ctx, value);
-    return id as GUID;
+    return this.transformValueFromDataverse(result);
   }
 
   /**
@@ -446,31 +466,19 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * // Update
    * await Person.upsertRecord(existingId, { name: "Jane" });
    */
-  async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<GUID> {
-    const pkName = this.primaryKey.property.logicalName;
-    const ctx: TransformContext = { table: this as any, client: this.client, recordId: "" };
+  async upsertRecord(id: DataverseKey | undefined, value: Partial<Infer<TProperties>>, options?: MutationOptions): Promise<Infer<TProperties>> {
+    const ctx: TransformContext = { table: this as any, client: this.client, recordId: id as string };
 
-    if (id) {
-      ctx.recordId = id as string;
-      const transformed = await this.transformValueToDataverse(value, ctx);
-      await this.client.patchRecord(
-        this.entitySetName,
-        id,
-        transformed,
-        { query: selectQuery(pkName), ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal },
-      );
-    } else {
-      const record = await this.client.postRecord(
-        this.entitySetName,
-        await this.transformValueToDataverse(value),
-        { query: selectQuery(pkName), signal: options?.signal },
-      );
-      id = record[pkName] as GUID;
-      ctx.recordId = id;
-    }
-
+    const transformed = await this.transformValueToDataverse(value, ctx);
+    const result = await this.client.patchRecord(
+      this.entitySetName,
+      id ?? "",
+      transformed,
+      { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) },
+    );
     await this._afterSave(ctx, value);
-    return id as GUID;
+    return this.transformValueFromDataverse(result);
+
   }
 
   /**
@@ -493,8 +501,8 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * @example
    * await Person.activateRecord("some-guid");
    */
-  async activateRecord(id: DataverseKey): Promise<GUID>{
-    return this.client.activateRecord(this.entitySetName,id)
+  async activateRecord(id: DataverseKey): Promise<GUID> {
+    return this.client.activateRecord(this.entitySetName, id)
   }
 
   /**
@@ -503,8 +511,8 @@ export class DataverseTable<TProperties extends GenericProperties> {
    * @example
    * await Person.deactivateRecord("some-guid");
    */
-  async deactivateRecord(id: DataverseKey): Promise<GUID>{
-    return this.client.deactivateRecord(this.entitySetName,id)
+  async deactivateRecord(id: DataverseKey): Promise<GUID> {
+    return this.client.deactivateRecord(this.entitySetName, id)
   }
 
   /**
@@ -721,10 +729,12 @@ export class DataverseTable<TProperties extends GenericProperties> {
   appendProperties<TAppendedProperties extends GenericProperties>(
     properties: TAppendedProperties,
   ): DataverseTable<Omit<TProperties, keyof TAppendedProperties> & TAppendedProperties> {
-    return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, primaryKey: this.primaryKey, fields: {
-      ...this.fields,
-      ...properties,
-    } as any});
+    return new DataverseTable({
+      client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, primaryKey: this.primaryKey, fields: {
+        ...this.fields,
+        ...properties,
+      } as any
+    });
   }
 
   async deleteFile(id: GUID, fieldName: string): Promise<void> {
@@ -784,12 +794,7 @@ function tableQuery(
   return serializeODataSelect(buildTableQueryAst(table, options));
 }
 
-function selectQuery(field: string): string {
-  return serializeODataSelect({
-    kind: "select",
-    select: [field],
-  });
-}
+
 
 /**
  * Represents a Dataverse many-to-many intersect (association) table.

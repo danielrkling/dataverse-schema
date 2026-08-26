@@ -912,7 +912,7 @@ export class CollectionProperty<
   async afterSave(ctx: TransformContext, value: any): Promise<void> {
     if (!Array.isArray(value)) return;
     const ids = await Promise.all(
-      value.map((v: any) => this.table.upsertRecord(undefined, v)),
+      value.map((v: any) => this.table.upsertRecord(undefined, v).then((r) => this.table.getPrimaryId(r)!)),
     );
     await ctx.client.associateRecordToList(
       ctx.table.entitySetName,
@@ -1096,7 +1096,7 @@ export class LookupProperty<
     if (value === null) {
       await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName);
     } else {
-      const childId = await this.table.upsertRecord(undefined, value);
+      const childId = this.table.getPrimaryId(await this.table.upsertRecord(undefined, value))!;
       await ctx.client.associateRecord(
         ctx.table.entitySetName, ctx.recordId, this.schemaName,
         this.table.entitySetName, childId,

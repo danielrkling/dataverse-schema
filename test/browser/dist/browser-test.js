@@ -1547,12 +1547,25 @@
     }
   }
 
+  function toRef(field) {
+    if (field instanceof FieldRef) return field;
+    const f = field;
+    return new FieldRef(f, f.fromDataverseName ?? f.logicalName);
+  }
+  function asRef(value) {
+    if (value instanceof FieldRef) return value;
+    if (value && typeof value === "object") {
+      const v = value;
+      if (typeof (v.fromDataverseName ?? v.logicalName) === "string") return toRef(value);
+    }
+    return null;
+  }
   function pathOf(field) {
-    return field.path;
+    return toRef(field).path;
   }
   function toFilterValue(field, value) {
+    const f = toRef(field).field;
     if (value == null || typeof value !== "string") return value;
-    const f = field.field;
     if (f?.type !== "choice") return value;
     return f.transformValueToDataverse(value);
   }
@@ -1573,23 +1586,22 @@
       return this.node;
     }
   }
-  function eq(field, value) {
-    if (value instanceof FieldRef) {
-      return new FilterExpr({ type: "compare", field: pathOf(field), operator: "eq", otherField: pathOf(value) });
+  function compare(field, operator, value) {
+    const other = asRef(value);
+    if (other) {
+      return new FilterExpr({ type: "compare", field: pathOf(field), operator, otherField: other.path });
     }
-    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "eq", value: toFilterValue(field, value) });
+    const ref = toRef(field);
+    return new FilterExpr({ type: "comparison", field: ref.path, operator, value: toFilterValue(ref, value) });
+  }
+  function eq(field, value) {
+    return compare(field, "eq", value);
   }
   function gt(field, value) {
-    if (value instanceof FieldRef) {
-      return new FilterExpr({ type: "compare", field: pathOf(field), operator: "gt", otherField: pathOf(value) });
-    }
-    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "gt", value: toFilterValue(field, value) });
+    return compare(field, "gt", value);
   }
   function lt(field, value) {
-    if (value instanceof FieldRef) {
-      return new FilterExpr({ type: "compare", field: pathOf(field), operator: "lt", otherField: pathOf(value) });
-    }
-    return new FilterExpr({ type: "comparison", field: pathOf(field), operator: "lt", value: toFilterValue(field, value) });
+    return compare(field, "lt", value);
   }
   function contains(field, value) {
     return new FilterExpr({ type: "contains", field: pathOf(field), value });
@@ -2196,6 +2208,10 @@
     entitySetName;
     kind = "table";
     type = "table";
+    /**
+     * Whole-record valibot schema for this table — either the explicit
+     * `schema` option or one composed from the individual field schemas.
+     */
     schema;
     primaryKey;
     /**
@@ -2206,7 +2222,7 @@
       this.entitySetName = options.entitySetName;
       this.logicalName = options.logicalName;
       this.fields = options.fields;
-      this.schema = options.schema;
+      this.schema = options.schema ?? composeFieldSchemas(this.fields);
       if (options.primaryKey) {
         this.primaryKey = options.primaryKey;
       } else {
@@ -2214,14 +2230,6 @@
         if (!pk) throw new Error("No Primary Key found in schema");
         this.primaryKey = { key: pk[0], property: pk[1] };
       }
-    }
-    getSchema() {
-      if (this.schema) return this.schema;
-      const shape = {};
-      for (const [key, field] of Object.entries(this.fields)) {
-        shape[key] = field.schema;
-      }
-      return object(shape);
     }
     getDefault(value) {
       const result = {};
@@ -2442,16 +2450,19 @@
      * const newId = await Person.createRecord({ name: "John", age: 30 });
      */
     async createRecord(value, options) {
-      const pkName = this.primaryKey.property.logicalName;
       const record = await this.client.postRecord(
         this.entitySetName,
         await this.transformValueToDataverse(value),
-        { query: selectQuery(pkName), signal: options?.signal }
+        // Request the full representation so we can hand back the created record
+        // (with server-computed fields and the fresh etag). Omitting the
+        // $select keeps all columns in the response.
+        { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
       );
-      const guid = record?.[pkName];
+      const guid = this.getPrimaryId(record);
+      const transformed = this.transformValueFromDataverse(record);
       const ctx = { table: this, client: this.client, recordId: guid };
       await this._afterSave(ctx, value);
-      return guid;
+      return transformed;
     }
     /**
      * Updates an existing record by ID. Supports optimistic concurrency via the
@@ -2467,17 +2478,34 @@
      * // Conditional update:
      * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
      */
+    /**
+     * Updates an existing record by ID. Supports optimistic concurrency via the
+     * `ifMatch` option (If-Match header). When `ifMatch` is omitted it defaults
+     * to `"*"`, which updates the record only if it already exists.
+     *
+     * Returns the full record as returned by Dataverse after the write
+     * (transformed), including the fresh `$etag` and any server-computed fields.
+     *
+     * @param id The record's primary key.
+     * @param value The fields to update (partial record data).
+     * @param options Mutation options (`ifMatch`, `ifNoneMatch`, `signal`).
+     *
+     * @example
+     * await Person.updateRecord("some-guid", { name: "Jane" });
+     * // Conditional update:
+     * await Person.updateRecord("some-guid", { name: "Jane" }, { ifMatch: 'W/"123456"' });
+     */
     async updateRecord(id, value, options) {
       if (!id) throw new Error("No ID provided");
       const ctx = { table: this, client: this.client, recordId: id };
-      await this.client.patchRecord(
+      const result = await this.client.patchRecord(
         this.entitySetName,
         id,
         await this.transformValueToDataverse(value, ctx),
-        { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal }
+        { ifMatch: options?.ifMatch ?? "*", ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
       );
       await this._afterSave(ctx, value);
-      return id;
+      return this.transformValueFromDataverse(result);
     }
     /**
      * Creates or updates a record. If `id` is provided the record is updated via
@@ -2495,28 +2523,16 @@
      * await Person.upsertRecord(existingId, { name: "Jane" });
      */
     async upsertRecord(id, value, options) {
-      const pkName = this.primaryKey.property.logicalName;
-      const ctx = { table: this, client: this.client, recordId: "" };
-      if (id) {
-        ctx.recordId = id;
-        const transformed = await this.transformValueToDataverse(value, ctx);
-        await this.client.patchRecord(
-          this.entitySetName,
-          id,
-          transformed,
-          { query: selectQuery(pkName), ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal }
-        );
-      } else {
-        const record = await this.client.postRecord(
-          this.entitySetName,
-          await this.transformValueToDataverse(value),
-          { query: selectQuery(pkName), signal: options?.signal }
-        );
-        id = record[pkName];
-        ctx.recordId = id;
-      }
+      const ctx = { table: this, client: this.client, recordId: id };
+      const transformed = await this.transformValueToDataverse(value, ctx);
+      const result = await this.client.patchRecord(
+        this.entitySetName,
+        id ?? "",
+        transformed,
+        { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
+      );
       await this._afterSave(ctx, value);
-      return id;
+      return this.transformValueFromDataverse(result);
     }
     /**
      * Deletes a record by its primary key. Supports optimistic concurrency via the
@@ -2658,6 +2674,10 @@
     /**
      * Extracts the primary key GUID from a record object, or `undefined` if not present.
      *
+     * Note: Dataverse always returns the primary key attribute in responses,
+     * independent of `$select` — so this works even for tables whose `fields`
+     * don't declare the pk.
+     *
      * @example
      * const account = await Account.getRecord("some-guid");
      * const pk = Account.getPrimaryId(account); // GUID | undefined
@@ -2674,6 +2694,9 @@
       for (const [key, property] of Object.entries(this.fields)) {
         const raw = value[property.fromDataverseName];
         result[key] = property.transformValueFromDataverse(raw, ctx);
+      }
+      if (!(pk.key in result) && recordId !== void 0) {
+        result[pk.key] = recordId;
       }
       result[ETAG] = value["@odata.etag"];
       return result;
@@ -2728,10 +2751,16 @@
      * // Extended has all original fields plus `customField`
      */
     appendProperties(properties) {
-      return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, primaryKey: this.primaryKey, fields: {
-        ...this.fields,
-        ...properties
-      } });
+      return new DataverseTable({
+        client: this.client,
+        entitySetName: this.entitySetName,
+        logicalName: this.logicalName,
+        primaryKey: this.primaryKey,
+        fields: {
+          ...this.fields,
+          ...properties
+        }
+      });
     }
     async deleteFile(id, fieldName) {
       const field = this.fields[fieldName];
@@ -2762,13 +2791,15 @@
     /** Use for type inference: `Infer<typeof Account>` resolves to the record type. */
     T;
   }
+  function composeFieldSchemas(fields) {
+    const shape = {};
+    for (const [key, field] of Object.entries(fields)) {
+      shape[key] = field.schema;
+    }
+    return object(shape);
+  }
   function tableQuery(table, options) {
     return serializeODataSelect(buildTableQueryAst(table, options));
-  }
-  function selectQuery(field) {
-    return serializeODataSelect({
-      select: [field]
-    });
   }
   class DataverseIntersectTable {
     /** Marks this table as an intersect table for FetchXML joins. */
@@ -3151,7 +3182,7 @@
     async afterSave(ctx, value) {
       if (!Array.isArray(value)) return;
       const ids = await Promise.all(
-        value.map((v2) => this.table.upsertRecord(void 0, v2))
+        value.map((v2) => this.table.upsertRecord(void 0, v2).then((r) => this.table.getPrimaryId(r)))
       );
       await ctx.client.associateRecordToList(
         ctx.table.entitySetName,
@@ -3195,7 +3226,7 @@
       if (value === null) {
         await ctx.client.dissociateRecord(ctx.table.entitySetName, ctx.recordId, this.schemaName);
       } else {
-        const childId = await this.table.upsertRecord(void 0, value);
+        const childId = this.table.getPrimaryId(await this.table.upsertRecord(void 0, value));
         await ctx.client.associateRecord(
           ctx.table.entitySetName,
           ctx.recordId,
@@ -4374,7 +4405,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-24T16:31:16.793Z"}
+      meta.textContent = `build ${"2026-08-26T14:51:59.137Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4463,7 +4494,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-24T16:31:16.793Z",
+          build: "2026-08-26T14:51:59.137Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4482,7 +4513,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-24T16:31:16.793Z"}\``,
+        `Build: \`${"2026-08-26T14:51:59.137Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4528,18 +4559,18 @@ tracked records deleted after run: ${summary.cleanedUp}`;
   }
 
   async function seedRow(ctx, overrides = {}) {
-    const id = await ctx.tables.TestTable.createRecord({
+    const record = await ctx.tables.TestTable.createRecord({
       name: ctx.fx.name("row"),
       ...overrides
     });
-    return ctx.fx.track(id);
+    return ctx.fx.track(ctx.tables.TestTable.getPrimaryId(record));
   }
   async function seedParent(ctx, overrides = {}) {
-    const id = await ctx.tables.TestTable0.createRecord({
+    const record = await ctx.tables.TestTable0.createRecord({
       name: ctx.fx.name("parent"),
       ...overrides
     });
-    return ctx.fx.track(id);
+    return ctx.fx.track(ctx.tables.TestTable0.getPrimaryId(record));
   }
 
   const GUID_RE$1 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -4711,7 +4742,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "file + image upload via afterSave (createRecord)",
         fn: async () => {
-          const id = await ctx.tables.TestTable.createRecord({
+          const record = await ctx.tables.TestTable.createRecord({
             name: ctx.fx.name("child2"),
             int: 7,
             text: "child2",
@@ -4719,7 +4750,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             file: { name: "smoke2.txt", data: new Blob(["hello2"]) },
             image: { data: pngBlobBytes() }
           });
-          ctx.fx.track(id);
+          ctx.fx.track(ctx.tables.TestTable.getPrimaryId(record));
         }
       },
       {
@@ -4775,10 +4806,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "upsertRecord create path creates a new record",
         fn: async () => {
-          const id = await ctx.tables.TestTable.upsertRecord(void 0, {
+          const id = (await ctx.tables.TestTable.upsertRecord(void 0, {
             name: ctx.fx.name("upsert-create"),
             int: 11
-          });
+          })).id;
           ctx.fx.track(id);
           const r = await ctx.tables.TestTable.getRecord(id);
           assertEquals(r?.int, 11, "created via upsert");
@@ -5392,8 +5423,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           await assertRejects(
             async () => {
-              const id = await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" });
-              if (id) await ctx.tables.TestTable.deleteRecord(id);
+              await ctx.tables.TestTable.createRecord({ choice: "NOT_A_LABEL" });
             },
             "Unknown choice label"
           );

@@ -36,10 +36,10 @@ export const crudSuite: Suite = {
     {
       name: "upsertRecord create path creates a new record",
       fn: async () => {
-        const id = await ctx.tables.TestTable.upsertRecord(undefined, {
+        const id = (await ctx.tables.TestTable.upsertRecord(undefined, {
           name: ctx.fx.name("upsert-create"),
           int: 11,
-        })
+        })).id
         ctx.fx.track(id)
         const r = await ctx.tables.TestTable.getRecord(id)
         assertEquals(r?.int, 11, "created via upsert")

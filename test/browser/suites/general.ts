@@ -194,7 +194,7 @@ export const generalSuite: Suite = {
     {
       name: "file + image upload via afterSave (createRecord)",
       fn: async () => {
-        const id = await ctx.tables.TestTable.createRecord({
+        const record = await ctx.tables.TestTable.createRecord({
           name: ctx.fx.name("child2"),
           int: 7,
           text: "child2",
@@ -202,7 +202,7 @@ export const generalSuite: Suite = {
           file: { name: "smoke2.txt", data: new Blob(["hello2"]) },
           image: { data: pngBlobBytes() },
         })
-        ctx.fx.track(id)
+        ctx.fx.track(ctx.tables.TestTable.getPrimaryId(record)!)
       },
     },
     {

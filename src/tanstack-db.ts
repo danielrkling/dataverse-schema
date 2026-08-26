@@ -117,9 +117,10 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {
-            const guid = await table.createRecord(mutation.modified);
+            const record = await table.createRecord(mutation.modified);
+            const guid = table.getPrimaryId(record)!;
             results.push(guid);
-            serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: mutation.modified, entitySetName: collectionId });
+            serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: record, entitySetName: collectionId });
         }
         broadcastMutations(serialized);
         return results;
@@ -130,11 +131,18 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {
-            await table.updateRecord(mutation.key, mutation.changes);
-            results.push(mutation.key);
-            serialized.push({ id: mutation.mutationId, type: "update", key: mutation.key, value: mutation.changes, entitySetName: collectionId });
+            const record = await table.updateRecord(mutation.key, mutation.changes);
+            const guid = table.getPrimaryId(record)!;
+            results.push(guid);
+            // The returned record already carries the fresh $etag, so the
+            // cross-tab broadcast keeps sibling tabs' optimistic state current.
+            serialized.push({ id: mutation.mutationId, type: "update", key: guid, value: record, entitySetName: collectionId });
         }
         broadcastMutations(serialized);
+        // Re-pull so the collection row's etag is refreshed from the server.
+        // Without this, a subsequent update would still carry the pre-write
+        // etag and fail the If-Match check until an unrelated sync happened.
+        void utils.forceSync();
         return results;
     };
 
@@ -301,6 +309,12 @@ export class DataverseSyncDB {
     private dbVersion: number
     private activeFetchControllers = new Set<AbortController>()
     private collectionCleanups = new Set<() => void>()
+    // Last etag we successfully wrote for each record key. Lets a queued update
+    // that was built against a stale optimistic snapshot borrow the fresher etag
+    // produced by an earlier update in the same flush (or a prior flush), so
+    // consecutive conditional updates don't 412 each other. Seeded from the
+    // mutation's own ifMatch when empty.
+    private keyEtags = new Map<string, string>()
     // Schedules a wake-up for the soonest delayed retry so a failed mutation
     // re-attempts even while the app is idle and online. Cleared on each
     // queueMutations/flush and on close().
@@ -438,6 +452,27 @@ export class DataverseSyncDB {
         this.db = undefined;
     }
 
+    /**
+     * Writes a server-returned record into the offline cache store backing a
+     * collection. Mirrors {@link queueMutations} (which persists the optimistic
+     * value into the same `entitySetName` store), so a reload restores the
+     * authoritative row — including the fresh `$etag` and any server-computed
+     * fields — rather than the stale optimistic snapshot.
+     */
+    private async writeCacheRecord(db: IDBPDatabase, entitySetName: string, record: any): Promise<void> {
+        if (!record) return;
+        const tx = db.transaction(entitySetName, "readwrite");
+        await tx.store.put(record);
+        await tx.done;
+    }
+
+    /** Removes a record from the offline cache store (used after a delete). */
+    private async deleteCacheRecord(db: IDBPDatabase, entitySetName: string, key: any): Promise<void> {
+        const tx = db.transaction(entitySetName, "readwrite");
+        await tx.store.delete(key);
+        await tx.done;
+    }
+
 
 
     private async flushQueue() {
@@ -467,14 +502,43 @@ export class DataverseSyncDB {
                     continue;
                 }
 
+                // Use the freshest etag we know for this key (a prior successful
+                // update in this or an earlier flush), falling back to the
+                // etag captured when the mutation was enqueued. This keeps a
+                // second queued update — built against the same stale optimistic
+                // snapshot as the first — from sending an outdated If-Match.
+                if (mutation.type === "update" || mutation.type === "delete") {
+                    const fresh = this.keyEtags.get(mutation.key);
+                    if (fresh && fresh !== mutation.ifMatch) {
+                        mutation.ifMatch = fresh;
+                    }
+                }
 
                 try {
                     if (mutation.type === "insert") {
-                        await table.createRecord(mutation.value);
+                        const record = await table.createRecord(mutation.value);
+                        // Persist the server-returned record (with fresh etag
+                        // and any server-computed fields) into the IDB cache so
+                        // a reload restores the authoritative row.
+                        await this.writeCacheRecord(db, mutation.entitySetName, record);
                     } else if (mutation.type === "update") {
-                        await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
+                        const record = await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
+                        const etag = getEtag(record);
+                        if (etag) {
+                            // Persist the new etag so a later flush (or a
+                            // sibling update still queued for this key) uses it
+                            // instead of the stale snapshot etag.
+                            this.keyEtags.set(mutation.key, etag);
+                            mutation.ifMatch = etag;
+                            await db.put(this.MUTATION_QUEUE_NAME, mutation);
+                        }
+                        await this.writeCacheRecord(db, mutation.entitySetName, record);
                     } else if (mutation.type === "delete") {
                         await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
+                        // The record is gone — drop any cached etag for it and
+                        // remove it from the IDB cache.
+                        this.keyEtags.delete(mutation.key);
+                        await this.deleteCacheRecord(db, mutation.entitySetName, mutation.key);
                     }
 
                     await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
