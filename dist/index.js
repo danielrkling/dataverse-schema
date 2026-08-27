@@ -2704,6 +2704,13 @@ var DataverseIntersectTable = class {
 function isValidDate(value) {
 	return value instanceof Date && !isNaN(value.getTime());
 }
+/**
+* Extracts the validation schema of each field, keyed by property name —
+* the shape `composeRecordSchema` expects.
+*/
+function schemasOf(fields) {
+	return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.schema]));
+}
 function parseValidDateOnly(value) {
 	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
 	const text = value;
@@ -3462,7 +3469,7 @@ var CollectionProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: [],
-			schema: arrayOf(lazyOf(() => composeRecordSchema(getTable().fields)))
+			schema: arrayOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = this.schemaName;
@@ -3611,7 +3618,7 @@ var LookupProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: null,
-			schema: nullableOf(lazyOf(() => composeRecordSchema(getTable().fields)))
+			schema: nullableOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = this.schemaName;

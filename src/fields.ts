@@ -12,6 +12,14 @@ function isValidDate(value: Date): boolean {
   return value instanceof Date && !isNaN(value.getTime());
 }
 
+/**
+ * Extracts the validation schema of each field, keyed by property name —
+ * the shape `composeRecordSchema` expects.
+ */
+function schemasOf(fields: Record<string, FieldBase<any>>): Record<string, ValidationSchema<any>> {
+  return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.schema]));
+}
+
 function parseValidDateOnly(value: unknown): Date {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
   const text = value as string;
@@ -894,7 +902,7 @@ export class CollectionProperty<
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>) {
     super(name, {
       defaultValue: [],
-      schema: arrayOf(lazyOf(() => composeRecordSchema(getTable().fields as unknown as Record<string, ValidationSchema<any>>))),
+      schema: arrayOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields)))),
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
     // Navigation properties are referenced by their schema name for $expand/association.
@@ -1079,7 +1087,7 @@ export class LookupProperty<
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>) {
     super(name, {
       defaultValue: null,
-      schema: nullableOf(lazyOf(() => composeRecordSchema(getTable().fields as unknown as Record<string, ValidationSchema<any>>))),
+      schema: nullableOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields)))),
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
     // Navigation properties are referenced by their schema name for $expand/association.

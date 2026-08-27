@@ -62,6 +62,42 @@ test("table exposes client, entitySetName and logicalName", () => {
 
 // --- Schema & defaults ---
 
+test("table.schema validates expanded lookup records against the related table's fields", async () => {
+  // Regression: the lookup child schema must be composed from the related
+  // table's field *schemas*, not the field objects themselves.
+  const result = await standardSafeParse(Account.schema, {
+    id: "123e4567-e89b-12d3-a456-426614174000",
+    name: "Acme",
+    revenue: 10,
+    status: "Active",
+    createdOn: new Date(),
+    primaryContact: { id: "123e4567-e89b-12d3-a456-426614174000", name: "Jane" },
+    contacts: [{ id: "123e4567-e89b-12d3-a456-426614174000", name: "Bob" }],
+    contactId: "123e4567-e89b-12d3-a456-426614174000",
+    contactIds: ["123e4567-e89b-12d3-a456-426614174000"],
+  })
+  expect(result.success).toBe(true)
+
+  // A bad nested value must fail with the field path pointing into the lookup.
+  const bad = await standardSafeParse(Account.schema, {
+    id: "123e4567-e89b-12d3-a456-426614174000",
+    name: "Acme",
+    revenue: 10,
+    status: "Active",
+    createdOn: new Date(),
+    primaryContact: { id: "not-a-guid", name: "Jane" },
+    contacts: [],
+    contactId: null,
+    contactIds: [],
+  })
+  expect(bad.success).toBe(false)
+  if (!bad.success) {
+    const path = bad.issues[0].path?.map((seg) => typeof seg === "object" ? String(seg.key) : String(seg)) ?? []
+    expect(path).toContain("primaryContact")
+    expect(bad.issues[0].message).toBe("Expected a GUID")
+  }
+})
+
 test("table.schema composes a Standard Schema object from fields", async () => {
   const schema = Account.schema
   const result = await standardSafeParse(schema, {
