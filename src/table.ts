@@ -1,9 +1,9 @@
-import * as v from "valibot"
 import { DataverseClient, DataverseHttpError } from "./client";
 import { buildTableQueryAst, ODataTableQueryOptions } from "./query/odata/builder";
 import { serializeODataSelect } from "./query/odata/ast";
 import { CollectionIdsProperty, CollectionProperty, LookupProperty, LookupIdProperty, PrimaryKeyField, FileField, ImageField } from "./fields";
-import { FieldBase, SKIP, TransformContext, ValidationSchema } from "./fields";
+import { FieldBase, SKIP, TransformContext } from "./fields";
+import { composeRecordSchema, ValidationSchema } from "./schema";
 import {
   AlternateKey,
   DataverseKey,
@@ -79,7 +79,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
   kind = "table" as const;
   type = "table" as const;
   /**
-   * Whole-record valibot schema for this table — either the explicit
+   * Whole-record schema for this table — either the explicit
    * `schema` option or one composed from the individual field schemas.
    */
   schema: ValidationSchema<Infer<TProperties>>;
@@ -165,7 +165,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
         ...options,
         query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
       })
-      .then((values) => values.map((v) => this.transformValueFromDataverse(v)));
+      .then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
   }
 
   /**
@@ -193,7 +193,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
         query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
       },
     )) {
-      yield this.transformValueFromDataverse(record);
+      yield await this.transformValueFromDataverse(record);
     }
   }
 
@@ -223,7 +223,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
         query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
       },
     )) {
-      yield page.map((v) => this.transformValueFromDataverse(v));
+      yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
     }
   }
 
@@ -400,7 +400,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       // $select keeps all columns in the response.
       { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) },
     );
-    const transformed = this.transformValueFromDataverse(record);
+    const transformed = await this.transformValueFromDataverse(record);
     const guid = this.getPrimaryId(transformed)!
     const ctx: TransformContext = { table: this as any, client: this.client, recordId: guid };
     await this._afterSave(ctx, value);
@@ -450,7 +450,6 @@ export class DataverseTable<TProperties extends GenericProperties> {
     await this._afterSave(ctx, value);
     return this.transformValueFromDataverse(result);
   }
-
   /**
    * Creates or updates a record. If `id` is provided the record is updated via
    * PATCH; otherwise a new record is created via POST. Navigation properties
@@ -480,7 +479,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
       transformed,
       { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) },
     );
-    const result = this.transformValueFromDataverse(record);
+    const result = await this.transformValueFromDataverse(record);
     ctx.recordId = this.getPrimaryId(result)!
     await this._afterSave(ctx, value);
     return result
@@ -652,7 +651,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     return value[this.primaryKey.key as keyof typeof value] as GUID | undefined;
   }
 
-  transformValueFromDataverse(value: any): Infer<TProperties> {
+  async transformValueFromDataverse(value: any): Promise<Infer<TProperties>> {
     if (value === null) return null as unknown as Infer<TProperties>;
     const result = {} as Record<PropertyKey, any>;
     const pk = this.primaryKey;
@@ -660,7 +659,7 @@ export class DataverseTable<TProperties extends GenericProperties> {
     const ctx: TransformContext | undefined = recordId ? { table: this as any, client: this.client, recordId } : undefined;
     for (const [key, property] of Object.entries(this.fields)) {
       const raw = value[property.fromDataverseName];
-      result[key] = property.transformValueFromDataverse(raw, ctx);
+      result[key] = await property.transformValueFromDataverse(raw, ctx);
     }
     // Dataverse always returns the pk independent of $select, so preserve it
     // on the transformed record even when the pk field isn't declared in
@@ -780,17 +779,20 @@ export class DataverseTable<TProperties extends GenericProperties> {
 
 
 /**
- * Composes a whole-record valibot schema from the individual field schemas.
+ * Composes a whole-record schema from the individual field schemas.
  * Used as the default table schema when no explicit `schema` option is given.
+ *
+ * The composed schema is Standard Schema V1 compatible — it validates each
+ * field independently via that field's own `~standard.validate` and aggregates
+ * the issues, so it works regardless of which schema library produced the
+ * field schemas (valibot, Zod, ArkType, etc.).
  */
 function composeFieldSchemas<TProperties extends GenericProperties>(
   fields: TProperties,
 ): ValidationSchema<Infer<TProperties>> {
-  const shape: Record<string, v.BaseSchema<any, any, any>> = {}
-  for (const [key, field] of Object.entries(fields)) {
-    shape[key] = (field as FieldBase<any>).schema
-  }
-  return v.object(shape) as any
+  return composeRecordSchema(Object.fromEntries(
+    Object.entries(fields).map(([key, field]) => [key, (field as FieldBase<any>).schema]),
+  )) as ValidationSchema<Infer<TProperties>>;
 }
 
 function tableQuery(

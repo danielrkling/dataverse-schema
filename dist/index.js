@@ -1,5 +1,3 @@
-import * as v from "valibot";
-
 //#region src/util.ts
 const ETAG = "$etag";
 const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
@@ -886,6 +884,141 @@ function mapChoices(data) {
 }
 
 //#endregion
+//#region src/schema.ts
+function makeSchema(validate) {
+	return { "~standard": {
+		version: 1,
+		vendor: "dataverse-schema",
+		validate
+	} };
+}
+/**
+* Builds a schema from a synchronous predicate — the basic building block for
+* the library's built-in field schemas (string, number, choice membership...).
+*/
+function checkSchema(check, message) {
+	return makeSchema((value) => check(value) ? { value } : { issues: [{ message }] });
+}
+const STRING_SCHEMA = checkSchema((value) => typeof value === "string", "Expected a string");
+const NUMBER_SCHEMA = checkSchema((value) => typeof value === "number", "Expected a number");
+const BOOLEAN_SCHEMA = checkSchema((value) => typeof value === "boolean", "Expected a boolean");
+const DATE_SCHEMA = checkSchema((value) => value instanceof Date, "Expected a Date");
+const BLOB_SCHEMA = checkSchema((value) => value instanceof Blob, "Expected a Blob");
+const GUID_SCHEMA = checkSchema((value) => typeof value === "string" && rxGUID.test(value), "Expected a GUID");
+/**
+* Validates a value against a Standard Schema, throwing on failure. Works with
+* any Standard Schema V1 implementation (not just valibot). Prefer this over
+* `v.parse` for anything touching a `ValidationSchema`, since those may come
+* from a non-valibot library.
+*/
+async function standardParse(schema, value) {
+	const result = await schema["~standard"].validate(value);
+	if (result.issues) throw new Error(formatIssues(result.issues));
+	return result.value;
+}
+/**
+* Validates a value against a Standard Schema without throwing. Works with any
+* Standard Schema V1 implementation, including async ones.
+*/
+async function standardSafeParse(schema, value) {
+	const result = await schema["~standard"].validate(value);
+	if (result.issues) return {
+		success: false,
+		issues: result.issues
+	};
+	return {
+		success: true,
+		value: result.value
+	};
+}
+function formatIssues(issues) {
+	return issues.map((issue) => {
+		const path = (issue.path ?? []).map((seg) => typeof seg === "object" ? String(seg.key) : String(seg)).join(".");
+		return path ? `${path}: ${issue.message}` : issue.message;
+	}).join(", ");
+}
+/**
+* Composes a whole-record schema from an object of named child schemas
+* (e.g. a table's fields). Each child validates its entry independently and
+* any issues are tagged with the child's path — regardless of which schema
+* library produced each child. Async child schemas are supported.
+*/
+function composeRecordSchema(children) {
+	const entries = Object.entries(children);
+	return makeSchema(async (value) => {
+		const input = value ?? {};
+		const settled = await Promise.all(entries.map(async ([key, child]) => [key, await child["~standard"].validate(input[key])]));
+		const out = {};
+		const issues = [];
+		for (const [key, result] of settled) if (result.issues) for (const issue of result.issues) issues.push({
+			...issue,
+			path: [{ key }, ...issue.path ?? []]
+		});
+		else out[key] = result.value;
+		if (issues.length > 0) return { issues };
+		return { value: out };
+	});
+}
+/**
+* Wraps a schema so it validates arrays of that schema, tagging element issues
+* with their index (e.g. `"0: message"`). Used by collection properties. Async
+* element schemas are supported.
+*/
+function arrayOf(child) {
+	return makeSchema(async (value) => {
+		if (!Array.isArray(value)) return { issues: [{ message: "Expected an array" }] };
+		const settled = await Promise.all(value.map(async (item) => await child["~standard"].validate(item)));
+		const out = [];
+		const issues = [];
+		for (const [i, result] of settled.entries()) if (result.issues) for (const issue of result.issues) issues.push({
+			...issue,
+			path: [{ key: i }, ...issue.path ?? []]
+		});
+		else out[i] = result.value;
+		if (issues.length > 0) return { issues };
+		return { value: out };
+	});
+}
+/**
+* Defers resolution of a schema until first validation. Used by navigation
+* properties whose related table may not exist yet (circular references).
+*/
+function lazyOf(getChild) {
+	let cached;
+	return makeSchema((value) => (cached ??= getChild())["~standard"].validate(value));
+}
+/**
+* Wraps a schema so it also accepts `null`. Used by lookup and nullable fields.
+*/
+function nullableOf(child) {
+	return makeSchema((value) => {
+		if (value === null) return { value: null };
+		return child["~standard"].validate(value);
+	});
+}
+/**
+* Wraps a schema so it also accepts `undefined`, folding it to `null`.
+*/
+function optionalOf(child) {
+	return makeSchema((value) => {
+		if (value === void 0) return { value: null };
+		return child["~standard"].validate(value);
+	});
+}
+/**
+* Wraps a schema so `null`, `undefined`, and empty/whitespace-only strings are
+* rejected. Used to implement the `required` field option (e.g. making a
+* nullable field reject empty values).
+*/
+function requiredOf(child, message = "Value is required") {
+	return makeSchema((value) => {
+		if (value === null || value === void 0) return { issues: [{ message }] };
+		if (typeof value === "string" && value.trim().length === 0) return { issues: [{ message }] };
+		return child["~standard"].validate(value);
+	});
+}
+
+//#endregion
 //#region src/query/shared/field-ref.ts
 var FieldRef = class FieldRef {
 	field;
@@ -1587,9 +1720,9 @@ var ODataApplyQuery = class {
 	toString() {
 		return this._build();
 	}
-	_transformRow(v) {
+	async _transformRow(v) {
 		const r = { ...v };
-		for (const [alias, field] of Object.entries(this._aliasFields)) if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
+		for (const [alias, field] of Object.entries(this._aliasFields)) if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias]);
 		r[ETAG] = v["@odata.etag"];
 		delete r["@odata.etag"];
 		return r;
@@ -1608,7 +1741,7 @@ var ODataApplyQuery = class {
 			...options,
 			query: qs
 		});
-		for await (const page of raw) yield page.map((v) => this._transformRow(v));
+		for await (const page of raw) yield await Promise.all(page.map((v) => this._transformRow(v)));
 	}
 };
 var ODataQuery = class ODataQuery {
@@ -1752,7 +1885,7 @@ var ODataQuery = class ODataQuery {
 	_getSelectedKeys() {
 		return this.#selectedKeys;
 	}
-	_partialTransform(value) {
+	async _partialTransform(value) {
 		const result = {};
 		const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.logicalName];
 		const ctx = {
@@ -1762,13 +1895,13 @@ var ODataQuery = class ODataQuery {
 		};
 		for (const key of this.#selectedKeys) {
 			const prop = this.#table.fields[key];
-			result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
+			result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
 		}
-		for (const expand of this.#expandMeta) if (value[expand.dvName] !== void 0) result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
+		for (const expand of this.#expandMeta) if (value[expand.dvName] !== void 0) result[expand.key] = await _processExpand(value[expand.dvName], expand, this.#table);
 		result[ETAG] = value["@odata.etag"];
 		return result;
 	}
-	_transformRow(value) {
+	async _transformRow(value) {
 		if (this.#selectedKeys.length > 0) return this._partialTransform(value);
 		if (this.#expandMeta.some((e) => e.selectedKeys)) return this._partialTransform(value);
 		return this.#table.transformValueFromDataverse(value);
@@ -1794,7 +1927,7 @@ var ODataQuery = class ODataQuery {
 		for await (const page of this.#table.client.iteratePages(this.#table.entitySetName, {
 			...options,
 			query: qs
-		})) yield page.map((v) => this._transformRow(v));
+		})) yield await Promise.all(page.map((v) => this._transformRow(v)));
 	}
 };
 var InitialQueryImpl = class {
@@ -1829,12 +1962,12 @@ function _processExpand(raw, expand, table) {
 	const relatedTable = navProp.table;
 	if (expand.isCollection) {
 		const items = Array.from(raw ?? []);
-		if (expand.selectedKeys) return items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands));
+		if (expand.selectedKeys) return Promise.all(items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands)));
 		else return navProp.transformValueFromDataverse(raw);
 	} else if (expand.selectedKeys) return _partialTransformItem(relatedTable, expand.selectedKeys, raw, expand.subExpands);
 	else return navProp.transformValueFromDataverse(raw);
 }
-function _partialTransformItem(table, selectedKeys, raw, subExpands) {
+async function _partialTransformItem(table, selectedKeys, raw, subExpands) {
 	const result = {};
 	const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.logicalName];
 	const ctx = {
@@ -1844,10 +1977,10 @@ function _partialTransformItem(table, selectedKeys, raw, subExpands) {
 	};
 	for (const key of selectedKeys) {
 		const prop = table.fields[key];
-		if (prop) result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
+		if (prop) result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
 	}
 	if (subExpands) {
-		for (const expand of subExpands) if (raw[expand.dvName] !== void 0) result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
+		for (const expand of subExpands) if (raw[expand.dvName] !== void 0) result[expand.key] = await _processExpand(raw[expand.dvName], expand, table);
 	}
 	return result;
 }
@@ -1979,7 +2112,7 @@ var DataverseTable = class DataverseTable {
 	kind = "table";
 	type = "table";
 	/**
-	* Whole-record valibot schema for this table — either the explicit
+	* Whole-record schema for this table — either the explicit
 	* `schema` option or one composed from the individual field schemas.
 	*/
 	schema;
@@ -2047,7 +2180,7 @@ var DataverseTable = class DataverseTable {
 		return this.client.getRecords(this.entitySetName, {
 			...options,
 			query: tableQuery(this, queryOptions)
-		}).then((values) => values.map((v) => this.transformValueFromDataverse(v)));
+		}).then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
 	}
 	/**
 	* Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
@@ -2067,7 +2200,7 @@ var DataverseTable = class DataverseTable {
 		for await (const record of this.client.iterateRecords(this.entitySetName, {
 			...options,
 			query: tableQuery(this, queryOptions)
-		})) yield this.transformValueFromDataverse(record);
+		})) yield await this.transformValueFromDataverse(record);
 	}
 	/**
 	* Iterates over pages of records, lazily following `@odata.nextLink` pagination.
@@ -2088,7 +2221,7 @@ var DataverseTable = class DataverseTable {
 		for await (const page of this.client.iteratePages(this.entitySetName, {
 			...options,
 			query: tableQuery(this, queryOptions)
-		})) yield page.map((v) => this.transformValueFromDataverse(v));
+		})) yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
 	}
 	/**
 	* Retrieves the value of a single property for a record by ID.
@@ -2169,7 +2302,7 @@ var DataverseTable = class DataverseTable {
 			signal: options?.signal,
 			query: tableQuery(this)
 		});
-		const transformed = this.transformValueFromDataverse(record);
+		const transformed = await this.transformValueFromDataverse(record);
 		const guid = this.getPrimaryId(transformed);
 		const ctx = {
 			table: this,
@@ -2255,7 +2388,7 @@ var DataverseTable = class DataverseTable {
 			signal: options?.signal,
 			query: tableQuery(this)
 		});
-		const result = this.transformValueFromDataverse(record);
+		const result = await this.transformValueFromDataverse(record);
 		ctx.recordId = this.getPrimaryId(result);
 		await this._afterSave(ctx, value);
 		return result;
@@ -2404,7 +2537,7 @@ var DataverseTable = class DataverseTable {
 	getPrimaryId(value) {
 		return value[this.primaryKey.key];
 	}
-	transformValueFromDataverse(value) {
+	async transformValueFromDataverse(value) {
 		if (value === null) return null;
 		const result = {};
 		const pk = this.primaryKey;
@@ -2416,7 +2549,7 @@ var DataverseTable = class DataverseTable {
 		} : void 0;
 		for (const [key, property] of Object.entries(this.fields)) {
 			const raw = value[property.fromDataverseName];
-			result[key] = property.transformValueFromDataverse(raw, ctx);
+			result[key] = await property.transformValueFromDataverse(raw, ctx);
 		}
 		if (!(pk.key in result) && recordId !== void 0) result[pk.key] = recordId;
 		result[ETAG] = value["@odata.etag"];
@@ -2514,13 +2647,16 @@ var DataverseTable = class DataverseTable {
 	T;
 };
 /**
-* Composes a whole-record valibot schema from the individual field schemas.
+* Composes a whole-record schema from the individual field schemas.
 * Used as the default table schema when no explicit `schema` option is given.
+*
+* The composed schema is Standard Schema V1 compatible — it validates each
+* field independently via that field's own `~standard.validate` and aggregates
+* the issues, so it works regardless of which schema library produced the
+* field schemas (valibot, Zod, ArkType, etc.).
 */
 function composeFieldSchemas(fields) {
-	const shape = {};
-	for (const [key, field] of Object.entries(fields)) shape[key] = field.schema;
-	return v.object(shape);
+	return composeRecordSchema(Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.schema])));
 }
 function tableQuery(table, options) {
 	return serializeODataSelect(buildTableQueryAst(table, options));
@@ -2565,10 +2701,8 @@ var DataverseIntersectTable = class {
 
 //#endregion
 //#region src/fields.ts
-const DATE_SCHEMA = v.date();
-const NON_EMPTY_STRING_SCHEMA = v.pipe(v.string(), v.minLength(1));
 function isValidDate(value) {
-	return v.safeParse(DATE_SCHEMA, value).success;
+	return value instanceof Date && !isNaN(value.getTime());
 }
 function parseValidDateOnly(value) {
 	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
@@ -2598,6 +2732,9 @@ const SKIP = Symbol("skip");
 *
 * Fields created with `readonly: true` are never included in request bodies,
 * `updatePropertyValue`, or `deletePropertyValue`.
+* Fields created with `required: true` reject `null`, `undefined`, and
+* empty/whitespace-only strings when validated (e.g. through `table.schema`) —
+* handy for nullable fields.
 */
 var FieldBase = class {
 	/** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
@@ -2618,7 +2755,8 @@ var FieldBase = class {
 		this.toDataverseName = this.logicalName;
 		this.#default = options?.default ?? defaults.defaultValue;
 		this.#readOnly = options?.readonly ?? false;
-		this.schema = options?.schema ?? defaults.schema;
+		const base = options?.schema ?? defaults.schema;
+		this.schema = options?.required ? requiredOf(base) : base;
 	}
 	getDefault() {
 		return this.#default;
@@ -2633,18 +2771,13 @@ var FieldBase = class {
 		return value;
 	}
 };
-function buildObjectSchema(fields) {
-	const shape = {};
-	for (const [key, field] of Object.entries(fields)) shape[key] = field.schema;
-	return v.object(shape);
-}
 var BooleanField = class extends FieldBase {
 	kind = "value";
 	type = "boolean";
 	constructor(name, options) {
 		super(name, {
 			defaultValue: false,
-			schema: v.boolean()
+			schema: BOOLEAN_SCHEMA
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2658,7 +2791,7 @@ var NullableBooleanField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.boolean())
+			schema: nullableOf(BOOLEAN_SCHEMA)
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2672,7 +2805,7 @@ var NumberField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: 0,
-			schema: v.number()
+			schema: NUMBER_SCHEMA
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2689,7 +2822,7 @@ var NullableNumberField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.number())
+			schema: nullableOf(NUMBER_SCHEMA)
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2706,7 +2839,7 @@ var StringField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: "",
-			schema: v.string()
+			schema: STRING_SCHEMA
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2719,7 +2852,7 @@ var NullableStringField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.string())
+			schema: nullableOf(STRING_SCHEMA)
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2732,7 +2865,7 @@ var PrimaryKeyField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: "",
-			schema: v.pipe(v.string(), v.uuid())
+			schema: GUID_SCHEMA
 		}, options);
 	}
 	getDefault() {
@@ -2747,7 +2880,7 @@ var ListField = class extends FieldBase {
 		const values = Object.freeze([...list]);
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.custom((value) => values.includes(value), `Value not in [${values}]`))
+			schema: nullableOf(checkSchema((value) => values.includes(value), `Value not in [${values}]`))
 		}, options);
 		this.list = values;
 	}
@@ -2775,7 +2908,7 @@ var MultiChoiceField = class extends FieldBase {
 		if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
 		super(name, {
 			defaultValue: [],
-			schema: v.array(v.custom((value) => values.includes(value), `Value not in [${values}]`))
+			schema: arrayOf(checkSchema((value) => values.includes(value), `Value not in [${values}]`))
 		}, options);
 		this.choices = Object.freeze(values);
 	}
@@ -2806,7 +2939,7 @@ var ChoiceField = class extends FieldBase {
 		const values = Object.values(choices);
 		super(name, {
 			defaultValue: choices[Number(firstKey)],
-			schema: v.picklist(values)
+			schema: checkSchema((value) => values.includes(value), `Value not in [${values}]`)
 		}, options);
 		this.#choices = choices;
 		this.choices = Object.freeze([...values]);
@@ -2832,7 +2965,7 @@ var NullableChoiceField = class extends FieldBase {
 		const values = Object.values(choices);
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.picklist(values))
+			schema: nullableOf(checkSchema((value) => values.includes(value), `Value not in [${values}]`))
 		}, options);
 		this.#choices = choices;
 		this.choices = Object.freeze([...values]);
@@ -2855,7 +2988,7 @@ var DateTimeField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: /* @__PURE__ */ new Date(),
-			schema: v.instance(Date)
+			schema: DATE_SCHEMA
 		}, options);
 	}
 	getDefault() {
@@ -2874,7 +3007,7 @@ var NullableDateTimeField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.instance(Date))
+			schema: nullableOf(DATE_SCHEMA)
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2891,7 +3024,7 @@ var DateField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
-			schema: v.instance(Date)
+			schema: DATE_SCHEMA
 		}, options);
 	}
 	getDefault() {
@@ -2912,7 +3045,7 @@ var NullableDateField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.instance(Date))
+			schema: nullableOf(DATE_SCHEMA)
 		}, options);
 	}
 	transformValueFromDataverse(value) {
@@ -2936,7 +3069,7 @@ var FormattedField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.string())
+			schema: nullableOf(STRING_SCHEMA)
 		}, {
 			...options,
 			readonly: true
@@ -2959,10 +3092,10 @@ var ImageField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.object({
-				url: v.optional(v.string()),
-				fullSizeUrl: v.optional(v.string()),
-				data: v.optional(v.nullable(v.instance(Blob)))
+			schema: nullableOf(composeRecordSchema({
+				url: optionalOf(STRING_SCHEMA),
+				fullSizeUrl: optionalOf(STRING_SCHEMA),
+				data: optionalOf(nullableOf(BLOB_SCHEMA))
 			}))
 		}, options);
 	}
@@ -2999,10 +3132,10 @@ var FileField = class extends FieldBase {
 	constructor(name, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.object({
-				name: v.optional(v.string()),
-				url: v.optional(v.string()),
-				data: v.optional(v.nullable(v.instance(Blob)))
+			schema: nullableOf(composeRecordSchema({
+				name: optionalOf(STRING_SCHEMA),
+				url: optionalOf(STRING_SCHEMA),
+				data: optionalOf(nullableOf(BLOB_SCHEMA))
 			}))
 		}, options);
 		this.fromDataverseName = `${name}_name`;
@@ -3034,10 +3167,10 @@ var JsonField = class extends FieldBase {
 			schema: options.schema
 		}, options);
 	}
-	transformValueFromDataverse(value) {
+	async transformValueFromDataverse(value) {
 		if (value == null) return this.getDefault();
 		const raw = typeof value === "string" ? JSON.parse(value) : value;
-		return v.parse(this.schema, raw);
+		return standardParse(this.schema, raw);
 	}
 	transformValueToDataverse(value) {
 		if (value == null) return null;
@@ -3273,10 +3406,10 @@ function file(name, options) {
 }
 /**
 * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
-* in Dataverse and parses/validates it using the provided valibot schema.
+* in Dataverse and parses/validates it using the provided Standard Schema.
 *
 * @param name The Dataverse logical name of the column.
-* @param options Field options; `schema` (a valibot schema validating the parsed
+* @param options Field options; `schema` (a Standard Schema validating the parsed
 * JSON structure) is required, plus the standard default/readonly options.
 *
 * @example
@@ -3296,7 +3429,7 @@ var LookupIdProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(NON_EMPTY_STRING_SCHEMA)
+			schema: nullableOf(GUID_SCHEMA)
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = `_${this.logicalName}_value`;
@@ -3329,7 +3462,7 @@ var CollectionProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: [],
-			schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields)))
+			schema: arrayOf(lazyOf(() => composeRecordSchema(getTable().fields)))
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = this.schemaName;
@@ -3338,8 +3471,8 @@ var CollectionProperty = class extends FieldBase {
 	get table() {
 		return this.#table ??= this.#getTable();
 	}
-	transformValueFromDataverse(value) {
-		return Array.from(value ?? []).map((v) => this.table.transformValueFromDataverse(v));
+	async transformValueFromDataverse(value) {
+		return Promise.all(Array.from(value ?? []).map((v) => this.table.transformValueFromDataverse(v)));
 	}
 	transformValueToDataverse() {
 		return SKIP;
@@ -3387,7 +3520,7 @@ var CollectionIdsProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: [],
-			schema: v.array(NON_EMPTY_STRING_SCHEMA)
+			schema: arrayOf(GUID_SCHEMA)
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = this.schemaName;
@@ -3478,7 +3611,7 @@ var LookupProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: null,
-			schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields)))
+			schema: nullableOf(lazyOf(() => composeRecordSchema(getTable().fields)))
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = this.schemaName;
@@ -3487,7 +3620,7 @@ var LookupProperty = class extends FieldBase {
 	get table() {
 		return this.#table ??= this.#getTable();
 	}
-	transformValueFromDataverse(value) {
+	async transformValueFromDataverse(value) {
 		return value == null ? null : this.table.transformValueFromDataverse(value);
 	}
 	transformValueToDataverse() {
@@ -3757,7 +3890,7 @@ var FetchXmlAggregateQuery = class {
 		if (options?.useRawOrderBy) this._useRawOrderBy = true;
 		if (options?.options) this._options = options.options;
 	}
-	_transformRow(v) {
+	async _transformRow(v) {
 		const aliasInfo = this._buildAliasInfo();
 		if (aliasInfo.size > 0) {
 			const result = {};
@@ -3767,12 +3900,12 @@ var FetchXmlAggregateQuery = class {
 				client: this._table.client,
 				recordId
 			};
-			for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+			for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
 			else result[alias] = info.getDefault();
 			result[ETAG] = v["@odata.etag"];
 			return result;
 		}
-		return this._table.transformValueFromDataverse(v);
+		return await this._table.transformValueFromDataverse(v);
 	}
 	async execute(options) {
 		this._applyExecuteOptions(options);
@@ -3789,7 +3922,7 @@ var FetchXmlAggregateQuery = class {
 		for await (const page of this._table.client.iteratePages(this._table.entitySetName, {
 			...options,
 			query: this.toString()
-		})) yield page.map((v) => this._transformRow(v));
+		})) yield await Promise.all(page.map((v) => this._transformRow(v)));
 	}
 	_buildAliasInfo() {
 		const map = /* @__PURE__ */ new Map();
@@ -4196,7 +4329,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		if (options?.useRawOrderBy) this._useRawOrderBy = true;
 		if (options?.options) this._options = options.options;
 	}
-	_transformRow(v) {
+	async _transformRow(v) {
 		const aliasInfo = this._buildAliasInfo();
 		if (aliasInfo.size > 0) {
 			const result = {};
@@ -4206,12 +4339,12 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 				client: this._table.client,
 				recordId
 			};
-			for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+			for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
 			else result[alias] = info.getDefault();
 			result[ETAG] = v["@odata.etag"];
 			return result;
 		}
-		return this._table.transformValueFromDataverse(v);
+		return await this._table.transformValueFromDataverse(v);
 	}
 	async execute(options) {
 		this._applyExecuteOptions(options);
@@ -4228,7 +4361,7 @@ var EntityQueryBuilder = class EntityQueryBuilder {
 		for await (const page of this._table.client.iteratePages(this._table.entitySetName, {
 			...options,
 			query: this.toString()
-		})) yield page.map((v) => this._transformRow(v));
+		})) yield await Promise.all(page.map((v) => this._transformRow(v)));
 	}
 	_buildAliasInfo() {
 		const map = /* @__PURE__ */ new Map();
@@ -4369,4 +4502,4 @@ function serializeFetchXml(ast) {
 }
 
 //#endregion
-export { Above, AboveOrEqual, Aggregation, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, primaryKey, requiredOf, rxGUID, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };

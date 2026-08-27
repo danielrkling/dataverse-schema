@@ -2198,8 +2198,8 @@
         // $select keeps all columns in the response.
         { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
       );
-      const guid = this.getPrimaryId(record);
       const transformed = this.transformValueFromDataverse(record);
+      const guid = this.getPrimaryId(transformed);
       const ctx = { table: this, client: this.client, recordId: guid };
       await this._afterSave(ctx, value);
       return transformed;
@@ -2264,15 +2264,20 @@
      */
     async upsertRecord(id, value, options) {
       const ctx = { table: this, client: this.client, recordId: id };
+      if (!id) {
+        return this.createRecord(value, options);
+      }
       const transformed = await this.transformValueToDataverse(value, ctx);
-      const result = await this.client.patchRecord(
+      const record = await this.client.patchRecord(
         this.entitySetName,
-        id ?? "",
+        id,
         transformed,
         { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
       );
+      const result = this.transformValueFromDataverse(record);
+      ctx.recordId = this.getPrimaryId(result);
       await this._afterSave(ctx, value);
-      return this.transformValueFromDataverse(result);
+      return result;
     }
     /**
      * Deletes a record by its primary key. Supports optimistic concurrency via the
@@ -3289,7 +3294,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-26T14:52:05.461Z"}
+      meta.textContent = `build ${"2026-08-26T15:33:41.643Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3378,7 +3383,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-26T14:52:05.461Z",
+          build: "2026-08-26T15:33:41.643Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3397,7 +3402,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-26T14:52:05.461Z"}\``,
+        `Build: \`${"2026-08-26T15:33:41.643Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -10848,27 +10853,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.db = void 0;
     }
     /**
-     * Writes a server-returned record into the offline cache store backing a
-     * collection. Mirrors {@link queueMutations} (which persists the optimistic
-     * value into the same `entitySetName` store), so a reload restores the
-     * authoritative row — including the fresh `$etag` and any server-computed
-     * fields — rather than the stale optimistic snapshot.
+     * Flushes the mutation queue to Dataverse. After a successful flush the
+     * authoritative server records (carrying fresh etags) are broadcast via the
+     * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
+     * and IDB cache store — see {@link createCollectionOptions}'s
+     * handleTabMessage.
      */
-    async writeCacheRecord(db, entitySetName, record) {
-      if (!record) return;
-      const tx = db.transaction(entitySetName, "readwrite");
-      await tx.store.put(record);
-      await tx.done;
-    }
-    /** Removes a record from the offline cache store (used after a delete). */
-    async deleteCacheRecord(db, entitySetName, key) {
-      const tx = db.transaction(entitySetName, "readwrite");
-      await tx.store.delete(key);
-      await tx.done;
-    }
     async flushQueue() {
       await navigator.locks.request(this.name, async () => {
         const db = await this.getDB();
+        const flushed = [];
         while (true) {
           const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
           const index = tx.store.index("by_timestamp");
@@ -10893,7 +10887,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           try {
             if (mutation.type === "insert") {
               const record = await table.createRecord(mutation.value);
-              await this.writeCacheRecord(db, mutation.entitySetName, record);
+              flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record), value: record, entitySetName: mutation.entitySetName });
             } else if (mutation.type === "update") {
               const record = await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
               const etag = getEtag(record);
@@ -10902,11 +10896,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                 mutation.ifMatch = etag;
                 await db.put(this.MUTATION_QUEUE_NAME, mutation);
               }
-              await this.writeCacheRecord(db, mutation.entitySetName, record);
+              flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
             } else if (mutation.type === "delete") {
               await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
               this.keyEtags.delete(mutation.key);
-              await this.deleteCacheRecord(db, mutation.entitySetName, mutation.key);
+              flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: void 0, entitySetName: mutation.entitySetName });
             }
             await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
           } catch (e) {
@@ -10936,6 +10930,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               break;
             }
           }
+        }
+        if (flushed.length > 0) {
+          this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
         }
       });
     }

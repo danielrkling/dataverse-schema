@@ -4,7 +4,7 @@ import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
   primaryKey, string, nullableString, number, choice, nullableChoice,
   datetime, date, boolean, json, formatted, file, image,
-  lookup, collection, lookupId, collectionIds,
+  lookup, collection, lookupId, collectionIds, standardSafeParse,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -62,9 +62,9 @@ test("table exposes client, entitySetName and logicalName", () => {
 
 // --- Schema & defaults ---
 
-test("table.schema composes valibot object schema from fields", () => {
+test("table.schema composes a Standard Schema object from fields", async () => {
   const schema = Account.schema
-  const result = v.safeParse(schema, {
+  const result = await standardSafeParse(schema, {
     id: "123e4567-e89b-12d3-a456-426614174000",
     name: "Acme",
     revenue: 10,
@@ -101,8 +101,8 @@ test("getDefault applies partial overrides", () => {
 
 // --- Transform from Dataverse ---
 
-test("transformValueFromDataverse maps raw record to typed record", () => {
-  const result = Account.transformValueFromDataverse({
+test("transformValueFromDataverse maps raw record to typed record", async () => {
+  const result = await Account.transformValueFromDataverse({
     accountid: "abc",
     name: "Acme",
     revenue: 500,
@@ -117,15 +117,15 @@ test("transformValueFromDataverse maps raw record to typed record", () => {
   expect(result.createdOn).toBeInstanceOf(Date)
 })
 
-test("transformValueFromDataverse copies @odata.etag", () => {
-  const result = Contact.transformValueFromDataverse({
+test("transformValueFromDataverse copies @odata.etag", async () => {
+  const result = await Contact.transformValueFromDataverse({
     contactid: "x", fullname: "A", "@odata.etag": "W/\"9\"",
   })
   expect((result as any)["$etag"]).toBe("W/\"9\"")
 })
 
-test("transformValueFromDataverse defaults fields absent from the payload", () => {
-  const result = Account.transformValueFromDataverse({
+test("transformValueFromDataverse defaults fields absent from the payload", async () => {
+  const result = await Account.transformValueFromDataverse({
     accountid: "a1", statuscode: 1,
     // name, revenue, createdon intentionally absent (e.g. partial select)
   })
@@ -134,8 +134,8 @@ test("transformValueFromDataverse defaults fields absent from the payload", () =
   expect(result.createdOn).toBeInstanceOf(Date)
 })
 
-test("transformValueFromDataverse normalizes nulls for non-nullable fields", () => {
-  const result = Account.transformValueFromDataverse({
+test("transformValueFromDataverse normalizes nulls for non-nullable fields", async () => {
+  const result = await Account.transformValueFromDataverse({
     accountid: null, name: null, revenue: null, statuscode: 1, createdon: null,
   })
   expect(result.name).toBe("")
@@ -143,8 +143,8 @@ test("transformValueFromDataverse normalizes nulls for non-nullable fields", () 
   expect(result.createdOn).toBeInstanceOf(Date)
 })
 
-test("transformValueFromDataverse transforms expanded navigation records", () => {
-  const result = Account.transformValueFromDataverse({
+test("transformValueFromDataverse transforms expanded navigation records", async () => {
+  const result = await Account.transformValueFromDataverse({
     accountid: "a1", name: "Acme", revenue: 0, statuscode: 1, createdon: new Date(),
     primarycontactid: { contactid: "c1", fullname: "Neo" },
     account_contacts: [{ contactid: "c2", fullname: "Trin" }],
@@ -153,8 +153,8 @@ test("transformValueFromDataverse transforms expanded navigation records", () =>
   expect(result.contacts).toEqual([{ id: "c2", name: "Trin" }])
 })
 
-test("transformValueFromDataverse returns null lookup for missing expansion", () => {
-  const result = Account.transformValueFromDataverse({
+test("transformValueFromDataverse returns null lookup for missing expansion", async () => {
+  const result = await Account.transformValueFromDataverse({
     accountid: "a1", name: "A", revenue: 0, statuscode: 1, createdon: new Date(),
   })
   expect(result.primaryContact).toBeNull()
@@ -262,18 +262,18 @@ test("collectionIds property builds a pk-only projection of the related table", 
   expect(Object.keys(t.fields)).toEqual(["id"])
 })
 
-test("collectionIds transformValueFromDataverse maps records to ids", () => {
+test("collectionIds transformValueFromDataverse maps records to ids", async () => {
   const prop = Account.fields.contactIds
   expect(prop.fromDataverseName).toBe("account_contacts_ids")
-  const result = (prop as any).transformValueFromDataverse([
+  const result = await (prop as any).transformValueFromDataverse([
     { contactid: "g1" }, { contactid: "g2" },
   ])
   expect(result).toEqual(["g1", "g2"])
 })
 
-test("collectionIds transformValueFromDataverse handles null", () => {
+test("collectionIds transformValueFromDataverse handles null", async () => {
   const prop = Account.fields.contactIds
-  expect((prop as any).transformValueFromDataverse(null)).toEqual([])
+  expect(await (prop as any).transformValueFromDataverse(null)).toEqual([])
 })
 
 // --- Intersect table ---
@@ -294,7 +294,7 @@ test("json field round-trips through table transform", async () => {
     client, entitySetName: "places", logicalName: "place",
     fields: { id: primaryKey("placeid"), address: json("address_data", { schema: Address }) },
   })
-  const from = T.transformValueFromDataverse({ placeid: "p1", address_data: "{\"street\":\"Main\"}" })
+  const from = await T.transformValueFromDataverse({ placeid: "p1", address_data: "{\"street\":\"Main\"}" })
   expect(from.address).toEqual({ street: "Main" })
   const to = await T.transformValueToDataverse({ address: { street: "Oak" } })
   expect(to).toEqual({ address_data: "{\"street\":\"Oak\"}" })

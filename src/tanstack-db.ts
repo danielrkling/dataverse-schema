@@ -453,28 +453,12 @@ export class DataverseSyncDB {
     }
 
     /**
-     * Writes a server-returned record into the offline cache store backing a
-     * collection. Mirrors {@link queueMutations} (which persists the optimistic
-     * value into the same `entitySetName` store), so a reload restores the
-     * authoritative row — including the fresh `$etag` and any server-computed
-     * fields — rather than the stale optimistic snapshot.
+     * Flushes the mutation queue to Dataverse. After a successful flush the
+     * authoritative server records (carrying fresh etags) are broadcast via the
+     * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
+     * and IDB cache store — see {@link createCollectionOptions}'s
+     * handleTabMessage.
      */
-    private async writeCacheRecord(db: IDBPDatabase, entitySetName: string, record: any): Promise<void> {
-        if (!record) return;
-        const tx = db.transaction(entitySetName, "readwrite");
-        await tx.store.put(record);
-        await tx.done;
-    }
-
-    /** Removes a record from the offline cache store (used after a delete). */
-    private async deleteCacheRecord(db: IDBPDatabase, entitySetName: string, key: any): Promise<void> {
-        const tx = db.transaction(entitySetName, "readwrite");
-        await tx.store.delete(key);
-        await tx.done;
-    }
-
-
-
     private async flushQueue() {
         // The Web Lock is keyed by the database name (this.name). Cross-tab
         // serialization of flushQueue relies on this name being unique per
@@ -482,6 +466,12 @@ export class DataverseSyncDB {
         // (and the BroadcastChannel), which is what enables multi-tab safety.
         await navigator.locks.request(this.name, async () => {
             const db = await this.getDB();
+
+            // Records successfully written during this flush, carrying the
+            // server-returned (authoritative) etag. Broadcast after the loop so
+            // every collection — including this tab's — reconciles its
+            // in-memory row and IDB cache without waiting for a server re-pull.
+            const flushed: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
 
             while (true) {
                 const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
@@ -517,10 +507,7 @@ export class DataverseSyncDB {
                 try {
                     if (mutation.type === "insert") {
                         const record = await table.createRecord(mutation.value);
-                        // Persist the server-returned record (with fresh etag
-                        // and any server-computed fields) into the IDB cache so
-                        // a reload restores the authoritative row.
-                        await this.writeCacheRecord(db, mutation.entitySetName, record);
+                        flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record)!, value: record, entitySetName: mutation.entitySetName });
                     } else if (mutation.type === "update") {
                         const record = await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
                         const etag = getEtag(record);
@@ -532,13 +519,12 @@ export class DataverseSyncDB {
                             mutation.ifMatch = etag;
                             await db.put(this.MUTATION_QUEUE_NAME, mutation);
                         }
-                        await this.writeCacheRecord(db, mutation.entitySetName, record);
+                        flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
                     } else if (mutation.type === "delete") {
                         await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
-                        // The record is gone — drop any cached etag for it and
-                        // remove it from the IDB cache.
+                        // The record is gone — drop any cached etag for it.
                         this.keyEtags.delete(mutation.key);
-                        await this.deleteCacheRecord(db, mutation.entitySetName, mutation.key);
+                        flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: undefined, entitySetName: mutation.entitySetName });
                     }
 
                     await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
@@ -574,6 +560,14 @@ export class DataverseSyncDB {
 
 
                 }
+            }
+
+            // Reconcile collections + IDB cache with the authoritative records.
+            // handleTabMessage writes each into the collection and the
+            // collectionId cache store (and ignores rows for other entity sets),
+            // so a single broadcast updates both memory and disk in every tab.
+            if (flushed.length > 0) {
+                this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
             }
         })
     }

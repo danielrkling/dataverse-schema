@@ -1,16 +1,15 @@
-import * as v from "valibot"
 import { DataverseClient } from "./client";
 import { DataverseTable } from "./table";
 import { GenericProperties, GetTable, GUID, Infer } from "./types";
 import { parseDateOnly, toDateOnly } from "./util";
-
-export type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>
-
-const DATE_SCHEMA = v.date();
-const NON_EMPTY_STRING_SCHEMA = v.pipe(v.string(), v.minLength(1));
+import {
+  arrayOf, BOOLEAN_SCHEMA, BLOB_SCHEMA, checkSchema, composeRecordSchema, DATE_SCHEMA,
+  GUID_SCHEMA, lazyOf, nullableOf, NUMBER_SCHEMA, optionalOf, requiredOf,
+  standardParse, STRING_SCHEMA, ValidationSchema,
+} from "./schema";
 
 function isValidDate(value: Date): boolean {
-  return v.safeParse(DATE_SCHEMA, value).success;
+  return value instanceof Date && !isNaN(value.getTime());
 }
 
 function parseValidDateOnly(value: unknown): Date {
@@ -27,6 +26,12 @@ function parseValidDateOnly(value: unknown): Date {
 export type FieldOptions<T> = {
   default?: T
   readonly?: boolean
+  /**
+   * Rejects `null`, `undefined`, and empty/whitespace-only strings at
+   * validation time. Most useful on nullable fields, whose schemas otherwise
+   * accept `null`.
+   */
+  required?: boolean
   schema?: ValidationSchema<T>
 }
 
@@ -57,6 +62,9 @@ export type TransformContext = {
  *
  * Fields created with `readonly: true` are never included in request bodies,
  * `updatePropertyValue`, or `deletePropertyValue`.
+ * Fields created with `required: true` reject `null`, `undefined`, and
+ * empty/whitespace-only strings when validated (e.g. through `table.schema`) —
+ * handy for nullable fields.
  */
 export abstract class FieldBase<T> {
   /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
@@ -79,7 +87,8 @@ export abstract class FieldBase<T> {
     this.toDataverseName = this.logicalName
     this.#default = options?.default ?? defaults.defaultValue
     this.#readOnly = options?.readonly ?? false
-    this.schema = options?.schema ?? defaults.schema
+    const base = options?.schema ?? defaults.schema
+    this.schema = options?.required ? requiredOf(base) : base
   }
 
   getDefault(): T {
@@ -90,7 +99,7 @@ export abstract class FieldBase<T> {
     return this.#readOnly
   }
 
-  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T {
+  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T> {
     return value as T
   }
 
@@ -101,19 +110,11 @@ export abstract class FieldBase<T> {
   afterSave?(ctx: TransformContext, value: any): Promise<void>
 }
 
-function buildObjectSchema(fields: Record<string, FieldBase<any>>): v.BaseSchema<any, any, any> {
-  const shape: Record<string, v.BaseSchema<any, any, any>> = {}
-  for (const [key, field] of Object.entries(fields)) {
-    shape[key] = field.schema
-  }
-  return v.object(shape)
-}
-
 export class BooleanField extends FieldBase<boolean> {
   kind = "value" as const;
   type = "boolean" as const;
   constructor(name: string, options?: FieldOptions<boolean>) {
-    super(name, { defaultValue: false, schema: v.boolean() as ValidationSchema<boolean> }, options);
+    super(name, { defaultValue: false, schema: BOOLEAN_SCHEMA }, options);
   }
 
   transformValueFromDataverse(value: any): boolean {
@@ -128,7 +129,7 @@ export class NullableBooleanField extends FieldBase<boolean | null> {
   constructor(name: string, options?: FieldOptions<boolean | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.boolean()) as ValidationSchema<boolean | null>,
+      schema: nullableOf(BOOLEAN_SCHEMA),
     }, options);
   }
 
@@ -142,7 +143,7 @@ export class NumberField extends FieldBase<number> {
   kind = "value" as const;
   type = "number" as const;
   constructor(name: string, options?: FieldOptions<number>) {
-    super(name, { defaultValue: 0, schema: v.number() as ValidationSchema<number> }, options);
+    super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
   }
 
   transformValueFromDataverse(value: any): number {
@@ -158,7 +159,7 @@ export class NullableNumberField extends FieldBase<number | null> {
   kind = "value" as const;
   type = "number" as const;
   constructor(name: string, options?: FieldOptions<number | null>) {
-    super(name, { defaultValue: null, schema: v.nullable(v.number()) as ValidationSchema<number | null> }, options);
+    super(name, { defaultValue: null, schema: nullableOf(NUMBER_SCHEMA) }, options);
   }
 
   transformValueFromDataverse(value: any): number | null {
@@ -174,7 +175,7 @@ export class StringField extends FieldBase<string> {
   kind = "value" as const;
   type = "string" as const;
   constructor(name: string, options?: FieldOptions<string>) {
-    super(name, { defaultValue: "", schema: v.string() as ValidationSchema<string> }, options);
+    super(name, { defaultValue: "", schema: STRING_SCHEMA }, options);
   }
 
   transformValueFromDataverse(value: any): string {
@@ -186,7 +187,7 @@ export class NullableStringField extends FieldBase<string | null> {
   kind = "value" as const;
   type = "string" as const;
   constructor(name: string, options?: FieldOptions<string | null>) {
-    super(name, { defaultValue: null, schema: v.nullable(v.string()) as ValidationSchema<string | null> }, options);
+    super(name, { defaultValue: null, schema: nullableOf(STRING_SCHEMA) }, options);
   }
 
   transformValueFromDataverse(value: any): string | null {
@@ -200,7 +201,7 @@ export class PrimaryKeyField extends FieldBase<GUID> {
   constructor(name: string, options?: FieldOptions<GUID>) {
     super(name, {
       defaultValue: "" as GUID,
-      schema: v.pipe(v.string(), v.uuid()) as unknown as ValidationSchema<GUID>,
+      schema: GUID_SCHEMA,
     }, options);
   }
 
@@ -217,7 +218,7 @@ export class ListField<T extends string | number> extends FieldBase<T | null> {
     const values = Object.freeze([...list]) as readonly T[];
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.custom<T>((value) => values.includes(value as T), `Value not in [${values}]`)) as ValidationSchema<T | null>,
+      schema: nullableOf(checkSchema<T>((value) => values.includes(value as T), `Value not in [${values}]`)),
     }, options);
     this.list = values;
   }
@@ -247,7 +248,7 @@ export class MultiChoiceField extends FieldBase<number[]> {
     if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
     super(name, {
       defaultValue: [] as number[],
-      schema: v.array(v.custom<number>((value) => values.includes(value as number), `Value not in [${values}]`)) as unknown as ValidationSchema<number[]>,
+      schema: arrayOf(checkSchema<number>((value) => values.includes(value as number), `Value not in [${values}]`)),
     }, options);
     this.choices = Object.freeze(values) as readonly number[];
   }
@@ -285,7 +286,10 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
     const values = Object.values(choices) as [string, ...string[]];
     super(name, {
       defaultValue: choices[Number(firstKey) as keyof T],
-      schema: v.picklist(values) as unknown as ValidationSchema<T[keyof T]>,
+      schema: checkSchema<T[keyof T]>(
+        (value) => (values as readonly unknown[]).includes(value),
+        `Value not in [${values}]`,
+      ),
     }, options);
     this.#choices = choices;
     this.choices = Object.freeze([...values]) as readonly T[keyof T][];
@@ -316,7 +320,10 @@ export class NullableChoiceField<T extends Record<number, string>> extends Field
     const values = Object.values(choices) as [string, ...string[]];
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.picklist(values)) as unknown as ValidationSchema<T[keyof T] | null>,
+      schema: nullableOf(checkSchema<T[keyof T]>(
+        (value) => (values as readonly unknown[]).includes(value),
+        `Value not in [${values}]`,
+      )),
     }, options);
     this.#choices = choices;
     this.choices = Object.freeze([...values]) as readonly T[keyof T][];
@@ -344,7 +351,7 @@ export class DateTimeField extends FieldBase<Date> {
   constructor(name: string, options?: FieldOptions<Date>) {
     super(name, {
       defaultValue: new Date(),
-      schema: v.instance(Date) as ValidationSchema<Date>,
+      schema: DATE_SCHEMA,
     }, options);
   }
   getDefault(): Date {
@@ -364,7 +371,7 @@ export class NullableDateTimeField extends FieldBase<Date | null> {
   constructor(name: string, options?: FieldOptions<Date | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.instance(Date)) as ValidationSchema<Date | null>,
+      schema: nullableOf(DATE_SCHEMA),
     }, options);
   }
   transformValueFromDataverse(value: any): Date | null {
@@ -382,7 +389,7 @@ export class DateField extends FieldBase<Date> {
   constructor(name: string, options?: FieldOptions<Date>) {
     super(name, {
       defaultValue: parseDateOnly(new Date().toISOString()),
-      schema: v.instance(Date) as ValidationSchema<Date>,
+      schema: DATE_SCHEMA,
     }, options);
   }
   getDefault(): Date {
@@ -404,7 +411,7 @@ export class NullableDateField extends FieldBase<Date | null> {
   constructor(name: string, options?: FieldOptions<Date | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.instance(Date)) as ValidationSchema<Date | null>,
+      schema: nullableOf(DATE_SCHEMA),
     }, options);
   }
   transformValueFromDataverse(value: any): Date | null {
@@ -429,7 +436,7 @@ export class FormattedField extends FieldBase<string | null> {
   constructor(name: string, options?: FieldOptions<string | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.string()) as ValidationSchema<string | null>,
+      schema: nullableOf(STRING_SCHEMA),
     }, { ...options, readonly: true });
     this.fromDataverseName = `${name}@OData.Community.Display.V1.FormattedValue`;
   }
@@ -450,11 +457,11 @@ export class ImageField extends FieldBase<ImageRef | null> {
   constructor(name: string, options?: FieldOptions<ImageRef | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.object({
-        url: v.optional(v.string()),
-        fullSizeUrl: v.optional(v.string()),
-        data: v.optional(v.nullable(v.instance(Blob))),
-      })) as ValidationSchema<ImageRef | null>,
+      schema: nullableOf(composeRecordSchema({
+        url: optionalOf(STRING_SCHEMA),
+        fullSizeUrl: optionalOf(STRING_SCHEMA),
+        data: optionalOf(nullableOf(BLOB_SCHEMA)),
+      })),
     }, options);
   }
 
@@ -523,11 +530,11 @@ export class FileField extends FieldBase<FileRef | null> {
   constructor(name: string, options?: FieldOptions<FileRef | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.object({
-        name: v.optional(v.string()),
-        url: v.optional(v.string()),
-        data: v.optional(v.nullable(v.instance(Blob))),
-      })) as ValidationSchema<FileRef | null>,
+      schema: nullableOf(composeRecordSchema({
+        name: optionalOf(STRING_SCHEMA),
+        url: optionalOf(STRING_SCHEMA),
+        data: optionalOf(nullableOf(BLOB_SCHEMA)),
+      })),
     }, options);
     this.fromDataverseName = `${name}_name`;
   }
@@ -566,10 +573,10 @@ export class JsonField<T> extends FieldBase<T> {
     super(name, { defaultValue: undefined as T, schema: options.schema }, options);
   }
 
-  transformValueFromDataverse(value: any): T {
+  async transformValueFromDataverse(value: any): Promise<T> {
     if (value == null) return this.getDefault();
     const raw = typeof value === "string" ? JSON.parse(value) : value;
-    return v.parse(this.schema, raw);
+    return standardParse(this.schema, raw);
   }
 
   transformValueToDataverse(value: any): string | null {
@@ -825,10 +832,10 @@ export function file(name: string, options?: FieldOptions<FileRef | null>) {
 
 /**
  * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
- * in Dataverse and parses/validates it using the provided valibot schema.
+ * in Dataverse and parses/validates it using the provided Standard Schema.
  *
  * @param name The Dataverse logical name of the column.
- * @param options Field options; `schema` (a valibot schema validating the parsed
+ * @param options Field options; `schema` (a Standard Schema validating the parsed
  * JSON structure) is required, plus the standard default/readonly options.
  *
  * @example
@@ -850,7 +857,7 @@ export class LookupIdProperty extends FieldBase<GUID | null> {
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID | null>,
+      schema: nullableOf(GUID_SCHEMA),
     }, options);
     this.#getTable = getTable;
     this.fromDataverseName = `_${this.logicalName}_value`
@@ -887,7 +894,7 @@ export class CollectionProperty<
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>) {
     super(name, {
       defaultValue: [],
-      schema: v.array(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
+      schema: arrayOf(lazyOf(() => composeRecordSchema(getTable().fields as unknown as Record<string, ValidationSchema<any>>))),
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
     // Navigation properties are referenced by their schema name for $expand/association.
@@ -899,10 +906,10 @@ export class CollectionProperty<
     return (this.#table ??= this.#getTable()) as unknown as DataverseTable<TProperties>;
   }
 
-  transformValueFromDataverse(value: any): Infer<TProperties>[] {
-    return Array.from(value ?? []).map((v: any) =>
+  async transformValueFromDataverse(value: any): Promise<Infer<TProperties>[]> {
+    return Promise.all(Array.from(value ?? []).map((v: any) =>
       this.table.transformValueFromDataverse(v),
-    );
+    ));
   }
 
   transformValueToDataverse(): typeof SKIP {
@@ -968,7 +975,7 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>) {
     super(name, {
       defaultValue: [],
-      schema: v.array(NON_EMPTY_STRING_SCHEMA) as ValidationSchema<GUID[]>,
+      schema: arrayOf(GUID_SCHEMA),
     }, options);
     this.#getTable = getTable;
     // Navigation properties are referenced by their schema name for $expand/association.
@@ -1072,7 +1079,7 @@ export class LookupProperty<
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>) {
     super(name, {
       defaultValue: null,
-      schema: v.nullable(v.lazy(() => buildObjectSchema(getTable().fields))) as any,
+      schema: nullableOf(lazyOf(() => composeRecordSchema(getTable().fields as unknown as Record<string, ValidationSchema<any>>))),
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
     // Navigation properties are referenced by their schema name for $expand/association.
@@ -1084,7 +1091,7 @@ export class LookupProperty<
     return (this.#table ??= this.#getTable()) as unknown as DataverseTable<TProperties>;
   }
 
-  transformValueFromDataverse(value: any): Infer<TProperties> | null {
+  async transformValueFromDataverse(value: any): Promise<Infer<TProperties> | null> {
     return value == null ? null : this.table.transformValueFromDataverse(value);
   }
 

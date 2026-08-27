@@ -1,4 +1,4 @@
-import * as v from "valibot";
+import { StandardSchemaV1 } from "@standard-schema/spec";
 //#region src/query/path.d.ts
 type QueryProperty = FieldBase<any> | LookupProperty<any> | CollectionProperty<any>;
 type FieldPath = readonly QueryProperty[];
@@ -11,7 +11,7 @@ declare class FieldRef<T = any, K extends string = string, F extends FieldBase<T
   constructor(field: F | string, path?: string, pathSegments?: readonly QueryProperty[]);
   static fromPath<T, F extends FieldBase<T>>(field: F, path: string, pathSegments?: readonly QueryProperty[]): FieldRef<T, string, F>;
   get dataverseName(): string;
-  transformFromDataverse(value: unknown, ctx?: TransformContext): T;
+  transformFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T>;
   transformToDataverse(value: T, ctx?: TransformContext): unknown;
   toString(): string;
 }
@@ -405,6 +405,82 @@ type ODataTableQueryOptions<T extends GenericProperties = GenericProperties> = {
 };
 declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions<T>): ODataSelectAst;
 //#endregion
+//#region src/schema.d.ts
+/**
+ * A schema compatible with the Standard Schema V1 spec. Accepts any Standard
+ * Schema implementation (valibot, Zod, ArkType, etc.), so field/table `schema`
+ * options can be authored with whichever schema library the project uses.
+ */
+type ValidationSchema<T> = StandardSchemaV1<T, T>;
+/** Shorthand for the spec's issue shape. */
+type Issue = StandardSchemaV1.Issue;
+/**
+ * Builds a schema from a synchronous predicate — the basic building block for
+ * the library's built-in field schemas (string, number, choice membership...).
+ */
+declare function checkSchema<T>(check: (value: unknown) => boolean, message: string): ValidationSchema<T>;
+declare const STRING_SCHEMA: ValidationSchema<string>;
+declare const NUMBER_SCHEMA: ValidationSchema<number>;
+declare const BOOLEAN_SCHEMA: ValidationSchema<boolean>;
+declare const DATE_SCHEMA: ValidationSchema<Date>;
+declare const BLOB_SCHEMA: ValidationSchema<Blob>;
+declare const GUID_SCHEMA: ValidationSchema<`${string}-${string}-${string}-${string}-${string}`>;
+/**
+ * Validates a value against a Standard Schema, throwing on failure. Works with
+ * any Standard Schema V1 implementation (not just valibot). Prefer this over
+ * `v.parse` for anything touching a `ValidationSchema`, since those may come
+ * from a non-valibot library.
+ */
+declare function standardParse<T>(schema: ValidationSchema<T>, value: unknown): Promise<T>;
+/**
+ * Result of {@link standardSafeParse}. On failure the Standard Schema issues
+ * are carried verbatim (including paths).
+ */
+type StandardParseResult<T> = {
+  success: true;
+  value: T;
+} | {
+  success: false;
+  issues: ReadonlyArray<Issue>;
+};
+/**
+ * Validates a value against a Standard Schema without throwing. Works with any
+ * Standard Schema V1 implementation, including async ones.
+ */
+declare function standardSafeParse<T>(schema: ValidationSchema<T>, value: unknown): Promise<StandardParseResult<T>>;
+/**
+ * Composes a whole-record schema from an object of named child schemas
+ * (e.g. a table's fields). Each child validates its entry independently and
+ * any issues are tagged with the child's path — regardless of which schema
+ * library produced each child. Async child schemas are supported.
+ */
+declare function composeRecordSchema(children: Record<string, ValidationSchema<any>>): ValidationSchema<any>;
+/**
+ * Wraps a schema so it validates arrays of that schema, tagging element issues
+ * with their index (e.g. `"0: message"`). Used by collection properties. Async
+ * element schemas are supported.
+ */
+declare function arrayOf<T>(child: ValidationSchema<T>): ValidationSchema<T[]>;
+/**
+ * Defers resolution of a schema until first validation. Used by navigation
+ * properties whose related table may not exist yet (circular references).
+ */
+declare function lazyOf<T>(getChild: () => ValidationSchema<T>): ValidationSchema<T>;
+/**
+ * Wraps a schema so it also accepts `null`. Used by lookup and nullable fields.
+ */
+declare function nullableOf<T>(child: ValidationSchema<T>): ValidationSchema<T | null>;
+/**
+ * Wraps a schema so it also accepts `undefined`, folding it to `null`.
+ */
+declare function optionalOf<T>(child: ValidationSchema<T>): ValidationSchema<T | null>;
+/**
+ * Wraps a schema so `null`, `undefined`, and empty/whitespace-only strings are
+ * rejected. Used to implement the `required` field option (e.g. making a
+ * nullable field reject empty values).
+ */
+declare function requiredOf<T>(child: ValidationSchema<T>, message?: string): ValidationSchema<T>;
+//#endregion
 //#region src/table.d.ts
 type TableRequestOptions = {
   pageSize?: number;
@@ -468,7 +544,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
   kind: "table";
   type: "table";
   /**
-   * Whole-record valibot schema for this table — either the explicit
+   * Whole-record schema for this table — either the explicit
    * `schema` option or one composed from the individual field schemas.
    */
   schema: ValidationSchema<Infer<TProperties>>;
@@ -746,7 +822,7 @@ declare class DataverseTable<TProperties extends GenericProperties> {
    * const pk = Account.getPrimaryId(account); // GUID | undefined
    */
   getPrimaryId(value: Partial<Infer<TProperties>>): GUID | undefined;
-  transformValueFromDataverse(value: any): Infer<TProperties>;
+  transformValueFromDataverse(value: any): Promise<Infer<TProperties>>;
   transformValueToDataverse(value: Partial<Infer<TProperties>>, ctx?: TransformContext): Promise<DataverseRecord>;
   /**
    * Creates a new `Table` with only the specified properties. Useful for
@@ -816,10 +892,15 @@ declare class DataverseIntersectTable<T1 extends GenericProperties, T2 extends G
 }
 //#endregion
 //#region src/fields.d.ts
-type ValidationSchema<T> = v.BaseSchema<T, T, v.BaseIssue<unknown>>;
 type FieldOptions<T> = {
   default?: T;
   readonly?: boolean;
+  /**
+   * Rejects `null`, `undefined`, and empty/whitespace-only strings at
+   * validation time. Most useful on nullable fields, whose schemas otherwise
+   * accept `null`.
+   */
+  required?: boolean;
   schema?: ValidationSchema<T>;
 };
 declare const SKIP: unique symbol;
@@ -847,6 +928,9 @@ type TransformContext = {
  *
  * Fields created with `readonly: true` are never included in request bodies,
  * `updatePropertyValue`, or `deletePropertyValue`.
+ * Fields created with `required: true` reject `null`, `undefined`, and
+ * empty/whitespace-only strings when validated (e.g. through `table.schema`) —
+ * handy for nullable fields.
  */
 declare abstract class FieldBase<T> {
   #private;
@@ -865,7 +949,7 @@ declare abstract class FieldBase<T> {
   }, options?: FieldOptions<T>);
   getDefault(): T;
   getReadOnly(): boolean;
-  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T;
+  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T>;
   transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown;
   afterSave?(ctx: TransformContext, value: any): Promise<void>;
 }
@@ -1048,7 +1132,7 @@ declare class JsonField<T> extends FieldBase<T> {
   constructor(name: string, options: FieldOptions<T> & {
     schema: ValidationSchema<T>;
   });
-  transformValueFromDataverse(value: any): T;
+  transformValueFromDataverse(value: any): Promise<T>;
   transformValueToDataverse(value: any): string | null;
 }
 /**
@@ -1244,10 +1328,10 @@ declare function image(name: string, options?: FieldOptions<ImageRef | null>): I
 declare function file(name: string, options?: FieldOptions<FileRef | null>): FileField;
 /**
  * Creates a JSON-typed Dataverse column definition. Stores JSON as a text column
- * in Dataverse and parses/validates it using the provided valibot schema.
+ * in Dataverse and parses/validates it using the provided Standard Schema.
  *
  * @param name The Dataverse logical name of the column.
- * @param options Field options; `schema` (a valibot schema validating the parsed
+ * @param options Field options; `schema` (a Standard Schema validating the parsed
  * JSON structure) is required, plus the standard default/readonly options.
  *
  * @example
@@ -1276,7 +1360,7 @@ declare class CollectionProperty<TProperties extends GenericProperties> extends 
   type: "collection";
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>);
   get table(): DataverseTable<TProperties>;
-  transformValueFromDataverse(value: any): Infer<TProperties>[];
+  transformValueFromDataverse(value: any): Promise<Infer<TProperties>[]>;
   transformValueToDataverse(): typeof SKIP;
   afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
@@ -1376,7 +1460,7 @@ declare class LookupProperty<TProperties extends GenericProperties> extends Fiel
   type: "lookup";
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>);
   get table(): DataverseTable<TProperties>;
-  transformValueFromDataverse(value: any): Infer<TProperties> | null;
+  transformValueFromDataverse(value: any): Promise<Infer<TProperties> | null>;
   transformValueToDataverse(): typeof SKIP;
   afterSave(ctx: TransformContext, value: any): Promise<void>;
 }
@@ -1485,6 +1569,7 @@ type GetTable<T = any> = () => T;
 //#endregion
 //#region src/util.d.ts
 declare const ETAG = "$etag";
+declare const rxGUID: RegExp;
 declare function isNonEmptyString(value: unknown): value is string;
 declare function wrapString(value: unknown): string;
 type ExpandValue = string | {
@@ -2355,4 +2440,4 @@ declare class EntityQueryBuilder<TProps extends GenericProperties, TResult exten
 }
 declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, SelectQuery, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, choice, collection, collectionIds, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableString, number, or, orderby, parseDateOnly, primaryKey, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, primaryKey, requiredOf, rxGUID, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };

@@ -4,7 +4,7 @@ import {
   string, nullableString, number, nullableNumber, boolean, nullableBoolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted, multiChoice,
   collection, collectionIds, lookupId, lookup, DataverseTable,
-  choice, nullableChoice, SKIP, json,
+  choice, nullableChoice, SKIP, json, standardParse, standardSafeParse,
 } from "../src"
 import { DataverseClient } from "../src/client"
 
@@ -128,18 +128,18 @@ test("nullableDate transformValueFromDataverse returns null for null", () => {
   expect(f.transformValueFromDataverse(null)).toBeNull()
 })
 
-test("list field validates against choices", () => {
+test("list field validates against choices", async () => {
   const f = list("gender", ["M", "F"] as const)
   expect(f.type).toBe("list")
   expect(f.getDefault()).toBeNull()
-  expect(v.parse(f.schema, "M")).toBe("M")
-  expect(v.parse(f.schema, "F")).toBe("F")
-  expect(() => v.parse(f.schema, "X")).toThrow()
+  expect(await standardParse(f.schema, "M")).toBe("M")
+  expect(await standardParse(f.schema, "F")).toBe("F")
+  await expect(standardParse(f.schema, "X")).rejects.toThrow()
 })
 
-test("list field issues for invalid value", () => {
+test("list field issues for invalid value", async () => {
   const f = list("gender", ["M", "F"])
-  const result = v.safeParse(f.schema, "X")
+  const result = await standardSafeParse(f.schema, "X")
   expect(result.success).toBe(false)
 })
 
@@ -165,16 +165,16 @@ test("choice transformValueToDataverse maps string to number", () => {
   expect(f.transformValueToDataverse("Archived")).toBe(3)
 })
 
-test("choice validates against option values", () => {
+test("choice validates against option values", async () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
-  expect(v.parse(f.schema, "Active")).toBe("Active")
-  expect(v.parse(f.schema, "Inactive")).toBe("Inactive")
-  expect(() => v.parse(f.schema, "Unknown" as any)).toThrow()
+  expect(await standardParse(f.schema, "Active")).toBe("Active")
+  expect(await standardParse(f.schema, "Inactive")).toBe("Inactive")
+  await expect(standardParse(f.schema, "Unknown" as any)).rejects.toThrow()
 })
 
-test("choice issues for invalid value", () => {
+test("choice issues for invalid value", async () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
-  const result = v.safeParse(f.schema, "Bogus")
+  const result = await standardSafeParse(f.schema, "Bogus")
   expect(result.success).toBe(false)
 })
 
@@ -231,10 +231,10 @@ test("file field transformValueToDataverse always skips", async () => {
   expect(await f.transformValueToDataverse({ name: "f.pdf", data: new Blob(["x"]) })).toBe(SKIP)
 })
 
-test("file field schema preserves upload data and URL", () => {
+test("file field schema preserves upload data and URL", async () => {
   const f = file("document")
   const data = new Blob(["contents"], { type: "text/plain" })
-  const result = v.parse(f.schema, { name: "report.txt", url: "/download", data })
+  const result = await standardParse(f.schema, { name: "report.txt", url: "/download", data })
   expect(result).toEqual({ name: "report.txt", url: "/download", data })
 })
 
@@ -278,57 +278,144 @@ test("field without readonly option is not read-only", () => {
   expect(f.getReadOnly()).toBe(false)
 })
 
-test("required validator via valibot schema", () => {
+test("required validator via valibot schema", async () => {
   const f = nullableString("name")
   f.schema = v.pipe(v.nullable(v.string()), v.check(v => v != null, "Required"))
-  const result = v.safeParse(f.schema, null)
+  const result = await standardSafeParse(f.schema, null)
   expect(result.success).toBe(false)
   if (!result.success) {
     expect(result.issues[0].message).toBe("Required")
   }
-  const result2 = v.safeParse(f.schema, "")
+  const result2 = await standardSafeParse(f.schema, "")
   expect(result2.success).toBe(true)
 })
 
-test("required validator passes for non-empty", () => {
+test("required validator passes for non-empty", async () => {
   const f = string("name")
   f.schema = v.pipe(v.string(), v.check(v => v.length > 0, "Required"))
-  const result = v.safeParse(f.schema, "John")
+  const result = await standardSafeParse(f.schema, "John")
   expect(result.success).toBe(true)
 })
 
-test("validate returns success for valid values via valibot", () => {
+test("validate returns success for valid values via valibot", async () => {
   const f = string("name")
-  const result = v.safeParse(f.schema, "hello")
+  const result = await standardSafeParse(f.schema, "hello")
   expect(result.success).toBe(true)
   if (result.success) {
-    expect(result.output).toBe("hello")
+    expect(result.value).toBe("hello")
   }
 })
 
-test("validate returns issues for invalid values via valibot", () => {
+test("validate returns issues for invalid values via valibot", async () => {
   const f = number("age")
-  const result = v.safeParse(f.schema, "not-a-number")
+  const result = await standardSafeParse(f.schema, "not-a-number")
   expect(result.success).toBe(false)
 })
 
-test("parse returns value for valid via valibot", () => {
+test("parse returns value for valid via valibot", async () => {
   const f = string("name")
-  expect(v.parse(f.schema, "hello")).toBe("hello")
+  expect(await standardParse(f.schema, "hello")).toBe("hello")
 })
 
-test("parse throws for invalid via valibot", () => {
+test("parse throws for invalid via valibot", async () => {
   const f = number("age")
-  expect(() => v.parse(f.schema, "bad" as any)).toThrow()
+  await expect(standardParse(f.schema, "bad" as any)).rejects.toThrow()
 })
 
 test("StandardSchemaV1 ~standard props via field schema", async () => {
   const f = string("name")
   const standard = f.schema["~standard"]
   expect(standard.version).toBe(1)
-  expect(standard.vendor).toBe("valibot")
+  expect(standard.vendor).toBe("dataverse-schema")
   const result = await standard.validate("test")
   expect("issues" in result ? result.issues : []).toHaveLength(0)
+})
+
+test("field accepts a non-valibot Standard Schema and the table composes it", async () => {
+  // A hand-rolled Standard Schema V1 (mimicking e.g. Zod/ArkType) that only
+  // accepts the literal "ok". It is NOT a valibot schema.
+  const customStandardSchema = {
+    "~standard": {
+      version: 1 as const,
+      vendor: "test-schema",
+      validate(value: unknown) {
+        return value === "ok"
+          ? { value: "ok" as const }
+          : { issues: [{ message: "must be 'ok'" }] }
+      },
+    },
+  }
+
+  const f = string("name", { schema: customStandardSchema as any })
+  expect(f.schema["~standard"].vendor).toBe("test-schema")
+
+  // The composed table schema validates through each field's own schema,
+  // including the non-valibot one — proving composing is library-agnostic.
+  const t = new DataverseTable({
+    client: testClient, entitySetName: "accounts", logicalName: "account",
+    fields: { id: primaryKey("accountid"), name: f },
+  })
+  const ok = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", name: "ok" })
+  expect(ok.success).toBe(true)
+  const bad = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", name: "nope" })
+  expect(bad.success).toBe(false)
+  if (!bad.success) expect(bad.issues[0].message).toBe("must be 'ok'")
+})
+
+test("async Standard Schemas are supported through the composed table schema", async () => {
+  const asyncSchema = {
+    "~standard": {
+      version: 1 as const,
+      vendor: "async-schema",
+      async validate(value: unknown) {
+        return typeof value === "number" && value > 0
+          ? { value: value as number }
+          : { issues: [{ message: "must be positive" }] }
+      },
+    },
+  }
+  const t = new DataverseTable({
+    client: testClient, entitySetName: "accounts", logicalName: "account",
+    fields: { id: primaryKey("accountid"), age: number("age", { schema: asyncSchema as any }) },
+  })
+  const ok = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", age: 5 })
+  expect(ok.success).toBe(true)
+  const bad = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", age: -1 })
+  expect(bad.success).toBe(false)
+  if (!bad.success) expect(bad.issues[0].message).toBe("must be positive")
+})
+
+test("required option rejects null, undefined, and empty strings", async () => {
+  const f = nullableString("name", { required: true })
+  const missing = await standardSafeParse(f.schema, null)
+  expect(missing.success).toBe(false)
+  if (!missing.success) expect(missing.issues[0].message).toBe("Value is required")
+  const undef = await standardSafeParse(f.schema, undefined)
+  expect(undef.success).toBe(false)
+  expect(await standardSafeParse(f.schema, "")).toEqual({ success: false, issues: [{ message: "Value is required" }] })
+  expect(await standardSafeParse(f.schema, "   ")).toEqual({ success: false, issues: [{ message: "Value is required" }] })
+  expect(await standardSafeParse(f.schema, "Jane")).toEqual({ success: true, value: "Jane" })
+})
+
+test("required option composes into the table schema", async () => {
+  const t = new DataverseTable({
+    client: testClient, entitySetName: "accounts", logicalName: "account",
+    fields: { id: primaryKey("accountid"), name: nullableString("name", { required: true }) },
+  })
+  const bad = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", name: null })
+  expect(bad.success).toBe(false)
+  if (!bad.success) {
+    expect(bad.issues[0].message).toBe("Value is required")
+    expect(bad.issues[0].path?.map((seg) => typeof seg === "object" ? seg.key : seg)).toContain("name")
+  }
+  const good = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", name: "Acme" })
+  expect(good.success).toBe(true)
+})
+
+test("required option does not change the field default or transforms", () => {
+  const f = nullableString("name", { required: true })
+  expect(f.getDefault()).toBeNull()
+  expect(f.transformValueFromDataverse(null)).toBeNull()
 })
 
 test("string transformValueToDataverse passes through", () => {
@@ -382,22 +469,22 @@ test("collection has type collection", () => {
   expect(f.kind).toBe("navigation")
 })
 
-test("validation works with valibot pipe", () => {
+test("validation works with valibot pipe", async () => {
   const f = nullableString("name")
   f.schema = v.pipe(
     v.nullable(v.string()),
     v.check(v => v != null, "Required"),
     v.check(v => v == null || v.length >= 2, "Too short"),
   )
-  const result1 = v.safeParse(f.schema, null)
+  const result1 = await standardSafeParse(f.schema, null)
   expect(result1.success).toBe(false)
   if (!result1.success) expect(result1.issues[0].message).toBe("Required")
 
-  const result2 = v.safeParse(f.schema, "A")
+  const result2 = await standardSafeParse(f.schema, "A")
   expect(result2.success).toBe(false)
   if (!result2.success) expect(result2.issues[0].message).toBe("Too short")
 
-  const result3 = v.safeParse(f.schema, "Alice")
+  const result3 = await standardSafeParse(f.schema, "Alice")
   expect(result3.success).toBe(true)
 })
 
@@ -431,15 +518,15 @@ test("multiChoice accepts Record value-to-label definitions", () => {
   expect(f.choices).toEqual([1, 2])
 })
 
-test("multiChoice schema validates parsed arrays", () => {
+test("multiChoice schema validates parsed arrays", async () => {
   const f = multiChoice("nnsyc200_months", [1, 2, 3])
-  expect(v.parse(f.schema, [1, 2])).toEqual([1, 2])
-  expect(() => v.parse(f.schema, ["nope"] as any)).toThrow()
+  expect(await standardParse(f.schema, [1, 2])).toEqual([1, 2])
+  await expect(standardParse(f.schema, ["nope"] as any)).rejects.toThrow()
 })
 
-test("multiChoice schema rejects values outside the choice set", () => {
+test("multiChoice schema rejects values outside the choice set", async () => {
   const f = multiChoice("nnsyc200_months", [1, 2, 3])
-  const result = v.safeParse(f.schema, [1, 9])
+  const result = await standardSafeParse(f.schema, [1, 9])
   expect(result.success).toBe(false)
 })
 
@@ -501,11 +588,11 @@ test("nullableDate transformValueToDataverse throws for non-date values", () => 
 
 // --- JsonField options form ---
 
-test("json accepts schema via options and validates parsed values", () => {
+test("json accepts schema via options and validates parsed values", async () => {
   const Address = v.object({ street: v.string(), city: v.string() })
   const f = json("address_data", { schema: Address })
-  expect(f.transformValueFromDataverse('{"street":"Main","city":"Springfield"}')).toEqual({ street: "Main", city: "Springfield" })
-  expect(f.transformValueFromDataverse(null)).toBeUndefined()
+  expect(await f.transformValueFromDataverse('{"street":"Main","city":"Springfield"}')).toEqual({ street: "Main", city: "Springfield" })
+  expect(await f.transformValueFromDataverse(null)).toBeUndefined()
 })
 
 test("json supports default and readonly options", async () => {

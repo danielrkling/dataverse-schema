@@ -1,5 +1,6 @@
 export * from "./client";
 export * from './functions';
+export * from './schema';
 export * from './fields';
 export * from './query/filter/expr';
 export * from './table';

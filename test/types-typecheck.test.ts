@@ -87,7 +87,7 @@ test("json infers the schema output type", () => {
   const Address = v.object({ street: v.string(), zip: v.number() })
   const f = json("address_data", { schema: Address })
   expectTypeOf(f.transformValueToDataverse({ street: "Main", zip: 12345 })).toEqualTypeOf<string | null>()
-  type T = ReturnType<typeof f.transformValueFromDataverse>
+  type T = Awaited<ReturnType<typeof f.transformValueFromDataverse>>
   expectTypeOf<T["street"]>().toBeString()
   expectTypeOf<T["zip"]>().toBeNumber()
 })

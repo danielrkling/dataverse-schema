@@ -578,7 +578,7 @@ export class FetchXmlAggregateQuery<
         if (options?.options) this._options = options.options;
     }
 
-    private _transformRow(v: any): TResult {
+    private async _transformRow(v: any): Promise<TResult> {
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
             const result: Record<string | symbol, any> = {};
@@ -586,7 +586,7 @@ export class FetchXmlAggregateQuery<
             const ctx = { table: this._table, client: this._table.client, recordId };
             for (const [alias, info] of aliasInfo) {
                 if (info.name in v) {
-                    result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+                    result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
                 } else {
                     result[alias] = info.getDefault();
                 }
@@ -594,7 +594,7 @@ export class FetchXmlAggregateQuery<
             result[ETAG] = v["@odata.etag"];
             return result as TResult;
         }
-        return this._table.transformValueFromDataverse(v) as TResult;
+        return (await this._table.transformValueFromDataverse(v)) as TResult;
     }
 
     public async execute(options?: ExecuteOptions): Promise<TResult[]> {
@@ -619,7 +619,7 @@ export class FetchXmlAggregateQuery<
             this._table.entitySetName,
             { ...options, query: this.toString() },
         )) {
-            yield page.map((v: any) => this._transformRow(v));
+            yield await Promise.all(page.map((v: any) => this._transformRow(v)));
         }
     }
 
@@ -1196,7 +1196,7 @@ export class EntityQueryBuilder<
         if (options?.options) this._options = options.options;
     }
 
-    private _transformRow(v: any): TResult {
+    private async _transformRow(v: any): Promise<TResult> {
         const aliasInfo = this._buildAliasInfo();
         if (aliasInfo.size > 0) {
             const result: Record<string | symbol, any> = {};
@@ -1204,7 +1204,7 @@ export class EntityQueryBuilder<
             const ctx = { table: this._table, client: this._table.client, recordId };
             for (const [alias, info] of aliasInfo) {
                 if (info.name in v) {
-                    result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+                    result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
                 } else {
                     result[alias] = info.getDefault();
                 }
@@ -1212,7 +1212,7 @@ export class EntityQueryBuilder<
             result[ETAG] = v["@odata.etag"];
             return result as TResult;
         }
-        return this._table.transformValueFromDataverse(v) as TResult;
+        return (await this._table.transformValueFromDataverse(v)) as TResult;
     }
 
     public async execute(options?: ExecuteOptions): Promise<TResult[]> {
@@ -1237,7 +1237,7 @@ export class EntityQueryBuilder<
             this._table.entitySetName,
             { ...options, query: this.toString() },
         )) {
-            yield page.map((v: any) => this._transformRow(v));
+            yield await Promise.all(page.map((v: any) => this._transformRow(v)));
         }
     }
 

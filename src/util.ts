@@ -6,7 +6,7 @@ export const ETAG = "$etag";
 
 // --- OData value helpers ---
 
-const rxGUID =
+export const rxGUID =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
 const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
 

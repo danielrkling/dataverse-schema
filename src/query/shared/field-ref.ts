@@ -41,7 +41,7 @@ export class FieldRef<T = any, K extends string = string, F extends FieldBase<T>
     return this._path
   }
 
-  transformFromDataverse(value: unknown, ctx?: TransformContext): T {
+  transformFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T> {
     return this.field.transformValueFromDataverse(value, ctx)
   }
 

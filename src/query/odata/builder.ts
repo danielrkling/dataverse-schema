@@ -204,10 +204,10 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
     return this._build()
   }
 
-  private _transformRow(v: any): TResult {
+  private async _transformRow(v: any): Promise<TResult> {
     const r = { ...v }
     for (const [alias, field] of Object.entries(this._aliasFields)) {
-      if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias])
+      if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias])
     }
     r[ETAG] = v["@odata.etag"]
     delete r["@odata.etag"]
@@ -232,7 +232,7 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
     const qs = this.toString()
     const raw = this._table.client.iteratePages(this._table.entitySetName, { ...options, query: qs })
     for await (const page of raw) {
-      yield page.map((v: any) => this._transformRow(v))
+      yield await Promise.all(page.map((v: any) => this._transformRow(v)))
     }
   }
 }
@@ -413,24 +413,24 @@ class ODataQuery<T extends GenericProperties> {
     return this.#selectedKeys
   }
 
-  private _partialTransform(value: any): Record<string, any> {
+  private async _partialTransform(value: any): Promise<Record<string, any>> {
     const result: Record<string | symbol, any> = {}
     const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.logicalName]
     const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" }
     for (const key of this.#selectedKeys) {
       const prop = this.#table.fields[key]
-      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx)
+      result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx)
     }
     for (const expand of this.#expandMeta) {
       if (value[expand.dvName] !== undefined) {
-        result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table)
+        result[expand.key] = await _processExpand(value[expand.dvName], expand, this.#table)
       }
     }
     result[ETAG] = value["@odata.etag"]
     return result
   }
 
-  private _transformRow(value: any): any {
+  private async _transformRow(value: any): Promise<any> {
     if (this.#selectedKeys.length > 0) {
       return this._partialTransform(value)
     }
@@ -469,7 +469,7 @@ class ODataQuery<T extends GenericProperties> {
       this.#table.entitySetName,
       { ...options, query: qs },
     )) {
-      yield page.map((v: unknown) => this._transformRow(v))
+      yield await Promise.all(page.map((v: unknown) => this._transformRow(v)))
     }
   }
 }
@@ -523,7 +523,7 @@ function _processExpand(raw: any, expand: ExpandMeta, table: DataverseTable<any>
   if (expand.isCollection) {
     const items = Array.from(raw ?? [])
     if (expand.selectedKeys) {
-      return items.map((item: any) => _partialTransformItem(relatedTable, expand.selectedKeys!, item, expand.subExpands))
+      return Promise.all(items.map((item: any) => _partialTransformItem(relatedTable, expand.selectedKeys!, item, expand.subExpands)))
     } else {
       return navProp.transformValueFromDataverse(raw)
     }
@@ -536,20 +536,20 @@ function _processExpand(raw: any, expand: ExpandMeta, table: DataverseTable<any>
   }
 }
 
-function _partialTransformItem(table: DataverseTable<any>, selectedKeys: string[], raw: any, subExpands?: ExpandMeta[] | null): Record<string, any> {
+async function _partialTransformItem(table: DataverseTable<any>, selectedKeys: string[], raw: any, subExpands?: ExpandMeta[] | null): Promise<Record<string, any>> {
   const result: Record<string, any> = {}
   const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.logicalName]
   const ctx = { table, client: table.client, recordId: recordId ?? "" }
   for (const key of selectedKeys) {
     const prop = table.fields[key]
     if (prop) {
-      result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx)
+      result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx)
     }
   }
   if (subExpands) {
     for (const expand of subExpands) {
       if (raw[expand.dvName] !== undefined) {
-        result[expand.key] = _processExpand(raw[expand.dvName], expand, table)
+        result[expand.key] = await _processExpand(raw[expand.dvName], expand, table)
       }
     }
   }
