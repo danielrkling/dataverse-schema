@@ -1,8 +1,37 @@
-import { type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
+import { BTreeIndex, type Collection, type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
 import { IDBPDatabase, openDB } from "idb";
 import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
 
 const DEFAULT_SYNC_INTERVAL = 30000;
+
+/**
+ * Creates indexes on the collection for the primary key and every `lookupId`
+ * field of the table. These are the columns correlated joins/live subqueries
+ * (`materialize`) filter on, so having them indexed keeps the includes
+ * materialization fast and avoids the known "empty snapshot when the driving
+ * collection is indexed" lazy-load pitfalls in the other direction.
+ */
+function createDefaultIndexes(table: DataverseTable<GenericProperties>, collection: Collection<any, any, any>): void {
+  const fields = Object.entries(table.fields);
+  const indexedKeys = new Set<string>([table.primaryKey.key]);
+  for (const [key, field] of fields) {
+    if (key === table.primaryKey.key) continue;
+    if (field.type === "lookupId") indexedKeys.add(key);
+  }
+  for (const key of indexedKeys) {
+    try {
+      collection.createIndex((row: any) => row[key], { indexType: BTreeIndex });
+    } catch (err) {
+      // Index creation is best-effort — a duplicate index or unsupported key
+      // should never break syncing.
+      console.warn(`[dataverse-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
+    }
+  }
+  // Debug aid: list every index now registered on the collection. The paths
+  // printed here must match the field named in any TanStack DB
+  // "Join requires an index on ..." warning for that collection id.
+  const indexes = [...collection.indexes.values()].map((i: any) => i.expression?.path);
+}
 const DEFAULT_POLL_INTERVAL = 30000;
 const MAX_MUTATION_ATTEMPTS = 3;
 const RETRY_BASE_DELAY = 1000;
@@ -161,6 +190,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
 
     const syncConfig: SyncConfig<Infer<T>> = {
         sync: ({ begin, write, commit, markReady, collection }) => {
+            createDefaultIndexes(table as DataverseTable<GenericProperties>, collection);
             const handleTabMessage = (event: MessageEvent) => {
                 if (disposed) return;
                 if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
@@ -283,6 +313,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         onUpdate: defaultOnUpdate,
         onDelete: defaultOnDelete,
         utils,
+        defaultIndexType: BTreeIndex,
         // Begin syncing immediately on creation rather than waiting for the
         // first subscriber to attach (the default for @tanstack/db collections).
         startSync: true,
@@ -719,6 +750,7 @@ export class DataverseSyncDB {
 
         const syncConfig: SyncConfig<Infer<T>> = {
             sync: ({ begin, write, commit, markReady, collection }) => {
+                createDefaultIndexes(table as DataverseTable<GenericProperties>, collection);
                 // The collection must become ready even when the remote sync is
                 // skipped (offline at load, hidden tab). Otherwise anything
                 // awaiting collection readiness hangs forever.
@@ -895,6 +927,7 @@ export class DataverseSyncDB {
             onUpdate: defaultMutation,
             onDelete: defaultMutation,
             utils,
+            defaultIndexType: BTreeIndex,
             // Begin syncing immediately on creation rather than waiting for the
             // first subscriber to attach (the default for @tanstack/db collections).
             startSync: true,

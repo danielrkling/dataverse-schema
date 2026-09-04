@@ -74,7 +74,14 @@ export type TransformContext = {
  * empty/whitespace-only strings when validated (e.g. through `table.schema`) —
  * handy for nullable fields.
  */
-export abstract class FieldBase<T> {
+export abstract class FieldBase<T> implements ValidationSchema<T> {
+  /**
+   * Standard Schema V1 props, delegated to the field's validation `schema`.
+   * Lets any Standard Schema–aware consumer validate the field directly.
+   */
+  get "~standard"(): ValidationSchema<T>["~standard"] {
+    return this.schema["~standard"];
+  }
   /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
   schemaName: string
   /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */

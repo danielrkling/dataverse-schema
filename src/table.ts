@@ -71,7 +71,14 @@ export type DataverseTableOptions<TProperties extends GenericProperties> = {
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-export class DataverseTable<TProperties extends GenericProperties> {
+export class DataverseTable<TProperties extends GenericProperties> implements ValidationSchema<Infer<TProperties>> {
+  /**
+   * Standard Schema V1 props, delegated to the table's whole-record `schema`.
+   * Lets any Standard Schema–aware consumer validate the table directly.
+   */
+  get "~standard"(): ValidationSchema<Infer<TProperties>>["~standard"] {
+    return this.schema["~standard"];
+  }
   client: DataverseClient;
   fields: TProperties;
   logicalName: string;
