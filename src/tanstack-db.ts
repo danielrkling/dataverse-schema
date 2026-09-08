@@ -75,6 +75,33 @@ export type DataverseOfflineCollectionConfig<T extends GenericProperties> = Data
     requireVisible?: boolean;
 };
 
+/**
+ * Deep-copies a value into plain objects/arrays. Used to strip the reactive
+ * proxies that @tanstack/db's live-query/materialize layer wraps rows in —
+ * proxies cannot pass through structuredClone, so any mutation payload that
+ * came from a joined row would otherwise throw when written to IndexedDB
+ * (or posted over the BroadcastChannel). Reading through the proxy and
+ * rebuilding plain containers is enough; no proxy detection is needed.
+ */
+function plainClone<T>(value: T): T {
+    if (Array.isArray(value)) {
+        return value.map(plainClone) as unknown as T;
+    }
+    // Dates clone naturally via structuredClone once the surrounding proxies
+    // are gone, so preserve the instance instead of degrading it to a string.
+    if (value instanceof Date) {
+        return new Date(value.getTime()) as unknown as T;
+    }
+    if (value !== null && typeof value === "object") {
+        const out: Record<string, unknown> = {};
+        for (const key of Object.keys(value as Record<string, unknown>)) {
+            out[key] = plainClone((value as Record<string, unknown>)[key]);
+        }
+        return out as unknown as T;
+    }
+    return value;
+}
+
 export type QueuedMutation = {
     id: string;
     type: "insert" | "update" | "delete";
@@ -377,8 +404,8 @@ export class DataverseSyncDB {
         return {
             id: mutation.mutationId,
             type: mutation.type,
-            value: mutation.modified,
-            changes: mutation.changes,
+            value: plainClone(mutation.modified),
+            changes: plainClone(mutation.changes),
             key: mutation.key,
             entitySetName: mutation.collection.id,
             timestamp: mutation.createdAt.valueOf(),
