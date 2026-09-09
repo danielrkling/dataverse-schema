@@ -92,6 +92,19 @@ function plainClone<T>(value: T): T {
     if (value instanceof Date) {
         return new Date(value.getTime()) as unknown as T;
     }
+    // Binary values (file/image upload payloads: `{ data: Blob }`) must pass
+    // through untouched — Object.keys on a Blob yields [], so the generic
+    // object branch below would silently replace it with `{}` and the
+    // `instanceof Blob` upload path in field afterSave hooks would never fire.
+    // These types have no enumerable own properties and cannot be the reactive
+    // row proxies being stripped here, so identity-passthrough is safe.
+    if (
+        value instanceof Blob ||
+        value instanceof ArrayBuffer ||
+        ArrayBuffer.isView(value)
+    ) {
+        return value;
+    }
     if (value !== null && typeof value === "object") {
         const out: Record<string, unknown> = {};
         for (const key of Object.keys(value as Record<string, unknown>)) {
