@@ -1,6 +1,6 @@
 import { BTreeIndex, type Collection, type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
 import { IDBPDatabase, openDB } from "idb";
-import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
+import { DataverseHttpError, getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
 
 const DEFAULT_SYNC_INTERVAL = 30000;
 
@@ -115,6 +115,51 @@ function plainClone<T>(value: T): T {
     return value;
 }
 
+/**
+ * True for the synthetic bookkeeping properties @tanstack/db (and this
+ * library's adapters) attach to rows beside the real Dataverse columns —
+ * `$key`, `$collectionId`, `$synced`, `$origin`, … — plus `$etag`. They
+ * exist only in the optimistic/in-memory row, never on a server snapshot,
+ * so they would always pollute a field-level conflict diff with phantom
+ * "differences".
+ */
+function isMetaKey(key: string): boolean {
+    return key.startsWith("$");
+}
+
+/**
+ * True when a delta object contains only bookkeeping keys (`$`-prefixed) —
+ * i.e., patching it would write nothing to Dataverse. An empty delta
+ * (length 0) is left alone: there is nothing to fall back on and the
+ * caller's body building will produce an empty (no-op) request either way.
+ */
+function isMetaOnly(delta: unknown): boolean {
+    const keys = Object.keys(delta ?? {});
+    return keys.length > 0 && keys.every(isMetaKey);
+}
+
+/**
+ * Structural equality for comparing a local mutation field value against the
+ * server record in {@link DataverseSyncDB.getConflictDetails}. Handles the
+ * value shapes Dataverse records carry: primitives, Date instances (compare
+ * by timestamp — JSON round-trips make instance identity useless), arrays,
+ * nested plain objects, and binary values (Blob identity).
+ */
+function valuesEqual(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+    if (Array.isArray(a) || Array.isArray(b)) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+        return a.every((v, i) => valuesEqual(v, b[i]));
+    }
+    if (a && b && typeof a === "object" && typeof b === "object") {
+        const ak = Object.keys(a as object), bk = Object.keys(b as object);
+        if (ak.length !== bk.length) return false;
+        return ak.every((k) => valuesEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+    }
+    return false;
+}
+
 export type QueuedMutation = {
     id: string;
     type: "insert" | "update" | "delete";
@@ -126,6 +171,14 @@ export type QueuedMutation = {
     sequence: number;
     attempts: number;
     ifMatch?: string;
+    /**
+     * When true, the mutation is retried without an `If-Match` precondition:
+     * updates become overwrite-if-exists (`If-Match: *`) and deletes run
+     * unconditionally. Used to force a mutation that previously failed with a
+     * 412 concurrency conflict (see {@link isConcurrencyError} and
+     * {@link DataverseSyncDB.retryErroredMutation}).
+     */
+    force?: boolean;
     lastAttemptAt?: number;
     nextAttemptAt?: number;
     error?: any
@@ -141,6 +194,88 @@ export class MutationPersistenceError extends Error {
         this.name = "MutationPersistenceError";
     }
 }
+
+/**
+ * Reduces a thrown error to a structured-clone-safe plain object before it is
+ * persisted into the IndexedDB errored store. Besides keeping the `put` from
+ * throwing (`DataverseHttpError.response` holds a live `Response` object,
+ * which cannot be cloned), this preserves the HTTP status as an own property
+ * so conflict detection keeps working after a page reload — once the error
+ * has passed through IndexedDB, `instanceof DataverseHttpError` no longer
+ * holds (the class identity is not restored), only the data survives.
+ */
+function serializeError(error: unknown): Record<string, unknown> {
+    if (error instanceof DataverseHttpError) {
+        return {
+            name: error.name,
+            message: error.message,
+            status: error.status,
+            statusText: error.statusText,
+            body: error.body,
+        };
+    }
+    if (error instanceof Error) {
+        return { name: error.name, message: error.message };
+    }
+    return { name: "UnknownError", value: error };
+}
+
+/**
+ * Returns true when the error is a Dataverse 412 (Precondition Failed)
+ * response — an optimistic-concurrency failure meaning the server's etag no
+ * longer matches the etag the mutation was built against. Such mutations are
+ * moved to the errored store and can be re-applied with
+ * {@link DataverseSyncDB.retryErroredMutation} using the `force` or
+ * `useFreshEtag` options.
+ *
+ * Because stored errors are serialized plain objects ({@link serializeError}),
+ * detection cannot rely on `instanceof` alone — it also matches the persisted
+ * `status` property shape, so an error read back after a page reload is still
+ * recognized.
+ *
+ * Duplicate-key violations can surface as 412s too, but they are NOT
+ * concurrency failures — Force only removes the `If-Match` precondition and
+ * cannot make a record unique, and rebasing onto the server's etag changes
+ * nothing either. Those are excluded here so resolution UIs don't offer
+ * Force/Rebase for them; use {@link isKeyViolation} to detect them instead.
+ */
+export function isConcurrencyError(error: unknown): boolean {
+    const status = (error as { status?: unknown } | undefined)?.status;
+    if (status !== 412) return false;
+    return !isKeyViolation(error);
+}
+
+/**
+ * Returns true when a Dataverse error is a unique-key / duplicate-detection
+ * violation (e.g. `DuplicateRecordEntityKey`, `0x80060892`: "Entity Key {0}
+ * violated. A record with the same value for {1} already exists."), or the
+ * classic duplicate-detection result (`DuplicateRecordsFound`,
+ * `0x80040333`). These failures are deterministic — the same payload will
+ * keep failing no matter when it is retried and no matter which etag it
+ * carries — so they skip the retry cycle entirely and move straight to the
+ * errored store. Resolution is never automatic: the payload must be edited
+ * (different key values) or discarded.
+ */
+export function isKeyViolation(error: unknown): boolean {
+    if (error instanceof DataverseHttpError) {
+        // Reconstruct the serialized shape to share one code path.
+        error = { body: error.body };
+    }
+    const body = (error as { body?: { code?: unknown; message?: unknown } } | undefined)?.body as
+        { code?: unknown; message?: unknown } | undefined;
+    const code = typeof body?.code === "string" ? body.code.toLowerCase() : undefined;
+    if (code && KEY_VIOLATION_CODES.has(code)) return true;
+    const message = typeof body?.message === "string" ? body.message : undefined;
+    // Some duplicate-detection paths return a zero/empty code; fall back to
+    // the canonical message fragment of DuplicateRecordEntityKey.
+    return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
+}
+
+const KEY_VIOLATION_CODES = new Set([
+    "0x80060892", // DuplicateRecordEntityKey
+    "0x80040333", // DuplicateRecordsFound
+]);
+const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
 
 export function dataverseCollectionOptions<T extends GenericProperties>(
     config: DataverseCollectionConfig<T>,
@@ -391,6 +526,31 @@ export class DataverseSyncDB {
     // queueMutations/flush and on close().
     private retryTimer: ReturnType<typeof setTimeout> | undefined
     private readonly channelMessageHandler: (event: MessageEvent) => void
+    // Subscribers notified whenever the mutation queue or errored store
+    // changes (mutations enqueued, flushed, errored, retried, discarded).
+    // Listeners receive no payload — call getQueueCount()/getErroredMutations()
+    // to read the current state (see the conflict-dashboard use case).
+    private mutationListeners = new Set<() => void>()
+
+    /**
+     * Registers a listener invoked (synchronously, best-effort) whenever the
+     * offline mutation state changes in this tab: mutations get enqueued,
+     * flushed, moved to/from the errored store, or discarded. Returns an
+     * unsubscribe function. Cross-tab changes are not delivered directly —
+     * each tab's own queueMutations/flushQueue activity fires the hook, so
+     * attach a listener per tab that redraws from
+     * {@link getQueueCount}/{@link getErroredMutations}.
+     */
+    public onMutationsChanged(listener: () => void): () => void {
+        this.mutationListeners.add(listener);
+        return () => { this.mutationListeners.delete(listener); };
+    }
+
+    private notifyMutationsChanged(): void {
+        for (const listener of [...this.mutationListeners]) {
+            try { listener(); } catch (err) { console.warn("[dataverse-offline] listener failed:", err); }
+        }
+    }
 
     constructor(name: string, tables: DataverseTable<GenericProperties>[], version: number) {
         this.name = name;
@@ -517,6 +677,7 @@ export class DataverseSyncDB {
         }
         for (const cleanup of [...this.collectionCleanups]) cleanup();
         this.collectionCleanups.clear();
+        this.mutationListeners.clear();
         this.channel.removeEventListener("message", this.channelMessageHandler);
         this.channel.close();
         this.db?.close();
@@ -543,6 +704,9 @@ export class DataverseSyncDB {
             // every collection — including this tab's — reconciles its
             // in-memory row and IDB cache without waiting for a server re-pull.
             const flushed: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
+            // Whether the queue or errored store was modified; searched and
+            // MUTATIONS_ADDED broadcasts make collections reconcile regardless.
+            let changed = false;
 
             while (true) {
                 const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
@@ -568,7 +732,10 @@ export class DataverseSyncDB {
                 // etag captured when the mutation was enqueued. This keeps a
                 // second queued update — built against the same stale optimistic
                 // snapshot as the first — from sending an outdated If-Match.
-                if (mutation.type === "update" || mutation.type === "delete") {
+                // Forced mutations (see retryErroredMutation) bypass all etag
+                // bookkeeping — they must not re-inherit the stale etag or the
+                // conflict they are being forced through would just repeat.
+                if ((mutation.type === "update" || mutation.type === "delete") && !mutation.force) {
                     const fresh = this.keyEtags.get(mutation.key);
                     if (fresh && fresh !== mutation.ifMatch) {
                         mutation.ifMatch = fresh;
@@ -580,7 +747,14 @@ export class DataverseSyncDB {
                         const record = await table.createRecord(mutation.value);
                         flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record)!, value: record, entitySetName: mutation.entitySetName });
                     } else if (mutation.type === "update") {
-                        const record = await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
+                        // With `force`, send no If-Match at all: updateRecord
+                        // then defaults to `If-Match: *` (overwrite if the
+                        // record exists) and deleteRecord runs unconditionally.
+                        // A bookkeeping-only delta ($-keys only) would PATCH
+                        // nothing and silently drop the user's edit — fall
+                        // back to the full optimistic row in that case.
+                        const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
+                        const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? undefined : mutation.ifMatch });
                         const etag = getEtag(record);
                         if (etag) {
                             // Persist the new etag so a later flush (or a
@@ -592,23 +766,34 @@ export class DataverseSyncDB {
                         }
                         flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
                     } else if (mutation.type === "delete") {
-                        await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
+                        await table.deleteRecord(mutation.key, { ifMatch: mutation.force ? undefined : mutation.ifMatch });
                         // The record is gone — drop any cached etag for it.
                         this.keyEtags.delete(mutation.key);
                         flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: undefined, entitySetName: mutation.entitySetName });
                     }
 
                     await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+                    changed = true;
                 } catch (e) {
                     if (!navigator.onLine) break; // Pause queue processing if offline
                     console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
-                    mutation.error = e
-                    mutation.attempts++
+                    mutation.error = serializeError(e);
                     mutation.lastAttemptAt = Date.now();
+                    // 412 conflicts (precondition failed) and duplicate-key
+                    // violations are deterministic: neither will behave any
+                    // differently on a retry, so skip the retry cycle
+                    // entirely and move the mutation straight to the errored
+                    // store. From there, concurrency conflicts can be
+                    // re-applied with retryErroredMutation force/useFreshEtag
+                    // (see QueuedMutation.force); key violations must be
+                    // edited or discarded.
+                    if (isConcurrencyError(e) || isKeyViolation(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+                    else mutation.attempts++;
                     if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
                         mutation.nextAttemptAt = undefined;
                         await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
                         await db.put(this.ERRORED_MUTATIONS_NAME, mutation)
+                        changed = true;
                     } else {
                         const delay = Math.min(
                             RETRY_MAX_DELAY,
@@ -640,6 +825,7 @@ export class DataverseSyncDB {
             if (flushed.length > 0) {
                 this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
             }
+            if (changed) this.notifyMutationsChanged();
         })
     }
 
@@ -653,28 +839,157 @@ export class DataverseSyncDB {
         return db.getAll(this.ERRORED_MUTATIONS_NAME) as Promise<QueuedMutation[]>;
     }
 
-    async retryErroredMutation(id: string): Promise<void> {
+    /**
+     * Snapshot for presenting a conflicted mutation to a user: the server's
+     * current authoritative record, and which of the mutation's fields the
+     * server state actually differs on. A differing etag only *means*
+     * something touched the record — the field diff is what makes "Force",
+     * "Rebase" or "Discard" an informed choice instead of a blind button.
+     *
+     * Semantics:
+     * - `server` is the transformed record (null when the record was deleted
+     *   server-side), including *all* of the table's fields — not just the
+     *   locally changed ones.
+     * - `conflictingFields` compares only the fields the local mutation
+     *   touches (`changes` for updates, `value` otherwise) against the
+     *   server record. Empty when the values are equal despite the etag
+     *   difference (cosmetic churn) — in that case plain retry is safe.
+     * Unknown fields (e.g. navigation blobs not present in the snapshot) are
+     * treated as conflicting rather than silently ignored.
+     */
+    async getConflictDetails(mutation: QueuedMutation): Promise<{ server: any | null; conflictingFields: string[] }> {
+        const table = this.tables.get(mutation.entitySetName);
+        if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this DataverseSyncDB`);
+        const server = await table.getRecord(mutation.key) as any;
+        // The local side of the diff: the *entire* proposed row (what the
+        // optimistic state believed the record would become) overlaid with the
+        // changes delta. Diffing `changes` alone is not enough: with
+        // rowUpdateMode "full" (as the offline collection uses) the delta can
+        // end up carrying only row bookkeeping ($-keys), while the real local
+        // edit — the fields this mutation exists to write — lives in `value`.
+        const local: Record<string, unknown> = {};
+        const fill = (source: unknown) => {
+            for (const [k, v] of Object.entries(source ?? {})) {
+                if (isMetaKey(k)) continue;
+                local[k] = v;
+            }
+        };
+        // Full proposed row first, then the changes delta takes precedence
+        // (later writes win), so an explicit partial update is honored even
+        // where the row snapshot is stale.
+        fill(mutation.value);
+        fill(mutation.type === "update" ? mutation.changes : undefined);
+        const conflictingFields = local && server
+            ? Object.keys(local).filter((k) => !valuesEqual(local[k], server[k]))
+            : Object.keys(local);
+        return { server, conflictingFields };
+    }
+    /**
+     * Moves an errored mutation back into the retry queue and flushes.
+     *
+     * Resolution options:
+     *
+     * - **Force** (`{ force: true }`): re-applied without its `If-Match`
+     *   precondition — updates overwrite the server's current state
+     *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
+     *   concurrency failure (see {@link isConcurrencyError}) when the local
+     *   changes should win regardless of concurrent server-side edits.
+     * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
+     *   record and re-applies the local `changes` on top of its *fresh* etag
+     *   — a "resend my edits, accept the server's state as the base"
+     *   resolution. Fails with 412 again if the record is touched between
+     *   reading the etag and the write. If the server cannot be reached the
+     *   freshest etag already known to this DB is used instead of aborting.
+     * - Plain (`{}`): retries with the etag it last carried — useful only if
+     *   the server record has since reverted to the expected etag.
+     *
+     * The resolution is a property of the retry call, not of the mutation:
+     * a mutation previously retried with `force` is un-forced by a later
+     * plain or `useFreshEtag` retry (and, once un-forced, inherits the
+     * freshest known etag rather than a bare precondition).
+     *
+     * ```ts
+     * if (isConcurrencyError(errored.error)) {
+     *     // after reviewing getConflictDetails(errored):
+     *     await db.retryErroredMutation(errored.id, { force: true });
+     * }
+     * ```
+     */
+    async retryErroredMutation(
+        id: string,
+        options?: { force?: boolean; useFreshEtag?: boolean },
+    ): Promise<void> {
         const db = await this.getDB();
+        const mutation = await db.get(this.ERRORED_MUTATIONS_NAME, id) as QueuedMutation | undefined;
+        if (!mutation) return;
+
+        mutation.attempts = 0;
+        mutation.error = undefined;
+        mutation.lastAttemptAt = undefined;
+        mutation.nextAttemptAt = undefined;
+        // Resolution is re-chosen on every retry, never accumulated from
+        // prior retries: a previously forced mutation must not stay forced
+        // when it is later retried plainly or with useFreshEtag.
+        mutation.force = options?.force === true;
+        if (mutation.force) {
+            // Drop the etag entirely — a forced write sends no precondition.
+            mutation.ifMatch = undefined;
+        } else if (options?.useFreshEtag && mutation.type !== "insert") {
+            // Rebase: read the server's current etag so the mutation is
+            // re-queued carrying the etag the record has *right now*. This
+            // MUST run before the write transaction below is opened —
+            // awaiting a network request while an IndexedDB transaction is
+            // active lets the transaction auto-commit, and the later
+            // delete/put then throws InvalidStateError.
+            const table = this.tables.get(mutation.entitySetName);
+            if (table) {
+                let fresh: string | undefined;
+                try {
+                    const server = await table.getRecord(mutation.key);
+                    fresh = server ? getEtag(server) : undefined;
+                } catch {
+                    // Server unreachable while rebasing — fall back to the
+                    // freshest etag this DB has already successfully
+                    // written for the key (the same source flushQueue
+                    // uses) instead of abandoning the retry outright.
+                    fresh = this.keyEtags.get(mutation.key);
+                }
+                if (fresh && fresh !== mutation.ifMatch) {
+                    mutation.ifMatch = fresh;
+                    this.keyEtags.set(mutation.key, fresh);
+                }
+            }
+        } else if (mutation.ifMatch === undefined) {
+            // Un-forcing a mutation previously sent bare: a missing etag
+            // would behave exactly like force (If-Match: * / unconditional
+            // delete), so restore the freshest etag we know.
+            const fresh = this.keyEtags.get(mutation.key);
+            if (fresh) mutation.ifMatch = fresh;
+        }
+
         const tx = db.transaction(
             [this.MUTATION_QUEUE_NAME, this.ERRORED_MUTATIONS_NAME],
             "readwrite",
         );
-        const mutation = await tx.objectStore(this.ERRORED_MUTATIONS_NAME).get(id) as QueuedMutation | undefined;
-        if (mutation) {
-            mutation.attempts = 0;
-            mutation.error = undefined;
-            mutation.lastAttemptAt = undefined;
-            mutation.nextAttemptAt = undefined;
-            await tx.objectStore(this.ERRORED_MUTATIONS_NAME).delete(id);
-            await tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
-        }
+        // Both requests must be created synchronously before awaiting
+        // either: awaiting delete() alone first can let the transaction
+        // become inactive/complete in some browser timing conditions,
+        // making the later put() throw InvalidStateError.
+        const erroredStore = tx.objectStore(this.ERRORED_MUTATIONS_NAME);
+        const queueStore = tx.objectStore(this.MUTATION_QUEUE_NAME);
+        await Promise.all([
+            erroredStore.delete(id),
+            queueStore.put(mutation),
+        ]);
         await tx.done;
-        if (mutation && navigator.onLine) await this.flushQueue();
+        this.notifyMutationsChanged();
+        if (navigator.onLine) await this.flushQueue();
     }
 
     async discardErroredMutation(id: string): Promise<void> {
         const db = await this.getDB();
         await db.delete(this.ERRORED_MUTATIONS_NAME, id);
+        this.notifyMutationsChanged();
     }
 
     async queueMutations(mutations: QueuedMutation[]) {
@@ -702,6 +1017,7 @@ export class DataverseSyncDB {
                 tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
             }
             await tx.done;
+            this.notifyMutationsChanged();
         } catch (e) {
             console.error("[dataverse-offline] Error writing mutation to IDB:", e);
             throw new MutationPersistenceError(
