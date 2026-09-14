@@ -3,6 +3,7 @@ import { type DataverseTable } from "../table";
 import { type GenericProperties } from "../types";
 import { getEtag } from "../util";
 import { isConcurrencyError, isKeyViolation, serializeError } from "./classifiers";
+import { isDeterministicFailure } from "./error-codes";
 import { isMetaKey, isMetaOnly, valuesEqual } from "./util";
 import { MutationPersistenceError, type QueuedMutation } from "./types";
 
@@ -377,14 +378,14 @@ export class SyncEngine {
                     console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
                     mutation.error = serializeError(e);
                     mutation.lastAttemptAt = Date.now();
-                    // 412 conflicts (precondition failed) and duplicate-key
-                    // violations are deterministic: neither will behave any
-                    // differently on a retry, so skip the retry cycle
-                    // entirely and move the mutation straight to the errored
-                    // store. From there, concurrency conflicts can be
-                    // re-applied with retryErroredMutation force/useFreshEtag;
-                    // key violations must be edited or discarded.
-                    if (isConcurrencyError(e) || isKeyViolation(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+                    // Deterministic failures (412 concurrency, duplicate-key
+                    // violations, missing records, validation rejects) cannot
+                    // behave any differently on a retry, so skip the retry
+                    // cycle entirely and move the mutation straight to the
+                    // errored store — interpretError explains why, and how the
+                    // operator can get past it. Transient failures (throttle,
+                    // 5xx, network) keep the retry/backoff cycle below.
+                    if (isDeterministicFailure(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
                     else mutation.attempts++;
                     if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
                         mutation.nextAttemptAt = undefined;

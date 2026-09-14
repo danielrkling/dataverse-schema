@@ -2677,7 +2677,7 @@ declare function serializeError(error: unknown): Record<string, unknown>;
  * response — an optimistic-concurrency failure meaning the server's etag no
  * longer matches the etag the mutation was built against. Such mutations are
  * moved to the errored store and can be re-applied with `force` or
- * `useFreshEtag` retry options (see `SyncQueue.retryErroredMutation`).
+ * `useFreshEtag` retry options (see `SyncEngine.retryErroredMutation`).
  *
  * Because stored errors are serialized plain objects ({@link serializeError}),
  * detection cannot rely on `instanceof` alone — it also matches the persisted
@@ -2703,6 +2703,69 @@ declare function isConcurrencyError(error: unknown): boolean;
  * (different key values) or discarded.
  */
 declare function isKeyViolation(error: unknown): boolean;
+//#endregion
+//#region src/sync/error-codes.d.ts
+/**
+ * Curated sub-set of the Dataverse Web API error-code table
+ * (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes)
+ * covering the codes most relevant to offline mutation processing: uniqueness
+ * violations, missing records and duplicate detection.
+ */
+declare const DATVERSE_ERROR_CODES: Record<string, {
+  name: string;
+  meaning: string;
+}>;
+/** What category a mutation failure falls into, for resolution UIs. */
+type ErrorCategory =
+/** Optimistic-concurrency failure: etag no longer matches (resolvable by force/rebase). */
+"concurrency" |
+/** Unique-key or duplicate detection violation (payload must be edited or discarded). */
+"key-violation" |
+/** The target record no longer exists (update/delete on a deleted record). */
+"missing-record" |
+/** Request rejected as malformed/invalid (payload problem, not a race). */
+"validation" |
+/** Server throttling — the retry cycle should just keep trying. */
+"throttled" |
+/** Auth token problem — a fresh token should fix it. */
+"identity" |
+/** Insufficient privileges — requires admin/user action, not a payload fix. */
+"permission" |
+/** Server-side fault (5xx) or transient network failure — retry is the right move. */
+"transient" |
+/** Anything not otherwise classified. */
+"unknown";
+/** Interpretation of a mutation failure, for resolution UIs and retry policy. */
+type ErrorGuidance = {
+  category: ErrorCategory;
+  /**
+   * The documented Dataverse code name when known — e.g.
+   * `DuplicateRecordEntityKey` for `0x80060892`.
+   */
+  codeName?: string;
+  /** The raw hex code as returned by the server, when available. */
+  code?: string;
+  /** Human-readable resolution hint for a dashboard. */
+  resolution: string;
+  /**
+   * Deterministic failures cannot behave differently on a retry: re-applying
+   * them wastes a request cycle per retry. Getting past one requires a
+   * server-side change (revert, recreate) or an operator resolution (force,
+   * rebase, edited payload). Transient failures keep the retry/backoff cycle.
+   */
+  deterministic: boolean;
+};
+/**
+ * Interprets a mutation failure (a live `DataverseHttpError` or a serialized
+ * error restored from the errored store) into a {@link ErrorGuidance} for
+ * dashboards and retry policy. Guidance-based classification is the source of
+ * truth for the flush loop's deterministic skip; the standalone helpers
+ * {@link isConcurrencyError} and {@link isKeyViolation} delegate to the same
+ * logic for simple yes/no questions.
+ */
+declare function interpretError(error: unknown): ErrorGuidance;
+/** Convenience determination (see {@link interpretError}). */
+declare function isDeterministicFailure(error: unknown): boolean;
 //#endregion
 //#region src/sync/util.d.ts
 /**
@@ -2739,4 +2802,4 @@ declare function isMetaOnly(delta: unknown): boolean;
  */
 declare function valuesEqual(a: unknown, b: unknown): boolean;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isConcurrencyError, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, valuesEqual, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, type ErrorCategory, type ErrorGuidance, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, valuesEqual, wrapString, xml };

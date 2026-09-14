@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 // global, so the in-memory shim stands in for the browser API.
 import "fake-indexeddb/auto";
 import { serializeMutation, plainClone } from "../src/tanstack-db";
-import { DataverseClient, DataverseTable, SyncEngine, primaryKey, string, number, type QueuedMutation } from "../src";
+import { DataverseClient, DataverseHttpError, DataverseTable, SyncEngine, isDeterministicFailure, interpretError, primaryKey, string, number, serializeError, type QueuedMutation } from "../src";
 
 function makeTable(entitySetName = "tasks", logicalName = "task") {
   return new DataverseTable({
@@ -186,4 +186,59 @@ test("retryErroredMutation resolves nothing when no such errored mutation exists
     unlock();
     engine.close();
   }
+});
+
+// --- error guidance ---
+
+test("interpretError classifies the documented Dataverse failure modes", () => {
+  const keyViolation = interpretError({
+    name: "DataverseHttpError", message: "412", status: 412, body: {
+      code: "0x80060892",
+      message: "Entity Key Project ID violated. A record with the same value for Project already exists. A duplicate record cannot be created.",
+    },
+  });
+  expect(keyViolation.category).toBe("key-violation");
+  expect(keyViolation.codeName).toBe("DuplicateRecordEntityKey");
+  expect(keyViolation.deterministic).toBe(true);
+
+  const concurrency = interpretError({ status: 412, body: { code: "0x80060881", message: "etag mismatch" } });
+  expect(concurrency.category).toBe("concurrency");
+  expect(concurrency.deterministic).toBe(true);
+});
+
+test("interpretError treats statuses the way the retry loop needs", () => {
+  expect(interpretError({ status: 404, body: {} }).category).toBe("missing-record");
+  expect(interpretError({ status: 404 }).deterministic).toBe(true);
+  expect(interpretError({ status: 429 }).category).toBe("throttled");
+  expect(interpretError({ status: 429 }).deterministic).toBe(false);
+  expect(interpretError({ status: 401 }).category).toBe("identity");
+  expect(interpretError({ status: 401 }).deterministic).toBe(false);
+  expect(interpretError({ status: 403 }).category).toBe("permission");
+  expect(interpretError({ status: 403 }).deterministic).toBe(true);
+  expect(interpretError({ status: 503 }).category).toBe("transient");
+  expect(interpretError({ status: 503 }).deterministic).toBe(false);
+  expect(interpretError({ status: 400, body: { message: "unrecognized property 'x'" } }).category).toBe("validation");
+  expect(interpretError({ status: 400 }).deterministic).toBe(true);
+  // No status at all = transport failure → transient.
+  expect(interpretError(new TypeError("fetch failed")).category).toBe("transient");
+  expect(interpretError(new TypeError("fetch failed")).deterministic).toBe(false);
+
+  // Round-trip through serializeError (IndexedDB restore) keeps the guidance.
+  const stored = structuredClone(serializeError(new DataverseHttpError(
+    "412 Precondition Failed", 412, "Precondition Failed",
+    { code: "0x80060892", message: "Entity Key Project ID violated. A record with the same value for Project already exists." },
+  )));
+  const restored = interpretError(stored);
+  expect(restored.category).toBe("key-violation");
+  expect(restored.codeName).toBe("DuplicateRecordEntityKey");
+  expect(restored.deterministic).toBe(true);
+});
+
+test("isDeterministicFailure agrees with the guidance categories", () => {
+  expect(isDeterministicFailure({ status: 412 })).toBe(true);
+  expect(isDeterministicFailure({ status: 404 })).toBe(true);
+  expect(isDeterministicFailure({ status: 400 })).toBe(true);
+  expect(isDeterministicFailure({ status: 429 })).toBe(false);
+  expect(isDeterministicFailure({ status: 500 })).toBe(false);
+  expect(isDeterministicFailure({})).toBe(false);
 });

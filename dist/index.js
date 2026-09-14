@@ -4559,7 +4559,7 @@ const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for
 * response — an optimistic-concurrency failure meaning the server's etag no
 * longer matches the etag the mutation was built against. Such mutations are
 * moved to the errored store and can be re-applied with `force` or
-* `useFreshEtag` retry options (see `SyncQueue.retryErroredMutation`).
+* `useFreshEtag` retry options (see `SyncEngine.retryErroredMutation`).
 *
 * Because stored errors are serialized plain objects ({@link serializeError}),
 * detection cannot rely on `instanceof` alone — it also matches the persisted
@@ -4594,6 +4594,108 @@ function isKeyViolation(error) {
 	if (code && KEY_VIOLATION_CODES.has(code)) return true;
 	const message = typeof body?.message === "string" ? body.message : void 0;
 	return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
+}
+
+//#endregion
+//#region src/sync/error-codes.ts
+/**
+* Curated sub-set of the Dataverse Web API error-code table
+* (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes)
+* covering the codes most relevant to offline mutation processing: uniqueness
+* violations, missing records and duplicate detection.
+*/
+const DATVERSE_ERROR_CODES = {
+	"0x80060892": {
+		name: "DuplicateRecordEntityKey",
+		meaning: "Entity key violated: a record with the same unique key values already exists."
+	},
+	"0x80040333": {
+		name: "DuplicateRecordsFound",
+		meaning: "Duplicate detection stopped the create/update: a duplicate of this record already exists."
+	},
+	"0x80060891": {
+		name: "RecordNotFoundByEntityKey",
+		meaning: "No record exists with the specified key values (alternate-key reference resolves to nothing)."
+	}
+};
+/** Extracts the helper fields from a DataverseHttpError or a serialized/stored error. */
+function readError(error) {
+	if (error instanceof DataverseHttpError) return {
+		status: error.status,
+		body: error.body
+	};
+	const shaped = error;
+	if (!shaped || typeof shaped !== "object") return {};
+	return {
+		status: typeof shaped.status === "number" ? shaped.status : void 0,
+		body: shaped.body
+	};
+}
+/**
+* Interprets a mutation failure (a live `DataverseHttpError` or a serialized
+* error restored from the errored store) into a {@link ErrorGuidance} for
+* dashboards and retry policy. Guidance-based classification is the source of
+* truth for the flush loop's deterministic skip; the standalone helpers
+* {@link isConcurrencyError} and {@link isKeyViolation} delegate to the same
+* logic for simple yes/no questions.
+*/
+function interpretError(error) {
+	const { status, body } = readError(error);
+	const bodyCode = body?.code;
+	const code = typeof bodyCode === "string" ? bodyCode.toLowerCase() : void 0;
+	const documented = code ? DATVERSE_ERROR_CODES[code] : void 0;
+	const transient = {
+		category: "transient",
+		resolution: "Network failure (no HTTP status reached the client); the retry cycle is the correct treatment.",
+		deterministic: false
+	};
+	const classified = isKeyViolation(error) ? {
+		category: "key-violation",
+		resolution: "A record with these unique-key values already exists. Edit the key values locally or discard the mutation; Force/Rebase cannot resolve a uniqueness constraint.",
+		deterministic: true
+	} : status === 412 ? {
+		category: "concurrency",
+		resolution: "The server record changed since the mutation was built. Review getConflictDetails, then force (overwrite) or retry with a fresh etag (rebase).",
+		deterministic: true
+	} : documented?.name === "RecordNotFoundByEntityKey" || status === 404 ? {
+		category: "missing-record",
+		resolution: "The target record no longer exists server-side. Discard the mutation (or recreate the record first).",
+		deterministic: true
+	} : status === 429 ? {
+		category: "throttled",
+		resolution: "Dataverse throttled the request; the retry/backoff cycle is the correct treatment. No action needed.",
+		deterministic: false
+	} : status === 401 ? {
+		category: "identity",
+		resolution: "Auth token rejected. Once the app re-authenticates, retry — the payload itself is fine.",
+		deterministic: false
+	} : status === 403 ? {
+		category: "permission",
+		resolution: "Insufficient privileges for this operation. Requires a permission change (or a different user); retrying alone cannot help.",
+		deterministic: true
+	} : status === void 0 ? {
+		...transient,
+		deterministic: false
+	} : status >= 500 ? {
+		category: "transient",
+		resolution: "Server-side fault; retrying via the normal backoff cycle should succeed once the fault clears.",
+		deterministic: false
+	} : status >= 400 ? {
+		category: "validation",
+		resolution: "Dataverse rejected the request itself (typically an unknown/malformed property or business rule). Correct the mutation payload; identical retries fail identically.",
+		deterministic: true
+	} : void 0;
+	return {
+		category: classified?.category ?? transient.category,
+		resolution: classified?.resolution ?? transient.resolution,
+		deterministic: classified?.deterministic ?? transient.deterministic,
+		codeName: documented?.name,
+		code
+	};
+}
+/** Convenience determination (see {@link interpretError}). */
+function isDeterministicFailure(error) {
+	return interpretError(error).deterministic;
 }
 
 //#endregion
@@ -4886,7 +4988,7 @@ var SyncEngine = class {
 					console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
 					mutation.error = serializeError(e);
 					mutation.lastAttemptAt = Date.now();
-					if (isConcurrencyError(e) || isKeyViolation(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+					if (isDeterministicFailure(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
 					else mutation.attempts++;
 					if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
 						mutation.nextAttemptAt = void 0;
@@ -4939,7 +5041,7 @@ var SyncEngine = class {
 	*/
 	async getConflictDetails(mutation) {
 		const table = this.tables.get(mutation.entitySetName);
-		if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this SyncQueue`);
+		if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this SyncEngine`);
 		const server = await table.getRecord(mutation.key);
 		const proposed = {};
 		const changed = /* @__PURE__ */ new Map();
@@ -5063,4 +5165,4 @@ var SyncEngine = class {
 };
 
 //#endregion
-export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, MutationPersistenceError, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, SyncEngine, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isConcurrencyError, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, valuesEqual, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, MutationPersistenceError, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, SyncEngine, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, valuesEqual, wrapString, xml };

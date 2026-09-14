@@ -2725,11 +2725,6 @@
     // DuplicateRecordsFound
   ]);
   const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
-  function isConcurrencyError(error) {
-    const status = error?.status;
-    if (status !== 412) return false;
-    return !isKeyViolation(error);
-  }
   function isKeyViolation(error) {
     if (error instanceof DataverseHttpError) {
       error = { body: error.body };
@@ -2739,6 +2734,82 @@
     if (code && KEY_VIOLATION_CODES.has(code)) return true;
     const message = typeof body?.message === "string" ? body.message : void 0;
     return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
+  }
+
+  const DATVERSE_ERROR_CODES = {
+    "0x80060892": {
+      name: "DuplicateRecordEntityKey",
+      meaning: "Entity key violated: a record with the same unique key values already exists."
+    },
+    "0x80040333": {
+      name: "DuplicateRecordsFound",
+      meaning: "Duplicate detection stopped the create/update: a duplicate of this record already exists."
+    },
+    "0x80060891": {
+      name: "RecordNotFoundByEntityKey",
+      meaning: "No record exists with the specified key values (alternate-key reference resolves to nothing)."
+    }
+  };
+  function readError(error) {
+    if (error instanceof DataverseHttpError) return { status: error.status, body: error.body };
+    const shaped = error;
+    if (!shaped || typeof shaped !== "object") return {};
+    const status = typeof shaped.status === "number" ? shaped.status : void 0;
+    return { status, body: shaped.body };
+  }
+  function interpretError(error) {
+    const { status, body } = readError(error);
+    const bodyCode = body?.code;
+    const code = typeof bodyCode === "string" ? bodyCode.toLowerCase() : void 0;
+    const documented = code ? DATVERSE_ERROR_CODES[code] : void 0;
+    const transient = {
+      category: "transient",
+      resolution: "Network failure (no HTTP status reached the client); the retry cycle is the correct treatment.",
+      deterministic: false
+    };
+    const classified = isKeyViolation(error) ? {
+      category: "key-violation",
+      resolution: "A record with these unique-key values already exists. Edit the key values locally or discard the mutation; Force/Rebase cannot resolve a uniqueness constraint.",
+      deterministic: true
+    } : status === 412 ? {
+      category: "concurrency",
+      resolution: "The server record changed since the mutation was built. Review getConflictDetails, then force (overwrite) or retry with a fresh etag (rebase).",
+      deterministic: true
+    } : documented?.name === "RecordNotFoundByEntityKey" || status === 404 ? {
+      category: "missing-record",
+      resolution: "The target record no longer exists server-side. Discard the mutation (or recreate the record first).",
+      deterministic: true
+    } : status === 429 ? {
+      category: "throttled",
+      resolution: "Dataverse throttled the request; the retry/backoff cycle is the correct treatment. No action needed.",
+      deterministic: false
+    } : status === 401 ? {
+      category: "identity",
+      resolution: "Auth token rejected. Once the app re-authenticates, retry — the payload itself is fine.",
+      deterministic: false
+    } : status === 403 ? {
+      category: "permission",
+      resolution: "Insufficient privileges for this operation. Requires a permission change (or a different user); retrying alone cannot help.",
+      deterministic: true
+    } : status === void 0 ? { ...transient, deterministic: false } : status >= 500 ? {
+      category: "transient",
+      resolution: "Server-side fault; retrying via the normal backoff cycle should succeed once the fault clears.",
+      deterministic: false
+    } : status >= 400 ? {
+      category: "validation",
+      resolution: "Dataverse rejected the request itself (typically an unknown/malformed property or business rule). Correct the mutation payload; identical retries fail identically.",
+      deterministic: true
+    } : void 0;
+    return {
+      category: classified?.category ?? transient.category,
+      resolution: classified?.resolution ?? transient.resolution,
+      deterministic: classified?.deterministic ?? transient.deterministic,
+      codeName: documented?.name,
+      code
+    };
+  }
+  function isDeterministicFailure(error) {
+    return interpretError(error).deterministic;
   }
 
   function plainClone(value) {
@@ -3021,7 +3092,7 @@
             console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
             mutation.error = serializeError(e);
             mutation.lastAttemptAt = Date.now();
-            if (isConcurrencyError(e) || isKeyViolation(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+            if (isDeterministicFailure(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
             else mutation.attempts++;
             if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
               mutation.nextAttemptAt = void 0;
@@ -3549,7 +3620,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:47:37.681Z"}
+      meta.textContent = `build ${"2026-09-14T14:58:49.573Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3642,7 +3713,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:47:37.681Z",
+          build: "2026-09-14T14:58:49.573Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3661,7 +3732,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:47:37.681Z"}\``,
+        `Build: \`${"2026-09-14T14:58:49.573Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
