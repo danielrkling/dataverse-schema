@@ -1,3 +1,4 @@
+import { IDBPDatabase } from "idb";
 import { StandardSchemaV1 } from "@standard-schema/spec";
 //#region src/query/path.d.ts
 type QueryProperty = FieldBase<any> | LookupProperty<any> | CollectionProperty<any>;
@@ -536,7 +537,12 @@ type DataverseTableOptions<TProperties extends GenericProperties> = {
  * const record = await Account.getRecord("GUID-HERE");
  * console.log(record.name); // typed as string
  */
-declare class DataverseTable<TProperties extends GenericProperties> {
+declare class DataverseTable<TProperties extends GenericProperties> implements ValidationSchema<Infer<TProperties>> {
+  /**
+   * Standard Schema V1 props, delegated to the table's whole-record `schema`.
+   * Lets any Standard Schema–aware consumer validate the table directly.
+   */
+  get "~standard"(): ValidationSchema<Infer<TProperties>>["~standard"];
   client: DataverseClient;
   fields: TProperties;
   logicalName: string;
@@ -932,8 +938,13 @@ type TransformContext = {
  * empty/whitespace-only strings when validated (e.g. through `table.schema`) —
  * handy for nullable fields.
  */
-declare abstract class FieldBase<T> {
+declare abstract class FieldBase<T> implements ValidationSchema<T> {
   #private;
+  /**
+   * Standard Schema V1 props, delegated to the field's validation `schema`.
+   * Lets any Standard Schema–aware consumer validate the field directly.
+   */
+  get "~standard"(): ValidationSchema<T>["~standard"];
   /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
   schemaName: string;
   /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
@@ -2440,4 +2451,292 @@ declare class EntityQueryBuilder<TProps extends GenericProperties, TResult exten
 }
 declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, primaryKey, requiredOf, rxGUID, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+//#region src/sync/types.d.ts
+type QueuedMutation = {
+  id: string;
+  type: "insert" | "update" | "delete";
+  key: string;
+  value?: any;
+  changes: any;
+  entitySetName: string;
+  timestamp: number;
+  sequence: number;
+  attempts: number;
+  ifMatch?: string;
+  /**
+   * When true, the mutation is retried without an `If-Match` precondition:
+   * updates become overwrite-if-exists (`If-Match: *`) and deletes run
+   * unconditionally. Used to force a mutation that previously failed with a
+   * 412 concurrency conflict (see {@link isConcurrencyError}).
+   */
+  force?: boolean;
+  lastAttemptAt?: number;
+  nextAttemptAt?: number;
+  error?: any;
+};
+declare class MutationPersistenceError extends Error {
+  readonly mutationIds: string[];
+  readonly cause: unknown;
+  constructor(message: string, mutationIds: string[], cause: unknown);
+}
+//#endregion
+//#region src/sync/queue.d.ts
+/**
+ * Snapshot for presenting a conflicted mutation to a user: the server's
+ * current authoritative record, and which of the mutation's fields the
+ * server state actually differs on. A differing etag only *means*
+ * something touched the record — the field diff is what makes "Force",
+ * "Rebase" or "Discard" an informed choice instead of a blind button.
+ */
+type ConflictDetails = {
+  /**
+   * The transformed server record (null when the record was deleted
+   * server-side), including *all* of the table's fields — not just the
+   * locally changed ones.
+   */
+  server: any | null;
+  /**
+   * One entry for every field defined on the table's `fields` map, in map
+   * order — a ready-to-render conflict comparison row list.
+   */
+  fields: FieldDiff[];
+  /**
+   * Convenience subset: the field names whose diff status is `"conflict"`
+   * (i.e. all fields the local mutation touches that genuinely differ from
+   * the server snapshot). Empty when the values are equal despite the etag
+   * difference (cosmetic churn) — in that case a plain retry is safe.
+   */
+  conflictingFields: string[];
+};
+/** Status of one field in a conflict-details comparison. */
+type FieldDiffStatus =
+/** Touched locally and changed on the server to a different value. */
+"conflict" |
+/** Changed locally but the server snapshot already matches the local value. */
+"local-change" |
+/** Untouched locally, but the server state differs from the local row. */
+"server-change" |
+/** Local proposal and server record agree. */
+"unchanged";
+/** One table field's comparison row in {@link ConflictDetails.fields}. */
+type FieldDiff = {
+  /** TypeScript property name, matching the table's `fields` map key. */
+  field: string;
+  /** The local proposal: the mutation's value/changes overlay. Absent if not set. */
+  local?: unknown;
+  /** The server record's value. Absent if the field is not on the server record. */
+  server?: unknown;
+  /**
+   * The value carried in the mutation's `changes` delta, when the field is
+   * explicitly part of the partial update — `undefined` when the field is
+   * only present via the full optimistic row (`value`) or unchanged.
+   */
+  changed?: unknown;
+  status: FieldDiffStatus;
+};
+/**
+ * Retry resolutions for an errored mutation. A resolution is a property of
+ * the retry call, not of the mutation: a mutation previously retried with
+ * force is un-forced by a later plain or useFreshEtag retry.
+ */
+type RetryOptions = {
+  /** Re-apply without any `If-Match` precondition (local changes win). */
+  force?: boolean;
+  /** Re-apply on top of the server's current etag (server state is the base). */
+  useFreshEtag?: boolean;
+};
+/**
+ * The vanilla offline sync engine: a durable IndexedDB mutation queue with a
+ * flush cycle (web-lock serialized, cross-tab broadcast), deterministic
+ * failure classification, etag freshness bookkeeping, and conflict
+ * resolutions (force / rebase / discard / plain retry). It talks to Dataverse
+ * through the registered {@link DataverseTable}s and knows nothing about
+ * TanStack DB; adapters (see src/tanstack-db.ts) only map their mutation
+ * format into {@link QueuedMutation} and feed it to {@link enqueue}.
+ */
+declare class SyncEngine {
+  name: string;
+  version: number;
+  readonly tables: Map<string, DataverseTable<GenericProperties>>;
+  MUTATION_QUEUE_NAME: string;
+  ERRORED_MUTATIONS_NAME: string;
+  readonly channel: BroadcastChannel;
+  private closed;
+  private collectionStores;
+  private collectionStorePromises;
+  private dbVersion;
+  private activeFetchControllers;
+  private collectionCleanups;
+  private keyEtags;
+  private retryTimer;
+  private readonly channelMessageHandler;
+  private mutationListeners;
+  constructor(name: string, tables: DataverseTable<GenericProperties>[], version: number);
+  sequence: number;
+  nextSequence(): number;
+  /**
+   * Registers a listener invoked (synchronously, best-effort) whenever the
+   * offline mutation state changes in this tab: mutations get enqueued,
+   * flushed, moved to/from the errored store, or discarded. Returns an
+   * unsubscribe function. Cross-tab changes are not delivered directly —
+   * each tab's own queueMutations/flushQueue activity fires the hook, so
+   * attach a listener per tab that redraws from
+   * {@link getQueueCount}/{@link getErroredMutations}.
+   */
+  onMutationsChanged(listener: () => void): () => void;
+  private notifyMutationsChanged;
+  private db;
+  getDB(): Promise<IDBPDatabase<unknown>>;
+  /**
+   * Registers a per-collection cache store (keyed by collection id). If the
+   * database is already open without this store, it is reopened with a
+   * bumped version so the upgrade callback can create it. The returned
+   * promise resolves once the store is safe to read/write.
+   */
+  ensureCollectionStore(name: string): Promise<void>;
+  /**
+   * Instantly aborts any in-flight remote server GET requests across all collections.
+   */
+  abortActiveFetches(): void;
+  /** Registers a collection-scoped cleanup to run when the queue closes. */
+  addCollectionCleanup(cleanup: () => void): void;
+  /** Registers an in-flight fetch controller so abortActiveFetches can cancel it. */
+  trackActiveFetch(controller: AbortController): void;
+  /** Unregisters a fetch controller previously registered with trackActiveFetch. */
+  untrackActiveFetch(controller: AbortController): void;
+  get isClosed(): boolean;
+  close(): void;
+  /**
+   * Flushes the mutation queue to Dataverse. After a successful flush the
+   * authoritative server records (carrying fresh etags) are broadcast via the
+   * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
+   * and IDB cache store — see the offline adapter's handleTabMessage.
+   */
+  flushQueue(): Promise<void>;
+  getQueueCount(): Promise<number>;
+  getErroredMutations(): Promise<QueuedMutation[]>;
+  /**
+   * Snapshot for presenting a conflicted mutation to a user: the server's
+   * current authoritative record, and which of the mutation's fields the
+   * server state actually differs on. A differing etag only *means*
+   * something touched the record — the field diff is what makes "Force",
+   * "Rebase" or "Discard" an informed choice instead of a blind button.
+   *
+   * Semantics:
+   * - `server` is the transformed record (null when the record was deleted
+   *   server-side), including *all* of the table's fields — not just the
+   *   locally changed ones.
+   * - `conflictingFields` compares only the fields the local mutation
+   *   touches against the server record (see {@link ConflictDetails}).
+   * Unknown fields (e.g. navigation blobs not present in the snapshot) are
+   * treated as conflicting rather than silently ignored.
+   */
+  getConflictDetails(mutation: QueuedMutation): Promise<ConflictDetails>;
+  /**
+   * Moves an errored mutation back into the retry queue and flushes.
+   *
+   * Resolution options ({@link RetryOptions}):
+   *
+   * - **Force** (`{ force: true }`): re-applied without its `If-Match`
+   *   precondition — updates overwrite the server's current state
+   *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
+   *   concurrency failure (see {@link isConcurrencyError}) when the local
+   *   changes should win regardless of concurrent server-side edits.
+   * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
+   *   record and re-applies the local changes on top of its *fresh* etag
+   *   — a "resend my edits, accept the server's state as the base"
+   *   resolution. Fails with 412 again if the record is touched between
+   *   reading the etag and the write. If the server cannot be reached the
+   *   freshest etag already known to this DB is used instead of aborting.
+   * - Plain (`{}`): retries with the etag it last carried — useful only if
+   *   the server record has since reverted to the expected etag.
+   *
+   * The resolution is a property of the retry call, not of the mutation:
+   * a mutation previously retried with `force` is un-forced by a later
+   * plain or `useFreshEtag` retry (and, once un-forced, inherits the
+   * freshest known etag rather than a bare precondition).
+   */
+  retryErroredMutation(id: string, options?: RetryOptions): Promise<void>;
+  discardErroredMutation(id: string): Promise<void>;
+  queueMutations(mutations: QueuedMutation[]): Promise<void>;
+}
+//#endregion
+//#region src/sync/classifiers.d.ts
+/**
+ * Reduces a thrown error to a structured-clone-safe plain object before it is
+ * persisted into the IndexedDB errored store. Besides keeping the `put` from
+ * throwing (`DataverseHttpError.response` holds a live `Response` object,
+ * which cannot be cloned), this preserves the HTTP status as an own property
+ * so conflict detection keeps working after a page reload — once the error
+ * has passed through IndexedDB, `instanceof DataverseHttpError` no longer
+ * holds (the class identity is not restored), only the data survives.
+ */
+declare function serializeError(error: unknown): Record<string, unknown>;
+/**
+ * Returns true when the error is a Dataverse 412 (Precondition Failed)
+ * response — an optimistic-concurrency failure meaning the server's etag no
+ * longer matches the etag the mutation was built against. Such mutations are
+ * moved to the errored store and can be re-applied with `force` or
+ * `useFreshEtag` retry options (see `SyncQueue.retryErroredMutation`).
+ *
+ * Because stored errors are serialized plain objects ({@link serializeError}),
+ * detection cannot rely on `instanceof` alone — it also matches the persisted
+ * `status` property shape, so an error read back after a page reload is still
+ * recognized.
+ *
+ * Duplicate-key violations can surface as 412s too, but they are NOT
+ * concurrency failures — Force only removes the `If-Match` precondition and
+ * cannot make a record unique, and rebasing onto the server's etag changes
+ * nothing either. Those are excluded here so resolution UIs don't offer
+ * Force/Rebase for them; use {@link isKeyViolation} to detect them instead.
+ */
+declare function isConcurrencyError(error: unknown): boolean;
+/**
+ * Returns true when a Dataverse error is a unique-key / duplicate-detection
+ * violation (e.g. `DuplicateRecordEntityKey`, `0x80060892`: "Entity Key {0}
+ * violated. A record with the same value for {1} already exists."), or the
+ * classic duplicate-detection result (`DuplicateRecordsFound`,
+ * `0x80040333`). These failures are deterministic — the same payload will
+ * keep failing no matter when it is retried and no matter which etag it
+ * carries — so they skip the retry cycle entirely and move straight to the
+ * errored store. Resolution is never automatic: the payload must be edited
+ * (different key values) or discarded.
+ */
+declare function isKeyViolation(error: unknown): boolean;
+//#endregion
+//#region src/sync/util.d.ts
+/**
+ * Deep-copies a value into plain objects/arrays. Used to strip the reactive
+ * proxies that @tanstack/db's live-query/materialize layer wraps rows in —
+ * proxies cannot pass through structuredClone, so any mutation payload that
+ * came from a joined row would otherwise throw when written to IndexedDB
+ * (or posted over the BroadcastChannel). Reading through the proxy and
+ * rebuilding plain containers is enough; no proxy detection is needed.
+ */
+declare function plainClone<T>(value: T): T;
+/**
+ * True for the synthetic bookkeeping properties @tanstack/db (and this
+ * library's adapters) attach to rows beside the real Dataverse columns —
+ * `$key`, `$collectionId`, `$synced`, `$origin`, … — plus `$etag`. They
+ * exist only in the optimistic/in-memory row, never on a server snapshot,
+ * so they would always pollute a field-level conflict diff with phantom
+ * "differences".
+ */
+declare function isMetaKey(key: string): boolean;
+/**
+ * True when a delta object contains only bookkeeping keys (`$`-prefixed) —
+ * i.e., patching it would write nothing to Dataverse. An empty delta
+ * (length 0) is left alone: there is nothing to fall back on and the
+ * caller's body building will produce an empty (no-op) request either way.
+ */
+declare function isMetaOnly(delta: unknown): boolean;
+/**
+ * Structural equality for comparing a local mutation field value against the
+ * server record in conflict inspection. Handles the value shapes Dataverse
+ * records carry: primitives, Date instances (compare by timestamp — JSON
+ * round-trips make instance identity useless), arrays, nested plain objects,
+ * and binary values (Blob identity).
+ */
+declare function valuesEqual(a: unknown, b: unknown): boolean;
+//#endregion
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isConcurrencyError, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, valuesEqual, wrapString, xml };

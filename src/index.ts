@@ -10,3 +10,4 @@ export * from './query/odata/builder';
 export * from './query/fetchxml/builder';
 export * from './query/fetchxml/ast';
 export * from './query/odata/ast';
+export * from "./sync";

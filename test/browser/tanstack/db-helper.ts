@@ -1,33 +1,33 @@
-import { DataverseSyncDB, type QueuedMutation } from "../../../src/tanstack-db"
+import { SyncEngine, type QueuedMutation } from "../../../src/tanstack-db"
 
 /**
- * Builds a DataverseSyncDB with a per-run-unique name so multiple harness
+ * Builds a SyncEngine with a per-run-unique name so multiple harness
  * invocations never collide on the same IndexedDB database or BroadcastChannel.
  */
-export function makeSyncDB(tables: any[], version = 1): DataverseSyncDB {
+export function makeSyncDB(tables: any[], version = 1): SyncEngine {
   const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-  return new DataverseSyncDB(name, tables, version)
+  return new SyncEngine(name, tables, version)
 }
 
 /** Reads the raw mutation queue straight from IndexedDB (durability assertions). */
-export async function readQueue(db: DataverseSyncDB): Promise<QueuedMutation[]> {
+export async function readQueue(db: SyncEngine): Promise<QueuedMutation[]> {
   const idb = await (db as any).getDB()
   return (await idb.getAll(db.MUTATION_QUEUE_NAME)) as QueuedMutation[]
 }
 
 /** Reads the errored-mutation store straight from IndexedDB. */
-export async function readErrored(db: DataverseSyncDB): Promise<QueuedMutation[]> {
+export async function readErrored(db: SyncEngine): Promise<QueuedMutation[]> {
   const idb = await (db as any).getDB()
   return (await idb.getAll(db.ERRORED_MUTATIONS_NAME)) as QueuedMutation[]
 }
 
 /** Directly enqueue a mutation (test-only path to exercise the queue/retry plumbing). */
-export async function enqueueRaw(db: DataverseSyncDB, mutation: QueuedMutation): Promise<void> {
+export async function enqueueRaw(db: SyncEngine, mutation: QueuedMutation): Promise<void> {
   await (db as any).queueMutations([mutation])
 }
 
 /** Force a single flush attempt (test-only). */
-export async function flush(db: DataverseSyncDB): Promise<void> {
+export async function flush(db: SyncEngine): Promise<void> {
   await (db as any).flushQueue().catch(() => undefined)
 }
 

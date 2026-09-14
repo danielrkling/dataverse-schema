@@ -1,6 +1,6 @@
 import { expectTypeOf, test } from "vitest"
 import { DataverseClient, DataverseTable, primaryKey, string, number, nullableNumber, boolean, choice, type Infer, type GUID } from "../src"
-import { dataverseCollectionOptions, DataverseSyncDB } from "../src/tanstack-db"
+import { dataverseCollectionOptions, dataverseOfflineCollectionOptions, SyncEngine } from "../src/tanstack-db"
 import { createCollection } from "@tanstack/db"
 
 const client = new DataverseClient({ url: "https://x.crm.dynamics.com" })
@@ -32,10 +32,10 @@ test("online collection rows infer Infer<fields>", () => {
 })
 
 test("offline collection rows infer Infer<fields>", () => {
-  // Never invoked: DataverseSyncDB needs BroadcastChannel (browser-only).
+  // Never invoked: SyncEngine needs BroadcastChannel (browser-only).
   const check = () => {
-    const db = new DataverseSyncDB("probe-db", [Account], 1)
-    const collection = createCollection(db.createCollectionOptions({ table: Account }))
+    const engine = new SyncEngine("probe-db", [Account], 1)
+    const collection = createCollection(dataverseOfflineCollectionOptions(engine, { table: Account }))
     type ColRow = NonNullable<ReturnType<typeof collection.get>>
     expectTypeOf<ColRow["id"]>().toEqualTypeOf<GUID>()
     expectTypeOf<ColRow["revenue"]>().toEqualTypeOf<number>()
@@ -77,8 +77,8 @@ test("collection accepts explicit id and query options", () => {
   void check
 
   const offlineCheck = () => {
-    const db = new DataverseSyncDB("probe-db-2", [Account], 1)
-    const collection = createCollection(db.createCollectionOptions({
+    const engine = new SyncEngine("probe-db-2", [Account], 1)
+    const collection = createCollection(dataverseOfflineCollectionOptions(engine, {
       table: Account,
       id: "accounts-active",
       query: { filter: "statecode eq 0" },

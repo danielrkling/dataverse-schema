@@ -10720,7 +10720,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       startSync: true
     };
   }
-  class DataverseSyncDB {
+  class SyncEngine {
     name;
     version;
     tables;
@@ -10998,7 +10998,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     }
     createCollectionOptions(config) {
-      if (this.closed) throw new Error("DataverseSyncDB is closed");
+      if (this.closed) throw new Error("SyncEngine is closed");
       const {
         table,
         id: explicitId,
@@ -11221,7 +11221,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
 
   function makeSyncDB(tables, version = 1) {
     const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    return new DataverseSyncDB(name, tables, version);
+    return new SyncEngine(name, tables, version);
   }
   async function readQueue(db) {
     const idb = await db.getDB();
@@ -11380,7 +11380,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
 
   const offlineQueueSuite = {
     name: "offline-queue",
-    title: "Offline mutation queue (DataverseSyncDB)",
+    title: "Offline mutation queue (SyncEngine)",
     tests: (ctx) => [
       {
         name: "createCollectionOptions builds a collection backed by the sync DB",
@@ -11388,7 +11388,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           try {
-            const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
+            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
           } finally {
@@ -11403,7 +11403,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           try {
-            const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
+            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             const name = ctx.fx.name("offline-on");
@@ -11429,7 +11429,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restore = simulateOffline();
           const restoreVis = forceVisible();
           try {
-            const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
+            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             const name = ctx.fx.name("offline-q");
@@ -11457,7 +11457,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis = forceVisible();
           let name = "";
           try {
-            const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
+            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             name = ctx.fx.name("offline-then-on");
@@ -11486,7 +11486,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restore = simulateOffline();
           const restoreVis = forceVisible();
           try {
-            const config = db.createCollectionOptions({ table: ctx.tables.TestTable });
+            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             const name = ctx.fx.name("qcount");
@@ -11510,7 +11510,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           const id = await seedRow(ctx, { int: 1, text: "will-fail" });
-          const collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
+          const collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable }));
           try {
             await waitFor(() => collection.size >= 1, 8e3);
             const eid = `test-err-${Date.now()}`;
@@ -11562,13 +11562,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const dbName = `dvt-xtab-${Date.now().toString(36)}`;
           const tables = [ctx.tables.TestTable, ctx.tables.TestTable0];
-          const dbA = new DataverseSyncDB(dbName, tables, 1);
-          const dbB = new DataverseSyncDB(dbName, tables, 1);
+          const dbA = new SyncEngine(dbName, tables, 1);
+          const dbB = new SyncEngine(dbName, tables, 1);
           const restoreVis = forceVisible();
           let a, b;
           try {
-            a = createCollection(dbA.createCollectionOptions({ table: ctx.tables.TestTable }));
-            b = createCollection(dbB.createCollectionOptions({ table: ctx.tables.TestTable }));
+            a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable }));
+            b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable }));
             await waitFor(() => a.size >= 1 && b.size >= 1, 8e3);
             const name = ctx.fx.name("xtab");
             const id = crypto.randomUUID();
@@ -11589,13 +11589,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const dbName = `dvt-xtab-${Date.now().toString(36)}`;
           const tables = [ctx.tables.TestTable, ctx.tables.TestTable0];
-          const dbA = new DataverseSyncDB(dbName, tables, 1);
-          const dbB = new DataverseSyncDB(dbName, tables, 1);
+          const dbA = new SyncEngine(dbName, tables, 1);
+          const dbB = new SyncEngine(dbName, tables, 1);
           const restoreVis = forceVisible();
           let a, b;
           try {
-            a = createCollection(dbA.createCollectionOptions({ table: ctx.tables.TestTable }));
-            b = createCollection(dbB.createCollectionOptions({ table: ctx.tables.TestTable }));
+            a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable }));
+            b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable }));
             await waitFor(() => a.size >= 1 && b.size >= 1, 8e3);
             const name = ctx.fx.name("xtab-abort");
             const id = crypto.randomUUID();
@@ -11622,7 +11622,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const name = ctx.fx.name("durable");
           const dbName = `dvt-dur-${Date.now().toString(36)}`;
           const tables = [ctx.tables.TestTable, ctx.tables.TestTable0];
-          const db1 = new DataverseSyncDB(dbName, tables, 1);
+          const db1 = new SyncEngine(dbName, tables, 1);
           const restore1 = simulateOffline();
           const restoreVis1 = forceVisible();
           let collection1;
@@ -11639,7 +11639,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             restoreVis1();
             db1.close();
           }
-          const db2 = new DataverseSyncDB(dbName, tables, 1);
+          const db2 = new SyncEngine(dbName, tables, 1);
           const restoreVis2 = forceVisible();
           try {
             const q2 = await readQueue(db2);
@@ -11665,7 +11665,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           const id = await seedRow(ctx, { int: 7, text: "cache-me" });
-          createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
+          createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable }));
           try {
             await waitFor(async () => {
               const idb = await db.getDB();
@@ -11751,7 +11751,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis = forceVisible();
           let collection;
           try {
-            collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable }));
+            collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable }));
             await waitFor(() => collection.size >= 1, 8e3);
             const name = ctx.fx.name("opts-fs");
             const id = crypto.randomUUID();
@@ -11787,7 +11787,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           let collection;
           try {
             collection = createCollection(
-              db.createCollectionOptions({ table: ctx.tables.TestTable, requireVisible: false })
+              dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable, requireVisible: false })
             );
             await waitFor(() => collection.size >= 1, 8e3);
             assert(collection.size >= 1, "collection synced despite hidden visibility (requireVisible:false)");
@@ -11818,7 +11818,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const collection = createCollection(
-            db.createCollectionOptions({ table: ctx.tables.TestTable, readonly: true })
+            dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable, readonly: true })
           );
           await waitFor(() => collection.size >= 1, 8e3);
           const id = crypto.randomUUID();

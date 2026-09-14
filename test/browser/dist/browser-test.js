@@ -776,652 +776,90 @@
     }));
   }
 
-  //#region src/storages/globalConfig/globalConfig.ts
-  const DEFAULT_CONFIG = {
-  	lang: void 0,
-  	message: void 0,
-  	abortEarly: void 0,
-  	abortPipeEarly: void 0
-  };
-  /**
-  * Returns the global configuration.
-  *
-  * @param config The config to merge.
-  *
-  * @returns The configuration.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getGlobalConfig(config$1) {
-  	return DEFAULT_CONFIG;
+  function makeSchema(validate) {
+    return {
+      "~standard": {
+        version: 1,
+        vendor: "dataverse-schema",
+        validate
+      }
+    };
   }
-
-  //#endregion
-  //#region src/storages/globalMessage/globalMessage.ts
-  let store$3;
-  /**
-  * Returns a global error message.
-  *
-  * @param lang The language of the message.
-  *
-  * @returns The error message.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getGlobalMessage(lang) {
-  	return store$3?.get(lang);
+  function checkSchema(check, message) {
+    return makeSchema((value) => check(value) ? { value } : { issues: [{ message }] });
   }
-
-  //#endregion
-  //#region src/storages/schemaMessage/schemaMessage.ts
-  let store$2;
-  /**
-  * Returns a schema error message.
-  *
-  * @param lang The language of the message.
-  *
-  * @returns The error message.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getSchemaMessage(lang) {
-  	return store$2?.get(lang);
+  const STRING_SCHEMA = checkSchema((value) => typeof value === "string", "Expected a string");
+  const NUMBER_SCHEMA = checkSchema((value) => typeof value === "number", "Expected a number");
+  const BOOLEAN_SCHEMA = checkSchema((value) => typeof value === "boolean", "Expected a boolean");
+  const DATE_SCHEMA = checkSchema((value) => value instanceof Date, "Expected a Date");
+  const BLOB_SCHEMA = checkSchema((value) => value instanceof Blob, "Expected a Blob");
+  const GUID_SCHEMA = checkSchema(
+    (value) => typeof value === "string" && rxGUID.test(value),
+    "Expected a GUID"
+  );
+  function composeRecordSchema(children) {
+    const entries = Object.entries(children);
+    return makeSchema(async (value) => {
+      const input = value ?? {};
+      const settled = await Promise.all(entries.map(async ([key, child]) => [key, await child["~standard"].validate(input[key])]));
+      const out = {};
+      const issues = [];
+      for (const [key, result] of settled) {
+        if (result.issues) {
+          for (const issue of result.issues) {
+            issues.push({ ...issue, path: [{ key }, ...issue.path ?? []] });
+          }
+        } else {
+          out[key] = result.value;
+        }
+      }
+      if (issues.length > 0) return { issues };
+      return { value: out };
+    });
   }
-
-  //#endregion
-  //#region src/storages/specificMessage/specificMessage.ts
-  let store$1;
-  /**
-  * Returns a specific error message.
-  *
-  * @param reference The identifier reference.
-  * @param lang The language of the message.
-  *
-  * @returns The error message.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getSpecificMessage(reference, lang) {
-  	return store$1?.get(reference)?.get(lang);
+  function arrayOf(child) {
+    return makeSchema(async (value) => {
+      if (!Array.isArray(value)) return { issues: [{ message: "Expected an array" }] };
+      const settled = await Promise.all(value.map(async (item) => await child["~standard"].validate(item)));
+      const out = [];
+      const issues = [];
+      for (const [i, result] of settled.entries()) {
+        if (result.issues) {
+          for (const issue of result.issues) {
+            issues.push({ ...issue, path: [{ key: i }, ...issue.path ?? []] });
+          }
+        } else {
+          out[i] = result.value;
+        }
+      }
+      if (issues.length > 0) return { issues };
+      return { value: out };
+    });
   }
-
-  //#endregion
-  //#region src/utils/_stringify/_stringify.ts
-  /**
-  * Stringifies an unknown input to a literal or type string.
-  *
-  * @param input The unknown input.
-  *
-  * @returns A literal or type string.
-  *
-  * @internal
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function _stringify(input) {
-  	const type = typeof input;
-  	if (type === "string") return `"${input}"`;
-  	if (type === "number" || type === "bigint" || type === "boolean") return `${input}`;
-  	if (type === "object" || type === "function") return (input && Object.getPrototypeOf(input)?.constructor?.name) ?? "null";
-  	return type;
+  function lazyOf(getChild) {
+    let cached;
+    return makeSchema(
+      (value) => (cached ??= getChild())["~standard"].validate(value)
+    );
   }
-
-  //#endregion
-  //#region src/utils/_addIssue/_addIssue.ts
-  /**
-  * Adds an issue to the dataset.
-  *
-  * @param context The issue context.
-  * @param label The issue label.
-  * @param dataset The input dataset.
-  * @param config The configuration.
-  * @param other The optional props.
-  *
-  * @internal
-  */
-  function _addIssue(context, label, dataset, config$1, other) {
-  	const input = other && "input" in other ? other.input : dataset.value;
-  	const expected = other?.expected ?? context.expects ?? null;
-  	const received = other?.received ?? /* @__PURE__ */ _stringify(input);
-  	const issue = {
-  		kind: context.kind,
-  		type: context.type,
-  		input,
-  		expected,
-  		received,
-  		message: `Invalid ${label}: ${expected ? `Expected ${expected} but r` : "R"}eceived ${received}`,
-  		requirement: context.requirement,
-  		path: other?.path,
-  		issues: other?.issues,
-  		lang: config$1.lang,
-  		abortEarly: config$1.abortEarly,
-  		abortPipeEarly: config$1.abortPipeEarly
-  	};
-  	const isSchema = context.kind === "schema";
-  	const message$1 = other?.message ?? context.message ?? /* @__PURE__ */ getSpecificMessage(context.reference, issue.lang) ?? (isSchema ? /* @__PURE__ */ getSchemaMessage(issue.lang) : null) ?? config$1.message ?? /* @__PURE__ */ getGlobalMessage(issue.lang);
-  	if (message$1 !== void 0) issue.message = typeof message$1 === "function" ? message$1(issue) : message$1;
-  	if (isSchema) dataset.typed = false;
-  	if (dataset.issues) dataset.issues.push(issue);
-  	else dataset.issues = [issue];
+  function nullableOf(child) {
+    return makeSchema((value) => {
+      if (value === null) return { value: null };
+      return child["~standard"].validate(value);
+    });
   }
-
-  //#endregion
-  //#region src/utils/_getStandardProps/_getStandardProps.ts
-  const _standardCache = /* @__PURE__ */ new WeakMap();
-  /**
-  * Returns the Standard Schema properties.
-  *
-  * @param context The schema context.
-  *
-  * @returns The Standard Schema properties.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function _getStandardProps(context) {
-  	let cached = _standardCache.get(context);
-  	if (!cached) {
-  		cached = {
-  			version: 1,
-  			vendor: "valibot",
-  			validate(value$1) {
-  				return context["~run"]({ value: value$1 }, /* @__PURE__ */ getGlobalConfig());
-  			}
-  		};
-  		_standardCache.set(context, cached);
-  	}
-  	return cached;
+  function optionalOf(child) {
+    return makeSchema((value) => {
+      if (value === void 0) return { value: null };
+      return child["~standard"].validate(value);
+    });
   }
-
-  //#endregion
-  //#region src/utils/_joinExpects/_joinExpects.ts
-  /**
-  * Joins multiple `expects` values with the given separator.
-  *
-  * @param values The `expects` values.
-  * @param separator The separator.
-  *
-  * @returns The joined `expects` property.
-  *
-  * @internal
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function _joinExpects(values$1, separator) {
-  	const list = [...new Set(values$1)];
-  	if (list.length > 1) return `(${list.join(` ${separator} `)})`;
-  	return list[0] ?? "never";
-  }
-  /**
-  * [UUID](https://en.wikipedia.org/wiki/Universally_unique_identifier) regex.
-  */
-  const UUID_REGEX = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/iu;
-
-  //#endregion
-  //#region src/actions/minLength/minLength.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function minLength(requirement, message$1) {
-  	return {
-  		kind: "validation",
-  		type: "min_length",
-  		reference: minLength,
-  		async: false,
-  		expects: `>=${requirement}`,
-  		requirement,
-  		message: message$1,
-  		"~run"(dataset, config$1) {
-  			if (dataset.typed && dataset.value.length < this.requirement) _addIssue(this, "length", dataset, config$1, { received: `${dataset.value.length}` });
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/actions/uuid/uuid.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function uuid(message$1) {
-  	return {
-  		kind: "validation",
-  		type: "uuid",
-  		reference: uuid,
-  		async: false,
-  		expects: null,
-  		requirement: UUID_REGEX,
-  		message: message$1,
-  		"~run"(dataset, config$1) {
-  			if (dataset.typed && !this.requirement.test(dataset.value)) _addIssue(this, "UUID", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/methods/getFallback/getFallback.ts
-  /**
-  * Returns the fallback value of the schema.
-  *
-  * @param schema The schema to get it from.
-  * @param dataset The output dataset if available.
-  * @param config The config if available.
-  *
-  * @returns The fallback value.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getFallback(schema, dataset, config$1) {
-  	return typeof schema.fallback === "function" ? schema.fallback(dataset, config$1) : schema.fallback;
-  }
-
-  //#endregion
-  //#region src/methods/getDefault/getDefault.ts
-  /**
-  * Returns the default value of the schema.
-  *
-  * @param schema The schema to get it from.
-  * @param dataset The input dataset if available.
-  * @param config The config if available.
-  *
-  * @returns The default value.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getDefault(schema, dataset, config$1) {
-  	return typeof schema.default === "function" ? schema.default(dataset, config$1) : schema.default;
-  }
-
-  //#endregion
-  //#region src/schemas/array/array.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function array(item, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "array",
-  		reference: array,
-  		expects: "Array",
-  		async: false,
-  		item,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			const input = dataset.value;
-  			if (Array.isArray(input)) {
-  				dataset.typed = true;
-  				dataset.value = [];
-  				for (let key = 0; key < input.length; key++) {
-  					const value$1 = input[key];
-  					const itemDataset = this.item["~run"]({ value: value$1 }, config$1);
-  					if (itemDataset.issues) {
-  						const pathItem = {
-  							type: "array",
-  							origin: "value",
-  							input,
-  							key,
-  							value: value$1
-  						};
-  						for (const issue of itemDataset.issues) {
-  							if (issue.path) issue.path.unshift(pathItem);
-  							else issue.path = [pathItem];
-  							dataset.issues?.push(issue);
-  						}
-  						if (!dataset.issues) dataset.issues = itemDataset.issues;
-  						if (config$1.abortEarly) {
-  							dataset.typed = false;
-  							break;
-  						}
-  					}
-  					if (!itemDataset.typed) dataset.typed = false;
-  					dataset.value.push(itemDataset.value);
-  				}
-  			} else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/boolean/boolean.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function boolean$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "boolean",
-  		reference: boolean$1,
-  		expects: "boolean",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (typeof dataset.value === "boolean") dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/custom/custom.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function custom(check$1, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "custom",
-  		reference: custom,
-  		expects: "unknown",
-  		async: false,
-  		check: check$1,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (this.check(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/date/date.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function date$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "date",
-  		reference: date$1,
-  		expects: "Date",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value instanceof Date) if (!isNaN(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1, { received: "\"Invalid Date\"" });
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/instance/instance.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function instance(class_, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "instance",
-  		reference: instance,
-  		expects: class_.name,
-  		async: false,
-  		class: class_,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value instanceof this.class) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/lazy/lazy.ts
-  /**
-  * Creates a lazy schema.
-  *
-  * @param getter The schema getter.
-  *
-  * @returns A lazy schema.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function lazy(getter) {
-  	return {
-  		kind: "schema",
-  		type: "lazy",
-  		reference: lazy,
-  		expects: "unknown",
-  		async: false,
-  		getter,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			return this.getter(dataset.value)["~run"](dataset, config$1);
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/nullable/nullable.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function nullable(wrapped, default_) {
-  	return {
-  		kind: "schema",
-  		type: "nullable",
-  		reference: nullable,
-  		expects: `(${wrapped.expects} | null)`,
-  		async: false,
-  		wrapped,
-  		default: default_,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value === null) {
-  				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
-  				if (dataset.value === null) {
-  					dataset.typed = true;
-  					return dataset;
-  				}
-  			}
-  			return this.wrapped["~run"](dataset, config$1);
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/number/number.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function number$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "number",
-  		reference: number$1,
-  		expects: "number",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (typeof dataset.value === "number" && !isNaN(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/object/object.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function object(entries$1, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "object",
-  		reference: object,
-  		expects: "Object",
-  		async: false,
-  		entries: entries$1,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			const input = dataset.value;
-  			if (input && typeof input === "object") {
-  				dataset.typed = true;
-  				dataset.value = {};
-  				for (const key in this.entries) {
-  					const valueSchema = this.entries[key];
-  					if (key in input || (valueSchema.type === "exact_optional" || valueSchema.type === "optional" || valueSchema.type === "nullish") && valueSchema.default !== void 0) {
-  						const value$1 = key in input ? input[key] : /* @__PURE__ */ getDefault(valueSchema);
-  						const valueDataset = valueSchema["~run"]({ value: value$1 }, config$1);
-  						if (valueDataset.issues) {
-  							const pathItem = {
-  								type: "object",
-  								origin: "value",
-  								input,
-  								key,
-  								value: value$1
-  							};
-  							for (const issue of valueDataset.issues) {
-  								if (issue.path) issue.path.unshift(pathItem);
-  								else issue.path = [pathItem];
-  								dataset.issues?.push(issue);
-  							}
-  							if (!dataset.issues) dataset.issues = valueDataset.issues;
-  							if (config$1.abortEarly) {
-  								dataset.typed = false;
-  								break;
-  							}
-  						}
-  						if (!valueDataset.typed) dataset.typed = false;
-  						dataset.value[key] = valueDataset.value;
-  					} else if (valueSchema.fallback !== void 0) dataset.value[key] = /* @__PURE__ */ getFallback(valueSchema);
-  					else if (valueSchema.type !== "exact_optional" && valueSchema.type !== "optional" && valueSchema.type !== "nullish") {
-  						_addIssue(this, "key", dataset, config$1, {
-  							input: void 0,
-  							expected: `"${key}"`,
-  							path: [{
-  								type: "object",
-  								origin: "key",
-  								input,
-  								key,
-  								value: input[key]
-  							}]
-  						});
-  						if (config$1.abortEarly) break;
-  					}
-  				}
-  			} else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/optional/optional.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function optional(wrapped, default_) {
-  	return {
-  		kind: "schema",
-  		type: "optional",
-  		reference: optional,
-  		expects: `(${wrapped.expects} | undefined)`,
-  		async: false,
-  		wrapped,
-  		default: default_,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value === void 0) {
-  				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
-  				if (dataset.value === void 0) {
-  					dataset.typed = true;
-  					return dataset;
-  				}
-  			}
-  			return this.wrapped["~run"](dataset, config$1);
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/picklist/picklist.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function picklist(options, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "picklist",
-  		reference: picklist,
-  		expects: /* @__PURE__ */ _joinExpects(options.map(_stringify), "|"),
-  		async: false,
-  		options,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (this.options.includes(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/string/string.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function string$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "string",
-  		reference: string$1,
-  		expects: "string",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (typeof dataset.value === "string") dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/methods/pipe/pipe.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function pipe(...pipe$1) {
-  	return {
-  		...pipe$1[0],
-  		pipe: pipe$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			for (const item of pipe$1) if (item.kind !== "metadata") {
-  				if (dataset.issues && (item.kind === "schema" || item.kind === "transformation")) {
-  					dataset.typed = false;
-  					break;
-  				}
-  				if (!dataset.issues || !config$1.abortEarly && !config$1.abortPipeEarly) dataset = item["~run"](dataset, config$1);
-  			}
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/methods/safeParse/safeParse.ts
-  /**
-  * Parses an unknown input based on a schema.
-  *
-  * @param schema The schema to be used.
-  * @param input The input to be parsed.
-  * @param config The parse configuration.
-  *
-  * @returns The parse result.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function safeParse(schema, input, config$1) {
-  	const dataset = schema["~run"]({ value: input }, /* @__PURE__ */ getGlobalConfig());
-  	return {
-  		typed: dataset.typed,
-  		success: !dataset.issues,
-  		output: dataset.value,
-  		issues: dataset.issues
-  	};
+  function requiredOf(child, message = "Value is required") {
+    return makeSchema((value) => {
+      if (value === null || value === void 0) return { issues: [{ message }] };
+      if (typeof value === "string" && value.trim().length === 0) return { issues: [{ message }] };
+      return child["~standard"].validate(value);
+    });
   }
 
   class FieldRef {
@@ -1831,10 +1269,10 @@
     toString() {
       return this._build();
     }
-    _transformRow(v) {
+    async _transformRow(v) {
       const r = { ...v };
       for (const [alias, field] of Object.entries(this._aliasFields)) {
-        if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
+        if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias]);
       }
       r[ETAG] = v["@odata.etag"];
       delete r["@odata.etag"];
@@ -1856,7 +1294,7 @@
       const qs = this.toString();
       const raw = this._table.client.iteratePages(this._table.entitySetName, { ...options, query: qs });
       for await (const page of raw) {
-        yield page.map((v) => this._transformRow(v));
+        yield await Promise.all(page.map((v) => this._transformRow(v)));
       }
     }
   }
@@ -1990,23 +1428,23 @@
     _getSelectedKeys() {
       return this.#selectedKeys;
     }
-    _partialTransform(value) {
+    async _partialTransform(value) {
       const result = {};
       const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.logicalName];
       const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" };
       for (const key of this.#selectedKeys) {
         const prop = this.#table.fields[key];
-        result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
+        result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
       }
       for (const expand of this.#expandMeta) {
         if (value[expand.dvName] !== void 0) {
-          result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
+          result[expand.key] = await _processExpand(value[expand.dvName], expand, this.#table);
         }
       }
       result[ETAG] = value["@odata.etag"];
       return result;
     }
-    _transformRow(value) {
+    async _transformRow(value) {
       if (this.#selectedKeys.length > 0) {
         return this._partialTransform(value);
       }
@@ -2042,7 +1480,7 @@
         this.#table.entitySetName,
         { ...options, query: qs }
       )) {
-        yield page.map((v) => this._transformRow(v));
+        yield await Promise.all(page.map((v) => this._transformRow(v)));
       }
     }
   }
@@ -2082,7 +1520,7 @@
     if (expand.isCollection) {
       const items = Array.from(raw ?? []);
       if (expand.selectedKeys) {
-        return items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands));
+        return Promise.all(items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands)));
       } else {
         return navProp.transformValueFromDataverse(raw);
       }
@@ -2094,20 +1532,20 @@
       }
     }
   }
-  function _partialTransformItem(table, selectedKeys, raw, subExpands) {
+  async function _partialTransformItem(table, selectedKeys, raw, subExpands) {
     const result = {};
     const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.logicalName];
     const ctx = { table, client: table.client, recordId: recordId ?? "" };
     for (const key of selectedKeys) {
       const prop = table.fields[key];
       if (prop) {
-        result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
+        result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
       }
     }
     if (subExpands) {
       for (const expand of subExpands) {
         if (raw[expand.dvName] !== void 0) {
-          result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
+          result[expand.key] = await _processExpand(raw[expand.dvName], expand, table);
         }
       }
     }
@@ -2202,6 +1640,13 @@
   }
 
   class DataverseTable {
+    /**
+     * Standard Schema V1 props, delegated to the table's whole-record `schema`.
+     * Lets any Standard Schema–aware consumer validate the table directly.
+     */
+    get "~standard"() {
+      return this.schema["~standard"];
+    }
     client;
     fields;
     logicalName;
@@ -2209,7 +1654,7 @@
     kind = "table";
     type = "table";
     /**
-     * Whole-record valibot schema for this table — either the explicit
+     * Whole-record schema for this table — either the explicit
      * `schema` option or one composed from the individual field schemas.
      */
     schema;
@@ -2256,7 +1701,7 @@
       return this.client.getRecord(this.entitySetName, id, {
         ...options,
         query: tableQuery(this)
-      }).then((v2) => this.transformValueFromDataverse(v2)).catch((err) => {
+      }).then((v) => this.transformValueFromDataverse(v)).catch((err) => {
         if (err instanceof DataverseHttpError && err.status === 404) return null;
         throw err;
       });
@@ -2280,7 +1725,7 @@
       return this.client.getRecords(this.entitySetName, {
         ...options,
         query: tableQuery(this, queryOptions)
-      }).then((values) => values.map((v2) => this.transformValueFromDataverse(v2)));
+      }).then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
     }
     /**
      * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
@@ -2304,7 +1749,7 @@
           query: tableQuery(this, queryOptions)
         }
       )) {
-        yield this.transformValueFromDataverse(record);
+        yield await this.transformValueFromDataverse(record);
       }
     }
     /**
@@ -2330,7 +1775,7 @@
           query: tableQuery(this, queryOptions)
         }
       )) {
-        yield page.map((v2) => this.transformValueFromDataverse(v2));
+        yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
       }
     }
     /**
@@ -2345,7 +1790,7 @@
       const prop = this.fields[key];
       if (prop.kind === "value" || prop.type === "lookupId") {
         const propertyName = prop.type === "lookupId" ? prop.fromDataverseName : prop.logicalName;
-        return this.client.getPropertyValue(this.entitySetName, id, propertyName).then((v2) => prop.transformValueFromDataverse(v2));
+        return this.client.getPropertyValue(this.entitySetName, id, propertyName).then((v) => prop.transformValueFromDataverse(v));
       }
       if (prop.type === "collection" || prop.type === "collectionIds") {
         return this.client.getAssociatedRecords(
@@ -2354,7 +1799,7 @@
           prop.schemaName,
           { query: tableQuery(prop.table, queryOptions) }
         ).then(
-          (v2) => prop.transformValueFromDataverse(v2)
+          (v) => prop.transformValueFromDataverse(v)
         );
       }
       if (prop.type === "lookup") {
@@ -2364,7 +1809,7 @@
           prop.schemaName,
           { query: tableQuery(prop.table, queryOptions) }
         ).then(
-          (v2) => prop.transformValueFromDataverse(v2)
+          (v) => prop.transformValueFromDataverse(v)
         );
       }
       throw new Error("Invalid Property kind for getPropertyValue");
@@ -2398,16 +1843,16 @@
       } else if (prop.kind === "navigation" && prop.afterSave) {
         await prop.afterSave(ctx, value);
       } else {
-        let v2 = prop.transformValueToDataverse(value, ctx);
-        if (v2 instanceof Promise) v2 = await v2;
-        if (v2 === SKIP) {
+        let v = prop.transformValueToDataverse(value, ctx);
+        if (v instanceof Promise) v = await v;
+        if (v === SKIP) {
           if (prop.afterSave) await prop.afterSave(ctx, value);
         } else {
           await this.client.updatePropertyValue(
             this.entitySetName,
             id,
             this.fields[key].logicalName,
-            v2
+            v
           );
         }
       }
@@ -2458,7 +1903,7 @@
         // $select keeps all columns in the response.
         { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
       );
-      const transformed = this.transformValueFromDataverse(record);
+      const transformed = await this.transformValueFromDataverse(record);
       const guid = this.getPrimaryId(transformed);
       const ctx = { table: this, client: this.client, recordId: guid };
       await this._afterSave(ctx, value);
@@ -2534,7 +1979,7 @@
         transformed,
         { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
       );
-      const result = this.transformValueFromDataverse(record);
+      const result = await this.transformValueFromDataverse(record);
       ctx.recordId = this.getPrimaryId(result);
       await this._afterSave(ctx, value);
       return result;
@@ -2690,7 +2135,7 @@
     getPrimaryId(value) {
       return value[this.primaryKey.key];
     }
-    transformValueFromDataverse(value) {
+    async transformValueFromDataverse(value) {
       if (value === null) return null;
       const result = {};
       const pk = this.primaryKey;
@@ -2698,7 +2143,7 @@
       const ctx = recordId ? { table: this, client: this.client, recordId } : void 0;
       for (const [key, property] of Object.entries(this.fields)) {
         const raw = value[property.fromDataverseName];
-        result[key] = property.transformValueFromDataverse(raw, ctx);
+        result[key] = await property.transformValueFromDataverse(raw, ctx);
       }
       if (!(pk.key in result) && recordId !== void 0) {
         result[pk.key] = recordId;
@@ -2711,12 +2156,12 @@
       const result = {};
       for (const [key, property] of Object.entries(this.fields)) {
         if (property.getReadOnly() || !(key in value) || value[key] === void 0) continue;
-        let v2 = property.transformValueToDataverse(
+        let v = property.transformValueToDataverse(
           value[key],
           ctx
         );
-        if (v2 instanceof Promise) v2 = await v2;
-        if (v2 !== SKIP) result[property.toDataverseName] = v2;
+        if (v instanceof Promise) v = await v;
+        if (v !== SKIP) result[property.toDataverseName] = v;
       }
       return result;
     }
@@ -2730,7 +2175,7 @@
      */
     pickProperties(...keys) {
       const properties = Object.fromEntries(
-        Object.entries(this.fields).filter((v2) => keys.includes(v2[0]))
+        Object.entries(this.fields).filter((v) => keys.includes(v[0]))
       );
       return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
     }
@@ -2742,7 +2187,7 @@
      */
     omitProperties(...keys) {
       const properties = Object.fromEntries(
-        Object.entries(this.fields).filter((v2) => !keys.includes(v2[0]))
+        Object.entries(this.fields).filter((v) => !keys.includes(v[0]))
       );
       return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
     }
@@ -2797,11 +2242,9 @@
     T;
   }
   function composeFieldSchemas(fields) {
-    const shape = {};
-    for (const [key, field] of Object.entries(fields)) {
-      shape[key] = field.schema;
-    }
-    return object(shape);
+    return composeRecordSchema(Object.fromEntries(
+      Object.entries(fields).map(([key, field]) => [key, field.schema])
+    ));
   }
   function tableQuery(table, options) {
     return serializeODataSelect(buildTableQueryAst(table, options));
@@ -2828,10 +2271,11 @@
     }
   }
 
-  const DATE_SCHEMA = date$1();
-  const NON_EMPTY_STRING_SCHEMA = pipe(string$1(), minLength(1));
   function isValidDate(value) {
-    return safeParse(DATE_SCHEMA, value).success;
+    return value instanceof Date && !isNaN(value.getTime());
+  }
+  function schemasOf(fields) {
+    return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.schema]));
   }
   function parseValidDateOnly(value) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
@@ -2845,6 +2289,13 @@
   }
   const SKIP = Symbol("skip");
   class FieldBase {
+    /**
+     * Standard Schema V1 props, delegated to the field's validation `schema`.
+     * Lets any Standard Schema–aware consumer validate the field directly.
+     */
+    get "~standard"() {
+      return this.schema["~standard"];
+    }
     /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
     schemaName;
     /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
@@ -2863,7 +2314,8 @@
       this.toDataverseName = this.logicalName;
       this.#default = options?.default ?? defaults.defaultValue;
       this.#readOnly = options?.readonly ?? false;
-      this.schema = options?.schema ?? defaults.schema;
+      const base = options?.schema ?? defaults.schema;
+      this.schema = options?.required ? requiredOf(base) : base;
     }
     getDefault() {
       return this.#default;
@@ -2878,18 +2330,11 @@
       return value;
     }
   }
-  function buildObjectSchema(fields) {
-    const shape = {};
-    for (const [key, field] of Object.entries(fields)) {
-      shape[key] = field.schema;
-    }
-    return object(shape);
-  }
   class BooleanField extends FieldBase {
     kind = "value";
     type = "boolean";
     constructor(name, options) {
-      super(name, { defaultValue: false, schema: boolean$1() }, options);
+      super(name, { defaultValue: false, schema: BOOLEAN_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
       if (typeof value === "string") return value.toLowerCase() === "true";
@@ -2900,7 +2345,7 @@
     kind = "value";
     type = "number";
     constructor(name, options) {
-      super(name, { defaultValue: 0, schema: number$1() }, options);
+      super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
       if (typeof value === "string") {
@@ -2914,7 +2359,7 @@
     kind = "value";
     type = "string";
     constructor(name, options) {
-      super(name, { defaultValue: "", schema: string$1() }, options);
+      super(name, { defaultValue: "", schema: STRING_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
       return value ?? "";
@@ -2926,7 +2371,7 @@
     constructor(name, options) {
       super(name, {
         defaultValue: "",
-        schema: pipe(string$1(), uuid())
+        schema: GUID_SCHEMA
       }, options);
     }
     getDefault() {
@@ -2942,7 +2387,7 @@
       if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
       super(name, {
         defaultValue: [],
-        schema: array(custom((value) => values.includes(value), `Value not in [${values}]`))
+        schema: arrayOf(checkSchema((value) => values.includes(value), `Value not in [${values}]`))
       }, options);
       this.choices = Object.freeze(values);
     }
@@ -2951,14 +2396,14 @@
     }
     transformValueFromDataverse(value) {
       if (value == null || value === "") return [];
-      if (Array.isArray(value)) return value.map((v2) => Number(v2));
+      if (Array.isArray(value)) return value.map((v) => Number(v));
       return String(value).split(",").map((part) => Number(part.trim())).filter((n) => !Number.isNaN(n));
     }
     transformValueToDataverse(value) {
       if (value == null) return null;
       const arr = Array.isArray(value) ? value : [value];
       if (arr.length === 0) return null;
-      return arr.map((v2) => Number(v2)).join(",");
+      return arr.map((v) => Number(v)).join(",");
     }
   }
   class ChoiceField extends FieldBase {
@@ -2973,7 +2418,10 @@
       const values = Object.values(choices);
       super(name, {
         defaultValue: choices[Number(firstKey)],
-        schema: picklist(values)
+        schema: checkSchema(
+          (value) => values.includes(value),
+          `Value not in [${values}]`
+        )
       }, options);
       this.#choices = choices;
       this.choices = Object.freeze([...values]);
@@ -2984,8 +2432,8 @@
       return result;
     }
     transformValueToDataverse(value) {
-      for (const [k, v2] of Object.entries(this.#choices)) {
-        if (v2 === value) return Number(k);
+      for (const [k, v] of Object.entries(this.#choices)) {
+        if (v === value) return Number(k);
       }
       throw new Error(`Unknown choice label: ${value}`);
     }
@@ -2996,7 +2444,7 @@
     constructor(name, options) {
       super(name, {
         defaultValue: /* @__PURE__ */ new Date(),
-        schema: instance(Date)
+        schema: DATE_SCHEMA
       }, options);
     }
     getDefault() {
@@ -3015,7 +2463,7 @@
     constructor(name, options) {
       super(name, {
         defaultValue: parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
-        schema: instance(Date)
+        schema: DATE_SCHEMA
       }, options);
     }
     getDefault() {
@@ -3036,10 +2484,10 @@
     constructor(name, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(object({
-          url: optional(string$1()),
-          fullSizeUrl: optional(string$1()),
-          data: optional(nullable(instance(Blob)))
+        schema: nullableOf(composeRecordSchema({
+          url: optionalOf(STRING_SCHEMA),
+          fullSizeUrl: optionalOf(STRING_SCHEMA),
+          data: optionalOf(nullableOf(BLOB_SCHEMA))
         }))
       }, options);
     }
@@ -3070,10 +2518,10 @@
     constructor(name, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(object({
-          name: optional(string$1()),
-          url: optional(string$1()),
-          data: optional(nullable(instance(Blob)))
+        schema: nullableOf(composeRecordSchema({
+          name: optionalOf(STRING_SCHEMA),
+          url: optionalOf(STRING_SCHEMA),
+          data: optionalOf(nullableOf(BLOB_SCHEMA))
         }))
       }, options);
       this.fromDataverseName = `${name}_name`;
@@ -3137,7 +2585,7 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(NON_EMPTY_STRING_SCHEMA)
+        schema: nullableOf(GUID_SCHEMA)
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = `_${this.logicalName}_value`;
@@ -3167,7 +2615,7 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: [],
-        schema: array(lazy(() => buildObjectSchema(getTable().fields)))
+        schema: arrayOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = this.schemaName;
@@ -3176,10 +2624,10 @@
     get table() {
       return this.#table ??= this.#getTable();
     }
-    transformValueFromDataverse(value) {
-      return Array.from(value ?? []).map(
-        (v2) => this.table.transformValueFromDataverse(v2)
-      );
+    async transformValueFromDataverse(value) {
+      return Promise.all(Array.from(value ?? []).map(
+        (v) => this.table.transformValueFromDataverse(v)
+      ));
     }
     transformValueToDataverse() {
       return SKIP;
@@ -3187,7 +2635,7 @@
     async afterSave(ctx, value) {
       if (!Array.isArray(value)) return;
       const ids = await Promise.all(
-        value.map((v2) => this.table.upsertRecord(void 0, v2).then((r) => this.table.getPrimaryId(r)))
+        value.map((v) => this.table.upsertRecord(void 0, v).then((r) => this.table.getPrimaryId(r)))
       );
       await ctx.client.associateRecordToList(
         ctx.table.entitySetName,
@@ -3212,7 +2660,7 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(lazy(() => buildObjectSchema(getTable().fields)))
+        schema: nullableOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = this.schemaName;
@@ -3221,7 +2669,7 @@
     get table() {
       return this.#table ??= this.#getTable();
     }
-    transformValueFromDataverse(value) {
+    async transformValueFromDataverse(value) {
       return value == null ? null : this.table.transformValueFromDataverse(value);
     }
     transformValueToDataverse() {
@@ -3470,7 +2918,7 @@
       if (options?.useRawOrderBy) this._useRawOrderBy = true;
       if (options?.options) this._options = options.options;
     }
-    _transformRow(v) {
+    async _transformRow(v) {
       const aliasInfo = this._buildAliasInfo();
       if (aliasInfo.size > 0) {
         const result = {};
@@ -3478,7 +2926,7 @@
         const ctx = { table: this._table, client: this._table.client, recordId };
         for (const [alias, info] of aliasInfo) {
           if (info.name in v) {
-            result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+            result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
           } else {
             result[alias] = info.getDefault();
           }
@@ -3486,7 +2934,7 @@
         result[ETAG] = v["@odata.etag"];
         return result;
       }
-      return this._table.transformValueFromDataverse(v);
+      return await this._table.transformValueFromDataverse(v);
     }
     async execute(options) {
       this._applyExecuteOptions(options);
@@ -3508,7 +2956,7 @@
         this._table.entitySetName,
         { ...options, query: this.toString() }
       )) {
-        yield page.map((v) => this._transformRow(v));
+        yield await Promise.all(page.map((v) => this._transformRow(v)));
       }
     }
     _buildAliasInfo() {
@@ -3937,7 +3385,7 @@
       if (options?.useRawOrderBy) this._useRawOrderBy = true;
       if (options?.options) this._options = options.options;
     }
-    _transformRow(v) {
+    async _transformRow(v) {
       const aliasInfo = this._buildAliasInfo();
       if (aliasInfo.size > 0) {
         const result = {};
@@ -3945,7 +3393,7 @@
         const ctx = { table: this._table, client: this._table.client, recordId };
         for (const [alias, info] of aliasInfo) {
           if (info.name in v) {
-            result[alias] = info.field ? info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+            result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
           } else {
             result[alias] = info.getDefault();
           }
@@ -3953,7 +3401,7 @@
         result[ETAG] = v["@odata.etag"];
         return result;
       }
-      return this._table.transformValueFromDataverse(v);
+      return await this._table.transformValueFromDataverse(v);
     }
     async execute(options) {
       this._applyExecuteOptions(options);
@@ -3975,7 +3423,7 @@
         this._table.entitySetName,
         { ...options, query: this.toString() }
       )) {
-        yield page.map((v) => this._transformRow(v));
+        yield await Promise.all(page.map((v) => this._transformRow(v)));
       }
     }
     _buildAliasInfo() {
@@ -4075,6 +3523,264 @@
       yield* this.#builder.iteratePages(options);
     }
   }
+
+  const instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
+
+  let idbProxyableTypes;
+  let cursorAdvanceMethods;
+  // This is a function to prevent it throwing up in node environments.
+  function getIdbProxyableTypes() {
+      return (idbProxyableTypes ||
+          (idbProxyableTypes = [
+              IDBDatabase,
+              IDBObjectStore,
+              IDBIndex,
+              IDBCursor,
+              IDBTransaction,
+          ]));
+  }
+  // This is a function to prevent it throwing up in node environments.
+  function getCursorAdvanceMethods() {
+      return (cursorAdvanceMethods ||
+          (cursorAdvanceMethods = [
+              IDBCursor.prototype.advance,
+              IDBCursor.prototype.continue,
+              IDBCursor.prototype.continuePrimaryKey,
+          ]));
+  }
+  const transactionDoneMap = new WeakMap();
+  const transformCache = new WeakMap();
+  const reverseTransformCache = new WeakMap();
+  function promisifyRequest(request) {
+      const promise = new Promise((resolve, reject) => {
+          const unlisten = () => {
+              request.removeEventListener('success', success);
+              request.removeEventListener('error', error);
+          };
+          const success = () => {
+              resolve(wrap(request.result));
+              unlisten();
+          };
+          const error = () => {
+              reject(request.error);
+              unlisten();
+          };
+          request.addEventListener('success', success);
+          request.addEventListener('error', error);
+      });
+      // This mapping exists in reverseTransformCache but doesn't exist in transformCache. This
+      // is because we create many promises from a single IDBRequest.
+      reverseTransformCache.set(promise, request);
+      return promise;
+  }
+  function cacheDonePromiseForTransaction(tx) {
+      // Early bail if we've already created a done promise for this transaction.
+      if (transactionDoneMap.has(tx))
+          return;
+      const done = new Promise((resolve, reject) => {
+          const unlisten = () => {
+              tx.removeEventListener('complete', complete);
+              tx.removeEventListener('error', error);
+              tx.removeEventListener('abort', error);
+          };
+          const complete = () => {
+              resolve();
+              unlisten();
+          };
+          const error = () => {
+              reject(tx.error || new DOMException('AbortError', 'AbortError'));
+              unlisten();
+          };
+          tx.addEventListener('complete', complete);
+          tx.addEventListener('error', error);
+          tx.addEventListener('abort', error);
+      });
+      // Cache it for later retrieval.
+      transactionDoneMap.set(tx, done);
+  }
+  let idbProxyTraps = {
+      get(target, prop, receiver) {
+          if (target instanceof IDBTransaction) {
+              // Special handling for transaction.done.
+              if (prop === 'done')
+                  return transactionDoneMap.get(target);
+              // Make tx.store return the only store in the transaction, or undefined if there are many.
+              if (prop === 'store') {
+                  return receiver.objectStoreNames[1]
+                      ? undefined
+                      : receiver.objectStore(receiver.objectStoreNames[0]);
+              }
+          }
+          // Else transform whatever we get back.
+          return wrap(target[prop]);
+      },
+      set(target, prop, value) {
+          target[prop] = value;
+          return true;
+      },
+      has(target, prop) {
+          if (target instanceof IDBTransaction &&
+              (prop === 'done' || prop === 'store')) {
+              return true;
+          }
+          return prop in target;
+      },
+  };
+  function replaceTraps(callback) {
+      idbProxyTraps = callback(idbProxyTraps);
+  }
+  function wrapFunction(func) {
+      // Due to expected object equality (which is enforced by the caching in `wrap`), we
+      // only create one new func per func.
+      // Cursor methods are special, as the behaviour is a little more different to standard IDB. In
+      // IDB, you advance the cursor and wait for a new 'success' on the IDBRequest that gave you the
+      // cursor. It's kinda like a promise that can resolve with many values. That doesn't make sense
+      // with real promises, so each advance methods returns a new promise for the cursor object, or
+      // undefined if the end of the cursor has been reached.
+      if (getCursorAdvanceMethods().includes(func)) {
+          return function (...args) {
+              // Calling the original function with the proxy as 'this' causes ILLEGAL INVOCATION, so we use
+              // the original object.
+              func.apply(unwrap(this), args);
+              return wrap(this.request);
+          };
+      }
+      return function (...args) {
+          // Calling the original function with the proxy as 'this' causes ILLEGAL INVOCATION, so we use
+          // the original object.
+          return wrap(func.apply(unwrap(this), args));
+      };
+  }
+  function transformCachableValue(value) {
+      if (typeof value === 'function')
+          return wrapFunction(value);
+      // This doesn't return, it just creates a 'done' promise for the transaction,
+      // which is later returned for transaction.done (see idbObjectHandler).
+      if (value instanceof IDBTransaction)
+          cacheDonePromiseForTransaction(value);
+      if (instanceOfAny(value, getIdbProxyableTypes()))
+          return new Proxy(value, idbProxyTraps);
+      // Return the same value back if we're not going to transform it.
+      return value;
+  }
+  function wrap(value) {
+      // We sometimes generate multiple promises from a single IDBRequest (eg when cursoring), because
+      // IDB is weird and a single IDBRequest can yield many responses, so these can't be cached.
+      if (value instanceof IDBRequest)
+          return promisifyRequest(value);
+      // If we've already transformed this value before, reuse the transformed value.
+      // This is faster, but it also provides object equality.
+      if (transformCache.has(value))
+          return transformCache.get(value);
+      const newValue = transformCachableValue(value);
+      // Not all types are transformed.
+      // These may be primitive types, so they can't be WeakMap keys.
+      if (newValue !== value) {
+          transformCache.set(value, newValue);
+          reverseTransformCache.set(newValue, value);
+      }
+      return newValue;
+  }
+  const unwrap = (value) => reverseTransformCache.get(value);
+
+  const readMethods = ['get', 'getKey', 'getAll', 'getAllKeys', 'count'];
+  const writeMethods = ['put', 'add', 'delete', 'clear'];
+  const cachedMethods = new Map();
+  function getMethod(target, prop) {
+      if (!(target instanceof IDBDatabase &&
+          !(prop in target) &&
+          typeof prop === 'string')) {
+          return;
+      }
+      if (cachedMethods.get(prop))
+          return cachedMethods.get(prop);
+      const targetFuncName = prop.replace(/FromIndex$/, '');
+      const useIndex = prop !== targetFuncName;
+      const isWrite = writeMethods.includes(targetFuncName);
+      if (
+      // Bail if the target doesn't exist on the target. Eg, getAll isn't in Edge.
+      !(targetFuncName in (useIndex ? IDBIndex : IDBObjectStore).prototype) ||
+          !(isWrite || readMethods.includes(targetFuncName))) {
+          return;
+      }
+      const method = async function (storeName, ...args) {
+          // isWrite ? 'readwrite' : undefined gzipps better, but fails in Edge :(
+          const tx = this.transaction(storeName, isWrite ? 'readwrite' : 'readonly');
+          let target = tx.store;
+          if (useIndex)
+              target = target.index(args.shift());
+          // Must reject if op rejects.
+          // If it's a write operation, must reject if tx.done rejects.
+          // Must reject with op rejection first.
+          // Must resolve with op value.
+          // Must handle both promises (no unhandled rejections)
+          return (await Promise.all([
+              target[targetFuncName](...args),
+              isWrite && tx.done,
+          ]))[0];
+      };
+      cachedMethods.set(prop, method);
+      return method;
+  }
+  replaceTraps((oldTraps) => ({
+      ...oldTraps,
+      get: (target, prop, receiver) => getMethod(target, prop) || oldTraps.get(target, prop, receiver),
+      has: (target, prop) => !!getMethod(target, prop) || oldTraps.has(target, prop),
+  }));
+
+  const advanceMethodProps = ['continue', 'continuePrimaryKey', 'advance'];
+  const methodMap = {};
+  const advanceResults = new WeakMap();
+  const ittrProxiedCursorToOriginalProxy = new WeakMap();
+  const cursorIteratorTraps = {
+      get(target, prop) {
+          if (!advanceMethodProps.includes(prop))
+              return target[prop];
+          let cachedFunc = methodMap[prop];
+          if (!cachedFunc) {
+              cachedFunc = methodMap[prop] = function (...args) {
+                  advanceResults.set(this, ittrProxiedCursorToOriginalProxy.get(this)[prop](...args));
+              };
+          }
+          return cachedFunc;
+      },
+  };
+  async function* iterate(...args) {
+      // tslint:disable-next-line:no-this-assignment
+      let cursor = this;
+      if (!(cursor instanceof IDBCursor)) {
+          cursor = await cursor.openCursor(...args);
+      }
+      if (!cursor)
+          return;
+      cursor = cursor;
+      const proxiedCursor = new Proxy(cursor, cursorIteratorTraps);
+      ittrProxiedCursorToOriginalProxy.set(proxiedCursor, cursor);
+      // Map this double-proxy back to the original, so other cursor methods work.
+      reverseTransformCache.set(proxiedCursor, unwrap(cursor));
+      while (cursor) {
+          yield proxiedCursor;
+          // If one of the advancing methods was not called, call continue().
+          cursor = await (advanceResults.get(proxiedCursor) || cursor.continue());
+          advanceResults.delete(proxiedCursor);
+      }
+  }
+  function isIteratorProp(target, prop) {
+      return ((prop === Symbol.asyncIterator &&
+          instanceOfAny(target, [IDBIndex, IDBObjectStore, IDBCursor])) ||
+          (prop === 'iterate' && instanceOfAny(target, [IDBIndex, IDBObjectStore])));
+  }
+  replaceTraps((oldTraps) => ({
+      ...oldTraps,
+      get(target, prop, receiver) {
+          if (isIteratorProp(target, prop))
+              return iterate;
+          return oldTraps.get(target, prop, receiver);
+      },
+      has(target, prop) {
+          return isIteratorProp(target, prop) || oldTraps.has(target, prop);
+      },
+  }));
 
   const defaults = {
     entitySetName: "nnsyc200_test_tables",
@@ -4410,7 +4116,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-26T15:33:45.380Z"}
+      meta.textContent = `build ${"2026-09-14T14:10:29.728Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4499,7 +4205,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-26T15:33:45.380Z",
+          build: "2026-09-14T14:10:29.728Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4518,7 +4224,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-26T15:33:45.380Z"}\``,
+        `Build: \`${"2026-09-14T14:10:29.728Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

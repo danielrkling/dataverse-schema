@@ -23,7 +23,7 @@ async function boot(): Promise<void> {
   if (params.get("autorun") === "1") void reporter.runSelected()
 
   window.addEventListener("unload", () => {
-    // No global DataverseSyncDB is owned here (each suite creates its own),
+    // No global SyncEngine is owned here (each suite creates its own),
     // but call sweep on leave so interrupted runs don't leave dvt* rows.
     void sweepOrphans(tables.TestTable)
   })

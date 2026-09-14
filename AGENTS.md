@@ -77,10 +77,16 @@ src/
       field-ref.ts             — FieldRef type used by filter + aggregation expressions
       proxy.ts                 — Proxy helpers for type-safe field references in query builders
     path.ts                    — FieldPath / path resolution used across query builders
-  tanstack-db/
-    index.ts                   — Re-exports the @tanstack/db integration
-    collection.ts              — dataverseCollectionOptions() + collection config/types
-    offline-collection.ts      — DataverseSyncDB (IndexedDB via idb), MutationPersistenceError, offline collection config/types
+  tanstack-db.ts               — TanStack DB adapter: dataverseCollectionOptions,
+                                 dataverseOfflineCollectionOptions (offline factory over
+                                 SyncEngine), serializeMutation (PendingMutation mapping)
+  sync/                        — Vanilla offline sync engine (no TanStack dependency)
+    index.ts                   — barrel (also re-exported from the package root)
+    queue.ts                   — SyncEngine: IndexedDB mutation queue, flush/retries,
+                                 force/rebase resolutions, conflict details, etag cache
+    types.ts                   — QueuedMutation, MutationPersistenceError
+    classifiers.ts             — serializeError, isConcurrencyError, isKeyViolation
+    util.ts                    — plainClone, valuesEqual, isMetaKey/isMetaOnly
 test/
   util.test.ts                 — util helpers (etag, xml, dates, image URLs)
   filter-render.test.ts        — FilterExpr rendering to OData + FetchXML (incl. choice transforms)
@@ -193,4 +199,4 @@ test/
 - `fromDataverseName` and `toDataverseName` handle the mapping between TS property names and Dataverse API names
 - Navigation properties (`lookup`, `collection`, `lookupId`, `collectionIds`) accept a **thunk** (`() => Table`) to handle circular references between tables
 - Build output is produced by `tsdown` (config in `tsdown.config.ts`); the vite config is retained for the dev server and the browser-test bundle only
-- The `@tanstack/db` integration is a separate entry point: `dataverse-schema/tanstack-db`
+- The `@tanstack/db` integration is a separate entry point: `dataverse-schema/tanstack-db`. The offline queue itself lives behind the `SyncEngine` class in `src/sync/` — `dataverseOfflineCollectionOptions(engine, config)` builds offline collection options over any engine instance.

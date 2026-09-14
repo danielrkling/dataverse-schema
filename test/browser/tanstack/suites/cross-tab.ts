@@ -1,5 +1,5 @@
 import { createCollection } from "@tanstack/db"
-import { DataverseSyncDB } from "../../../../src/tanstack-db"
+import { SyncEngine, dataverseOfflineCollectionOptions } from "../../../../src/tanstack-db"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -7,7 +7,7 @@ import { makeSyncDB, forceVisible, waitFor } from "../db-helper"
 
 /**
  * Cross-tab behaviour: two collection instances backed by SEPARATE
- * DataverseSyncDB instances that share the SAME database name. A BroadcastChannel
+ * SyncEngine instances that share the SAME database name. A BroadcastChannel
  * does not echo to the sender within one realm, but it DOES deliver to other
  * BroadcastChannel objects (even in the same page) with the same name — which is
  * exactly how two browser tabs communicate. So this exercises the real
@@ -25,13 +25,13 @@ export const crossTabSuite: Suite = {
       fn: async () => {
         const dbName = `dvt-xtab-${Date.now().toString(36)}`
         const tables = [ctx.tables.TestTable, ctx.tables.TestTable0]
-        const dbA = new DataverseSyncDB(dbName, tables, 1)
-        const dbB = new DataverseSyncDB(dbName, tables, 1)
+        const dbA = new SyncEngine(dbName, tables, 1)
+        const dbB = new SyncEngine(dbName, tables, 1)
         const restoreVis = forceVisible()
         let a: any, b: any
         try {
-          a = createCollection(dbA.createCollectionOptions({ table: ctx.tables.TestTable })) as any
-          b = createCollection(dbB.createCollectionOptions({ table: ctx.tables.TestTable })) as any
+          a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable })) as any
+          b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable })) as any
           await waitFor(() => a.size >= 1 && b.size >= 1, 8000)
           const name = ctx.fx.name("xtab")
           const id = crypto.randomUUID()
@@ -53,13 +53,13 @@ export const crossTabSuite: Suite = {
       fn: async () => {
         const dbName = `dvt-xtab-${Date.now().toString(36)}`
         const tables = [ctx.tables.TestTable, ctx.tables.TestTable0]
-        const dbA = new DataverseSyncDB(dbName, tables, 1)
-        const dbB = new DataverseSyncDB(dbName, tables, 1)
+        const dbA = new SyncEngine(dbName, tables, 1)
+        const dbB = new SyncEngine(dbName, tables, 1)
         const restoreVis = forceVisible()
         let a: any, b: any
         try {
-          a = createCollection(dbA.createCollectionOptions({ table: ctx.tables.TestTable })) as any
-          b = createCollection(dbB.createCollectionOptions({ table: ctx.tables.TestTable })) as any
+          a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable })) as any
+          b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable })) as any
           await waitFor(() => a.size >= 1 && b.size >= 1, 8000)
           const name = ctx.fx.name("xtab-abort")
           const id = crypto.randomUUID()

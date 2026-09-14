@@ -1,3 +1,5 @@
+import { openDB } from "idb";
+
 //#region src/util.ts
 const ETAG = "$etag";
 const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
@@ -2105,6 +2107,13 @@ function buildTableQueryAst(table, options) {
 * console.log(record.name); // typed as string
 */
 var DataverseTable = class DataverseTable {
+	/**
+	* Standard Schema V1 props, delegated to the table's whole-record `schema`.
+	* Lets any Standard Schema–aware consumer validate the table directly.
+	*/
+	get "~standard"() {
+		return this.schema["~standard"];
+	}
 	client;
 	fields;
 	logicalName;
@@ -2744,6 +2753,13 @@ const SKIP = Symbol("skip");
 * handy for nullable fields.
 */
 var FieldBase = class {
+	/**
+	* Standard Schema V1 props, delegated to the field's validation `schema`.
+	* Lets any Standard Schema–aware consumer validate the field directly.
+	*/
+	get "~standard"() {
+		return this.schema["~standard"];
+	}
 	/** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
 	schemaName;
 	/** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
@@ -4509,4 +4525,542 @@ function serializeFetchXml(ast) {
 }
 
 //#endregion
-export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isInactive, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, primaryKey, requiredOf, rxGUID, select, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, wrapString, xml };
+//#region src/sync/classifiers.ts
+/**
+* Reduces a thrown error to a structured-clone-safe plain object before it is
+* persisted into the IndexedDB errored store. Besides keeping the `put` from
+* throwing (`DataverseHttpError.response` holds a live `Response` object,
+* which cannot be cloned), this preserves the HTTP status as an own property
+* so conflict detection keeps working after a page reload — once the error
+* has passed through IndexedDB, `instanceof DataverseHttpError` no longer
+* holds (the class identity is not restored), only the data survives.
+*/
+function serializeError(error) {
+	if (error instanceof DataverseHttpError) return {
+		name: error.name,
+		message: error.message,
+		status: error.status,
+		statusText: error.statusText,
+		body: error.body
+	};
+	if (error instanceof Error) return {
+		name: error.name,
+		message: error.message
+	};
+	return {
+		name: "UnknownError",
+		value: error
+	};
+}
+const KEY_VIOLATION_CODES = /* @__PURE__ */ new Set(["0x80060892", "0x80040333"]);
+const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
+/**
+* Returns true when the error is a Dataverse 412 (Precondition Failed)
+* response — an optimistic-concurrency failure meaning the server's etag no
+* longer matches the etag the mutation was built against. Such mutations are
+* moved to the errored store and can be re-applied with `force` or
+* `useFreshEtag` retry options (see `SyncQueue.retryErroredMutation`).
+*
+* Because stored errors are serialized plain objects ({@link serializeError}),
+* detection cannot rely on `instanceof` alone — it also matches the persisted
+* `status` property shape, so an error read back after a page reload is still
+* recognized.
+*
+* Duplicate-key violations can surface as 412s too, but they are NOT
+* concurrency failures — Force only removes the `If-Match` precondition and
+* cannot make a record unique, and rebasing onto the server's etag changes
+* nothing either. Those are excluded here so resolution UIs don't offer
+* Force/Rebase for them; use {@link isKeyViolation} to detect them instead.
+*/
+function isConcurrencyError(error) {
+	if (error?.status !== 412) return false;
+	return !isKeyViolation(error);
+}
+/**
+* Returns true when a Dataverse error is a unique-key / duplicate-detection
+* violation (e.g. `DuplicateRecordEntityKey`, `0x80060892`: "Entity Key {0}
+* violated. A record with the same value for {1} already exists."), or the
+* classic duplicate-detection result (`DuplicateRecordsFound`,
+* `0x80040333`). These failures are deterministic — the same payload will
+* keep failing no matter when it is retried and no matter which etag it
+* carries — so they skip the retry cycle entirely and move straight to the
+* errored store. Resolution is never automatic: the payload must be edited
+* (different key values) or discarded.
+*/
+function isKeyViolation(error) {
+	if (error instanceof DataverseHttpError) error = { body: error.body };
+	const body = error?.body;
+	const code = typeof body?.code === "string" ? body.code.toLowerCase() : void 0;
+	if (code && KEY_VIOLATION_CODES.has(code)) return true;
+	const message = typeof body?.message === "string" ? body.message : void 0;
+	return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
+}
+
+//#endregion
+//#region src/sync/util.ts
+/**
+* Deep-copies a value into plain objects/arrays. Used to strip the reactive
+* proxies that @tanstack/db's live-query/materialize layer wraps rows in —
+* proxies cannot pass through structuredClone, so any mutation payload that
+* came from a joined row would otherwise throw when written to IndexedDB
+* (or posted over the BroadcastChannel). Reading through the proxy and
+* rebuilding plain containers is enough; no proxy detection is needed.
+*/
+function plainClone(value) {
+	if (Array.isArray(value)) return value.map(plainClone);
+	if (value instanceof Date) return new Date(value.getTime());
+	if (value instanceof Blob || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value;
+	if (value !== null && typeof value === "object") {
+		const out = {};
+		for (const key of Object.keys(value)) out[key] = plainClone(value[key]);
+		return out;
+	}
+	return value;
+}
+/**
+* True for the synthetic bookkeeping properties @tanstack/db (and this
+* library's adapters) attach to rows beside the real Dataverse columns —
+* `$key`, `$collectionId`, `$synced`, `$origin`, … — plus `$etag`. They
+* exist only in the optimistic/in-memory row, never on a server snapshot,
+* so they would always pollute a field-level conflict diff with phantom
+* "differences".
+*/
+function isMetaKey(key) {
+	return key.startsWith("$");
+}
+/**
+* True when a delta object contains only bookkeeping keys (`$`-prefixed) —
+* i.e., patching it would write nothing to Dataverse. An empty delta
+* (length 0) is left alone: there is nothing to fall back on and the
+* caller's body building will produce an empty (no-op) request either way.
+*/
+function isMetaOnly(delta) {
+	const keys = Object.keys(delta ?? {});
+	return keys.length > 0 && keys.every(isMetaKey);
+}
+/**
+* Structural equality for comparing a local mutation field value against the
+* server record in conflict inspection. Handles the value shapes Dataverse
+* records carry: primitives, Date instances (compare by timestamp — JSON
+* round-trips make instance identity useless), arrays, nested plain objects,
+* and binary values (Blob identity).
+*/
+function valuesEqual(a, b) {
+	if (a === b) return true;
+	if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+		return a.every((v, i) => valuesEqual(v, b[i]));
+	}
+	if (a && b && typeof a === "object" && typeof b === "object") {
+		const ak = Object.keys(a), bk = Object.keys(b);
+		if (ak.length !== bk.length) return false;
+		return ak.every((k) => valuesEqual(a[k], b[k]));
+	}
+	return false;
+}
+
+//#endregion
+//#region src/sync/types.ts
+var MutationPersistenceError = class extends Error {
+	mutationIds;
+	cause;
+	constructor(message, mutationIds, cause) {
+		super(message);
+		this.mutationIds = mutationIds;
+		this.cause = cause;
+		this.name = "MutationPersistenceError";
+	}
+};
+
+//#endregion
+//#region src/sync/queue.ts
+const MAX_MUTATION_ATTEMPTS = 3;
+const RETRY_BASE_DELAY = 1e3;
+const RETRY_MAX_DELAY = 6e4;
+/**
+* The vanilla offline sync engine: a durable IndexedDB mutation queue with a
+* flush cycle (web-lock serialized, cross-tab broadcast), deterministic
+* failure classification, etag freshness bookkeeping, and conflict
+* resolutions (force / rebase / discard / plain retry). It talks to Dataverse
+* through the registered {@link DataverseTable}s and knows nothing about
+* TanStack DB; adapters (see src/tanstack-db.ts) only map their mutation
+* format into {@link QueuedMutation} and feed it to {@link enqueue}.
+*/
+var SyncEngine = class {
+	name;
+	version;
+	tables = /* @__PURE__ */ new Map();
+	MUTATION_QUEUE_NAME = "Mutations";
+	ERRORED_MUTATIONS_NAME = "Errored Mutations";
+	channel;
+	closed = false;
+	collectionStores = /* @__PURE__ */ new Set();
+	collectionStorePromises = /* @__PURE__ */ new Map();
+	dbVersion;
+	activeFetchControllers = /* @__PURE__ */ new Set();
+	collectionCleanups = /* @__PURE__ */ new Set();
+	keyEtags = /* @__PURE__ */ new Map();
+	retryTimer;
+	channelMessageHandler;
+	mutationListeners = /* @__PURE__ */ new Set();
+	constructor(name, tables, version) {
+		this.name = name;
+		this.channel = new BroadcastChannel(name);
+		this.version = version;
+		this.dbVersion = version;
+		for (const table of tables) this.tables.set(table.entitySetName, table);
+		this.channelMessageHandler = (event) => {
+			if (event.data?.type === "ABORT_ACTIVE_FETCHES") this.abortActiveFetches();
+		};
+		this.channel.addEventListener("message", this.channelMessageHandler);
+	}
+	sequence = 0;
+	nextSequence() {
+		return this.sequence++;
+	}
+	/**
+	* Registers a listener invoked (synchronously, best-effort) whenever the
+	* offline mutation state changes in this tab: mutations get enqueued,
+	* flushed, moved to/from the errored store, or discarded. Returns an
+	* unsubscribe function. Cross-tab changes are not delivered directly —
+	* each tab's own queueMutations/flushQueue activity fires the hook, so
+	* attach a listener per tab that redraws from
+	* {@link getQueueCount}/{@link getErroredMutations}.
+	*/
+	onMutationsChanged(listener) {
+		this.mutationListeners.add(listener);
+		return () => {
+			this.mutationListeners.delete(listener);
+		};
+	}
+	notifyMutationsChanged() {
+		for (const listener of [...this.mutationListeners]) try {
+			listener();
+		} catch (err) {
+			console.warn("[dataverse-offline] listener failed:", err);
+		}
+	}
+	db;
+	async getDB() {
+		if (!this.db) {
+			const self = this;
+			this.db = await openDB(this.name, this.dbVersion, { upgrade(database, _oldVersion, _newVersion, transaction) {
+				for (const storeName of Array.from(database.objectStoreNames)) if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) database.deleteObjectStore(storeName);
+				let store = database.objectStoreNames.contains(self.MUTATION_QUEUE_NAME) ? transaction.objectStore(self.MUTATION_QUEUE_NAME) : database.createObjectStore(self.MUTATION_QUEUE_NAME, { keyPath: "id" });
+				if (!store.indexNames.contains("by_timestamp")) store.createIndex("by_timestamp", ["timestamp", "sequence"]);
+				if (!database.objectStoreNames.contains(self.ERRORED_MUTATIONS_NAME)) database.createObjectStore(self.ERRORED_MUTATIONS_NAME, { keyPath: "id" });
+				for (const table of self.tables.values()) if (!database.objectStoreNames.contains(table.entitySetName)) database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
+			} });
+		}
+		return this.db;
+	}
+	/**
+	* Registers a per-collection cache store (keyed by collection id). If the
+	* database is already open without this store, it is reopened with a
+	* bumped version so the upgrade callback can create it. The returned
+	* promise resolves once the store is safe to read/write.
+	*/
+	ensureCollectionStore(name) {
+		let p = this.collectionStorePromises.get(name);
+		if (!p) {
+			p = (async () => {
+				this.collectionStores.add(name);
+				let db = await this.getDB();
+				if (!db.objectStoreNames.contains(name)) {
+					db.close();
+					this.db = void 0;
+					this.dbVersion = db.version + 1;
+					await this.getDB();
+				}
+			})();
+			this.collectionStorePromises.set(name, p);
+		}
+		return p;
+	}
+	/**
+	* Instantly aborts any in-flight remote server GET requests across all collections.
+	*/
+	abortActiveFetches() {
+		for (const controller of this.activeFetchControllers) controller.abort("New mutation enqueued");
+		this.activeFetchControllers.clear();
+	}
+	/** Registers a collection-scoped cleanup to run when the queue closes. */
+	addCollectionCleanup(cleanup) {
+		this.collectionCleanups.add(cleanup);
+	}
+	/** Registers an in-flight fetch controller so abortActiveFetches can cancel it. */
+	trackActiveFetch(controller) {
+		this.activeFetchControllers.add(controller);
+	}
+	/** Unregisters a fetch controller previously registered with trackActiveFetch. */
+	untrackActiveFetch(controller) {
+		this.activeFetchControllers.delete(controller);
+	}
+	get isClosed() {
+		return this.closed;
+	}
+	close() {
+		if (this.closed) return;
+		this.closed = true;
+		this.abortActiveFetches();
+		if (this.retryTimer) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = void 0;
+		}
+		for (const cleanup of [...this.collectionCleanups]) cleanup();
+		this.collectionCleanups.clear();
+		this.mutationListeners.clear();
+		this.channel.removeEventListener("message", this.channelMessageHandler);
+		this.channel.close();
+		this.db?.close();
+		this.db = void 0;
+	}
+	/**
+	* Flushes the mutation queue to Dataverse. After a successful flush the
+	* authoritative server records (carrying fresh etags) are broadcast via the
+	* MUTATIONS_ADDED channel so every collection reconciles its in-memory row
+	* and IDB cache store — see the offline adapter's handleTabMessage.
+	*/
+	async flushQueue() {
+		await navigator.locks.request(this.name, async () => {
+			const db = await this.getDB();
+			const flushed = [];
+			let changed = false;
+			while (true) {
+				const cursor = await db.transaction(this.MUTATION_QUEUE_NAME, "readonly").store.index("by_timestamp").openCursor(null, "next");
+				if (!cursor) break;
+				const mutation = cursor.value;
+				if (mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) break;
+				const table = this.tables.get(mutation.entitySetName);
+				if (!table) {
+					console.error(`Table ${mutation.entitySetName} not registered in DB`);
+					await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+					continue;
+				}
+				if ((mutation.type === "update" || mutation.type === "delete") && !mutation.force) {
+					const fresh = this.keyEtags.get(mutation.key);
+					if (fresh && fresh !== mutation.ifMatch) mutation.ifMatch = fresh;
+				}
+				try {
+					if (mutation.type === "insert") {
+						const record = await table.createRecord(mutation.value);
+						flushed.push({
+							id: mutation.id,
+							type: "insert",
+							key: table.getPrimaryId(record),
+							value: record,
+							entitySetName: mutation.entitySetName
+						});
+					} else if (mutation.type === "update") {
+						const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
+						const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
+						const etag = getEtag(record);
+						if (etag) {
+							this.keyEtags.set(mutation.key, etag);
+							mutation.ifMatch = etag;
+							await db.put(this.MUTATION_QUEUE_NAME, mutation);
+						}
+						flushed.push({
+							id: mutation.id,
+							type: "update",
+							key: mutation.key,
+							value: record,
+							entitySetName: mutation.entitySetName
+						});
+					} else if (mutation.type === "delete") {
+						await table.deleteRecord(mutation.key, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
+						this.keyEtags.delete(mutation.key);
+						flushed.push({
+							id: mutation.id,
+							type: "delete",
+							key: mutation.key,
+							value: void 0,
+							entitySetName: mutation.entitySetName
+						});
+					}
+					await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+					changed = true;
+				} catch (e) {
+					if (!navigator.onLine) break;
+					console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
+					mutation.error = serializeError(e);
+					mutation.lastAttemptAt = Date.now();
+					if (isConcurrencyError(e) || isKeyViolation(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+					else mutation.attempts++;
+					if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
+						mutation.nextAttemptAt = void 0;
+						await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+						await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
+						changed = true;
+					} else {
+						const delay = Math.min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * 2 ** (mutation.attempts - 1));
+						mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
+						await db.put(this.MUTATION_QUEUE_NAME, mutation);
+						if (navigator.onLine) {
+							if (this.retryTimer) clearTimeout(this.retryTimer);
+							this.retryTimer = setTimeout(() => {
+								this.retryTimer = void 0;
+								this.flushQueue();
+							}, delay);
+						}
+						break;
+					}
+				}
+			}
+			if (flushed.length > 0) this.channel.postMessage({
+				type: "MUTATIONS_ADDED",
+				mutations: flushed
+			});
+			if (changed) this.notifyMutationsChanged();
+		});
+	}
+	async getQueueCount() {
+		return (await this.getDB()).count(this.MUTATION_QUEUE_NAME);
+	}
+	async getErroredMutations() {
+		return (await this.getDB()).getAll(this.ERRORED_MUTATIONS_NAME);
+	}
+	/**
+	* Snapshot for presenting a conflicted mutation to a user: the server's
+	* current authoritative record, and which of the mutation's fields the
+	* server state actually differs on. A differing etag only *means*
+	* something touched the record — the field diff is what makes "Force",
+	* "Rebase" or "Discard" an informed choice instead of a blind button.
+	*
+	* Semantics:
+	* - `server` is the transformed record (null when the record was deleted
+	*   server-side), including *all* of the table's fields — not just the
+	*   locally changed ones.
+	* - `conflictingFields` compares only the fields the local mutation
+	*   touches against the server record (see {@link ConflictDetails}).
+	* Unknown fields (e.g. navigation blobs not present in the snapshot) are
+	* treated as conflicting rather than silently ignored.
+	*/
+	async getConflictDetails(mutation) {
+		const table = this.tables.get(mutation.entitySetName);
+		if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this SyncQueue`);
+		const server = await table.getRecord(mutation.key);
+		const proposed = {};
+		const changed = /* @__PURE__ */ new Map();
+		const fill = (source, record) => {
+			for (const [k, v] of Object.entries(source ?? {})) {
+				if (isMetaKey(k)) continue;
+				if (record) changed.set(k, v);
+				proposed[k] = v;
+			}
+		};
+		fill(mutation.value, false);
+		fill(mutation.type === "update" ? mutation.changes : void 0, true);
+		const changesMetaOnly = isMetaOnly(mutation.changes);
+		const fields = [];
+		for (const [name] of Object.entries(table.fields)) {
+			const local = proposed[name];
+			const serverValue = server?.[name];
+			const explicitlyChanged = changed.has(name);
+			const status = !valuesEqual(local, serverValue) ? explicitlyChanged || changesMetaOnly ? "conflict" : "server-change" : explicitlyChanged ? "local-change" : "unchanged";
+			fields.push({
+				field: name,
+				local,
+				server: serverValue,
+				changed: explicitlyChanged ? changed.get(name) : void 0,
+				status
+			});
+		}
+		return {
+			server,
+			fields,
+			conflictingFields: fields.filter((f) => f.status === "conflict").map((f) => f.field)
+		};
+	}
+	/**
+	* Moves an errored mutation back into the retry queue and flushes.
+	*
+	* Resolution options ({@link RetryOptions}):
+	*
+	* - **Force** (`{ force: true }`): re-applied without its `If-Match`
+	*   precondition — updates overwrite the server's current state
+	*   (`If-Match: *`) and deletes run unconditionally. Use after a 412
+	*   concurrency failure (see {@link isConcurrencyError}) when the local
+	*   changes should win regardless of concurrent server-side edits.
+	* - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
+	*   record and re-applies the local changes on top of its *fresh* etag
+	*   — a "resend my edits, accept the server's state as the base"
+	*   resolution. Fails with 412 again if the record is touched between
+	*   reading the etag and the write. If the server cannot be reached the
+	*   freshest etag already known to this DB is used instead of aborting.
+	* - Plain (`{}`): retries with the etag it last carried — useful only if
+	*   the server record has since reverted to the expected etag.
+	*
+	* The resolution is a property of the retry call, not of the mutation:
+	* a mutation previously retried with `force` is un-forced by a later
+	* plain or `useFreshEtag` retry (and, once un-forced, inherits the
+	* freshest known etag rather than a bare precondition).
+	*/
+	async retryErroredMutation(id, options) {
+		const db = await this.getDB();
+		const mutation = await db.get(this.ERRORED_MUTATIONS_NAME, id);
+		if (!mutation) return;
+		mutation.attempts = 0;
+		mutation.error = void 0;
+		mutation.lastAttemptAt = void 0;
+		mutation.nextAttemptAt = void 0;
+		mutation.force = options?.force === true;
+		if (mutation.force) mutation.ifMatch = void 0;
+		else if (options?.useFreshEtag && mutation.type !== "insert") {
+			const table = this.tables.get(mutation.entitySetName);
+			if (table) {
+				let fresh;
+				try {
+					const server = await table.getRecord(mutation.key);
+					fresh = server ? getEtag(server) : void 0;
+				} catch {
+					fresh = this.keyEtags.get(mutation.key);
+				}
+				if (fresh && fresh !== mutation.ifMatch) {
+					mutation.ifMatch = fresh;
+					this.keyEtags.set(mutation.key, fresh);
+				}
+			}
+		} else if (mutation.ifMatch === void 0) {
+			const fresh = this.keyEtags.get(mutation.key);
+			if (fresh) mutation.ifMatch = fresh;
+		}
+		const tx = db.transaction([this.MUTATION_QUEUE_NAME, this.ERRORED_MUTATIONS_NAME], "readwrite");
+		const erroredStore = tx.objectStore(this.ERRORED_MUTATIONS_NAME);
+		const queueStore = tx.objectStore(this.MUTATION_QUEUE_NAME);
+		await Promise.all([erroredStore.delete(id), queueStore.put(mutation)]);
+		await tx.done;
+		this.notifyMutationsChanged();
+		if (navigator.onLine) await this.flushQueue();
+	}
+	async discardErroredMutation(id) {
+		await (await this.getDB()).delete(this.ERRORED_MUTATIONS_NAME, id);
+		this.notifyMutationsChanged();
+	}
+	async queueMutations(mutations) {
+		if (mutations.length === 0) return;
+		if (this.retryTimer) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = void 0;
+		}
+		try {
+			const db = await this.getDB();
+			const storeNames = [this.MUTATION_QUEUE_NAME, ...new Set(mutations.map((mutation) => mutation.entitySetName))];
+			const tx = db.transaction(storeNames, "readwrite");
+			for (const mutation of mutations) {
+				if (mutation.type === "insert" || mutation.type === "update") tx.objectStore(mutation.entitySetName).put(mutation.value);
+				else if (mutation.type === "delete") tx.objectStore(mutation.entitySetName).delete(mutation.key);
+				tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
+			}
+			await tx.done;
+			this.notifyMutationsChanged();
+		} catch (e) {
+			console.error("[dataverse-offline] Error writing mutation to IDB:", e);
+			throw new MutationPersistenceError("Failed to persist offline mutations", mutations.map((mutation) => mutation.id), e);
+		}
+	}
+};
+
+//#endregion
+export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, MutationPersistenceError, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, SyncEngine, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, isActive, isConcurrencyError, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, valuesEqual, wrapString, xml };

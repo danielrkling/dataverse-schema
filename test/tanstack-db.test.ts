@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 // no indexedDB global, so the in-memory shim (installed as a dev dependency)
 // stands in for the browser API.
 import "fake-indexeddb/auto";
-import { isConcurrencyError, isKeyViolation, DataverseSyncDB, type QueuedMutation } from "../src/tanstack-db";
+import { isConcurrencyError, isKeyViolation, dataverseOfflineCollectionOptions, serializeMutation, SyncEngine, type QueuedMutation } from "../src/tanstack-db";
 import { DataverseHttpError } from "../src";
 import { DataverseClient } from "../src/client";
 import { DataverseTable, file, image, primaryKey, string } from "../src";
@@ -18,7 +18,7 @@ test("serializeMutation strips proxies so the payload is structuredClone-safe", 
     logicalName: "contact",
     fields: { id: primaryKey("contactid"), name: string("fullname") },
   });
-  const db = new DataverseSyncDB("test-db", [table], 1);
+  const db = new SyncEngine("test-db", [table], 1);
 
   // Simulate a row that passed through a live-query join: the record itself
   // and its nested values are wrapped in (structurally un-cloneable) proxies.
@@ -29,7 +29,7 @@ test("serializeMutation strips proxies so the payload is structuredClone-safe", 
     get(target, prop) { return target[prop as keyof typeof target]; },
   });
 
-  const queued = db.serializeMutation({
+  const queued = serializeMutation(db,{
     mutationId: "m1",
     type: "update",
     key: "guid-1",
@@ -55,10 +55,10 @@ test("serializeMutation preserves binary payloads (file/image upload channels)",
     logicalName: "account",
     fields: { id: primaryKey("accountid"), photo: image("entityimage"), doc: file("myfile") },
   });
-  const db = new DataverseSyncDB("test-db-bin", [table], 1);
+  const db = new SyncEngine("test-db-bin", [table], 1);
 
   const blob = new Blob(["binary"], { type: "image/png" });
-  const queued = db.serializeMutation({
+  const queued = serializeMutation(db,{
     mutationId: "m2",
     type: "update",
     key: "guid-2",
@@ -152,7 +152,7 @@ test("onMutationsChanged fires when mutations are enqueued", async () => {
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject") },
   });
-  const db = new DataverseSyncDB("test-db-notify", [table], 1);
+  const db = new SyncEngine("test-db-notify", [table], 1);
   const events: number[] = [];
   const unsub = db.onMutationsChanged(() => events.push(events.length));
   await db.queueMutations([{
@@ -178,7 +178,7 @@ test("retryErroredMutation un-forces a previously forced mutation on a plain ret
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject") },
   });
-  const db = new DataverseSyncDB("test-db-force", [table], 1);
+  const db = new SyncEngine("test-db-force", [table], 1);
   const unlock = stubNavigatorOffline();
   try {
     const errored: QueuedMutation = {
@@ -245,7 +245,7 @@ test("getConflictDetails ignores $-prefixed metadata keys", async () => {
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject"), priority: string("prioritycode") },
   });
-  const db = new DataverseSyncDB("test-db-meta", [table], 1);
+  const db = new SyncEngine("test-db-meta", [table], 1);
   const unlock = stubNavigatorOffline();
   // Stub the server snapshot: subject matches local, priority was
   // concurrently changed. Also carries metadata keys as real rows do.
@@ -282,7 +282,7 @@ test("getConflictDetails detects edits that live in `value` when `changes` is bo
     logicalName: "c220a_tankstructuralitem",
     fields: { id: primaryKey("tankStructuralItemId"), description: string("description") },
   });
-  const db = new DataverseSyncDB("test-db-fullmode", [table], 1);
+  const db = new SyncEngine("test-db-fullmode", [table], 1);
   const unlock = stubNavigatorOffline();
   (db as any).tables.set("tankStructuralItems", {
     ...table,
@@ -310,6 +310,46 @@ test("getConflictDetails detects edits that live in `value` when `changes` is bo
   }
 });
 
+test("getConflictDetails returns one diff row per table field with statuses", async () => {
+  const table = new DataverseTable({
+    client: new DataverseClient({ url: "https://org.crm.dynamics.com/api/data/v9.2" }),
+    entitySetName: "tasks",
+    logicalName: "task",
+    fields: { id: primaryKey("activityid"), subject: string("subject"), priority: string("prioritycode"), description: string("description") },
+  });
+  const db = new SyncEngine("test-db-rows", [table], 1);
+  const unlock = stubNavigatorOffline();
+  (db as any).tables.set("tasks", {
+    ...table,
+    getRecord: async () => ({
+      id: "guid-r", subject: "my edit", priority: "urgent", description: "server wrote this", $etag: 'W/"5"',
+    }),
+  });
+  try {
+    const details = await db.getConflictDetails({
+      id: "r1", type: "update", key: "guid-r",
+      // Local: explicitly changed subject (server matches already) and priority
+      // (conflicts with server "urgent"). description untouched locally but the
+      // server changed it. `changes` also carries bookkeeping $-keys.
+      value: { id: "guid-r", subject: "my edit", priority: "low", description: "old local snapshot" },
+      changes: { subject: "my edit", priority: "low", "$synced": true, "$key": "guid-r" },
+      entitySetName: "tasks", timestamp: Date.now(), sequence: 1, attempts: 0,
+    });
+
+    const by = Object.fromEntries(details.fields.map((f) => [f.field, f]));
+    expect(by.subject).toEqual({ field: "subject", local: "my edit", server: "my edit", changed: "my edit", status: "local-change" });
+    expect(by.priority).toEqual({ field: "priority", local: "low", server: "urgent", changed: "low", status: "conflict" });
+    expect(by.description).toEqual({ field: "description", local: "old local snapshot", server: "server wrote this", changed: undefined, status: "server-change" });
+    // Fields neither side touches stay "unchanged"; the derived view still
+    // lists only the conflicts, in row order.
+    expect(by.id.status).toBe("unchanged");
+    expect(details.conflictingFields).toEqual(["priority"]);
+  } finally {
+    unlock();
+    db.close();
+  }
+});
+
 test("flushQueue substitutes the full row when a queued update's changes are bookkeeping-only", async () => {
   const table = new DataverseTable({
     client: new DataverseClient({ url: "https://org.crm.dynamics.com/api/data/v9.2" }),
@@ -317,7 +357,7 @@ test("flushQueue substitutes the full row when a queued update's changes are boo
     logicalName: "c220a_tankstructuralitem",
     fields: { id: primaryKey("tankStructuralItemId"), description: string("description") },
   });
-  const db = new DataverseSyncDB("test-db-metaonly", [table], 1);
+  const db = new SyncEngine("test-db-metaonly", [table], 1);
   const unlock = stubNavigatorOffline();
   const sent: unknown[] = [];
   (db as any).tables.set("tankStructuralItems", {

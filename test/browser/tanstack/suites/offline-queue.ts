@@ -1,5 +1,5 @@
 import { createCollection } from "@tanstack/db"
-import { DataverseSyncDB } from "../../../../src/tanstack-db"
+import { SyncEngine, dataverseOfflineCollectionOptions } from "../../../../src/tanstack-db"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -7,7 +7,7 @@ import { makeSyncDB, readQueue, readErrored, simulateOffline, enqueueRaw, flush,
 
 export const offlineQueueSuite: Suite = {
   name: "offline-queue",
-  title: "Offline mutation queue (DataverseSyncDB)",
+  title: "Offline mutation queue (SyncEngine)",
   tests: (ctx) => [
     {
       name: "createCollectionOptions builds a collection backed by the sync DB",
@@ -15,7 +15,7 @@ export const offlineQueueSuite: Suite = {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restoreVis = forceVisible()
         try {
-          const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
+          const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
           await waitFor(() => collection.size >= 0, 3000)
         } finally {
@@ -30,7 +30,7 @@ export const offlineQueueSuite: Suite = {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restoreVis = forceVisible()
         try {
-          const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
+          const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
           await waitFor(() => collection.size >= 0, 3000)
           const name = ctx.fx.name("offline-on")
@@ -56,7 +56,7 @@ export const offlineQueueSuite: Suite = {
         const restore = simulateOffline(true)
         const restoreVis = forceVisible()
         try {
-          const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
+          const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
           await waitFor(() => collection.size >= 0, 3000)
           const name = ctx.fx.name("offline-q")
@@ -85,7 +85,7 @@ export const offlineQueueSuite: Suite = {
         const restoreVis = forceVisible()
         let name = ""
         try {
-          const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
+          const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
           await waitFor(() => collection.size >= 0, 3000)
           name = ctx.fx.name("offline-then-on")
@@ -115,7 +115,7 @@ export const offlineQueueSuite: Suite = {
         const restore = simulateOffline(true)
         const restoreVis = forceVisible()
         try {
-          const config = db.createCollectionOptions({ table: ctx.tables.TestTable })
+          const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })
           const collection = createCollection(config) as any
           await waitFor(() => collection.size >= 0, 3000)
           const name = ctx.fx.name("qcount")
@@ -139,7 +139,7 @@ export const offlineQueueSuite: Suite = {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restoreVis = forceVisible()
         const id = await seedRow(ctx, { int: 1, text: "will-fail" })
-        const collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable })) as any
+        const collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })) as any
         try {
           await waitFor(() => collection.size >= 1, 8000)
           // Inject a failing update (stale ifMatch) directly into the queue. The

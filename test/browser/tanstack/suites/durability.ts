@@ -1,5 +1,5 @@
 import { createCollection } from "@tanstack/db"
-import { DataverseSyncDB } from "../../../../src/tanstack-db"
+import { SyncEngine, dataverseOfflineCollectionOptions } from "../../../../src/tanstack-db"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -7,7 +7,7 @@ import { makeSyncDB, readQueue, simulateOffline, forceVisible, waitFor } from ".
 
 /**
  * Durability: a queued (offline) mutation survives a "page reload", i.e. a brand
- * new DataverseSyncDB opened with the SAME database name must still see it in
+ * new SyncEngine opened with the SAME database name must still see it in
  * IndexedDB and be able to flush it once online.
  */
 export const durabilitySuite: Suite = {
@@ -22,12 +22,12 @@ export const durabilitySuite: Suite = {
         const tables = [ctx.tables.TestTable, ctx.tables.TestTable0]
 
         // --- Session 1: go offline, enqueue a mutation, then "reload". ---
-        const db1 = new DataverseSyncDB(dbName, tables, 1)
+        const db1 = new SyncEngine(dbName, tables, 1)
         const restore1 = simulateOffline(true)
         const restoreVis1 = forceVisible()
         let collection1: any
         try {
-          collection1 = createCollection(db1.createCollectionOptions({ table: ctx.tables.TestTable })) as any
+          collection1 = createCollection(dataverseOfflineCollectionOptions(db1, { table: ctx.tables.TestTable })) as any
           await waitFor(() => collection1.size >= 0, 3000)
           const id = crypto.randomUUID()
           collection1.insert({ id, name, int: 55, text: "durable" })
@@ -41,14 +41,14 @@ export const durabilitySuite: Suite = {
         }
 
         // --- Session 2: simulate a reload by reopening the SAME database name. ---
-        const db2 = new DataverseSyncDB(dbName, tables, 1)
+        const db2 = new SyncEngine(dbName, tables, 1)
         const restoreVis2 = forceVisible()
         try {
           const q2 = await readQueue(db2)
           assert(q2.length === 1, `mutation survived reload in IndexedDB (got ${q2.length})`)
           assertEquals(q2[0].entitySetName, ctx.tables.TestTable.entitySetName, "survived mutation targets right entity")
 
-          const collection2 = createCollection(db2.createCollectionOptions({ table: ctx.tables.TestTable })) as any
+          const collection2 = createCollection(dataverseOfflineCollectionOptions(db2, { table: ctx.tables.TestTable })) as any
           // Online now (default), so the initial flush picks up the persisted queue.
           await waitFor(async () => {
             const queue = await readQueue(db2)
@@ -69,7 +69,7 @@ export const durabilitySuite: Suite = {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restoreVis = forceVisible()
         const id = await seedRow(ctx, { int: 7, text: "cache-me" })
-        const collection = createCollection(db.createCollectionOptions({ table: ctx.tables.TestTable })) as any
+        const collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })) as any
         try {
           await waitFor(async () => {
             const idb = await (db as any).getDB()
