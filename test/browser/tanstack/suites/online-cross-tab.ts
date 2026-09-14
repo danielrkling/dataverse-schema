@@ -21,7 +21,7 @@ export const onlineCrossTabSuite: Suite = {
   },
   tests: (ctx) => [
     {
-      name: "a mutation on one online collection is reflected in a sibling",
+      name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
       fn: async () => {
         const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable })
         const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable })
@@ -39,13 +39,16 @@ export const onlineCrossTabSuite: Suite = {
           assertEquals(inB.int, 8, "propagated row keeps its values")
         } finally {
           restoreVis()
-          ;(a as any).delete?.(ctx.state.row)
-          ;(b as any).delete?.(ctx.state.row)
+          // Guarded: this test's own earlier deletes broadcast MUTATIONS_ADDED
+          // to the sibling collection, which may have already removed the row
+          // there — deleting twice throws "no item with this key".
+          try { void (a as any).delete?.(ctx.state.row) } catch { /* already gone */ }
+          try { void (b as any).delete?.(ctx.state.row) } catch { /* already gone */ }
         }
       },
     },
     {
-      name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
+      name: "a mutation on one online collection is reflected in a sibling",
       fn: async () => {
         const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable })
         const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable })
@@ -61,8 +64,10 @@ export const onlineCrossTabSuite: Suite = {
           assert([...b.values()].some((v: any) => v.name === name), "b saw the row (abort broadcast path exercised)")
         } finally {
           restoreVis()
-          ;(a as any).delete?.(ctx.state.row)
-          ;(b as any).delete?.(ctx.state.row)
+          // Guarded same as above: the sibling may have already received the
+          // delete broadcast.
+          try { void (a as any).delete?.(ctx.state.row) } catch { /* already gone */ }
+          try { void (b as any).delete?.(ctx.state.row) } catch { /* already gone */ }
         }
       },
     },

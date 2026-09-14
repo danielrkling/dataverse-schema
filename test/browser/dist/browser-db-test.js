@@ -3549,7 +3549,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:26:39.241Z"}
+      meta.textContent = `build ${"2026-09-14T14:32:43.792Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3638,7 +3638,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:26:39.241Z",
+          build: "2026-09-14T14:32:43.792Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3657,7 +3657,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:26:39.241Z"}\``,
+        `Build: \`${"2026-09-14T14:32:43.792Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -13225,10 +13225,35 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assert(errored.length >= 1, `expected the failing mutation in errored store (got ${errored.length})`);
             const found = errored.find((m) => m.id === eid);
             assert(found, "the injected mutation is in the errored store");
-            await db.retryErroredMutation(eid);
-            const afterRetry = await readErrored(db);
-            assert(!afterRetry.some((m) => m.id === eid), "retry removed it from errored store");
             await db.discardErroredMutation(eid);
+            assert(
+              !(await readErrored(db)).some((m) => m.id === eid),
+              "discard removed it from errored store"
+            );
+            const rid = `test-err-${Date.now() + 1}`;
+            await enqueueRaw(db, {
+              id: rid,
+              type: "update",
+              key: id,
+              value: { id, int: 2 },
+              changes: { int: 2 },
+              entitySetName: ctx.tables.TestTable.entitySetName,
+              timestamp: Date.now(),
+              sequence: 0,
+              attempts: 0,
+              ifMatch: 'W/"999999"'
+            });
+            await waitFor(async () => {
+              await flush(db);
+              await new Promise((r) => setTimeout(r, 1300));
+              return (await readErrored(db)).some((m) => m.id === rid);
+            }, 2e4, 1300);
+            await db.retryErroredMutation(rid, { force: true });
+            await waitFor(async () => {
+              const after = await readErrored(db);
+              const record = await ctx.tables.TestTable.getRecord(id);
+              return !after.some((m) => m.id === rid) && record?.int === 2;
+            }, 8e3);
           } finally {
             await ctx.tables.TestTable.deleteRecord(id).catch(() => void 0);
             restoreVis();
@@ -13378,7 +13403,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     },
     tests: (ctx) => [
       {
-        name: "a mutation on one online collection is reflected in a sibling",
+        name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
         fn: async () => {
           const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable });
@@ -13396,13 +13421,19 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assertEquals(inB.int, 8, "propagated row keeps its values");
           } finally {
             restoreVis();
-            a.delete?.(ctx.state.row);
-            b.delete?.(ctx.state.row);
+            try {
+              void a.delete?.(ctx.state.row);
+            } catch {
+            }
+            try {
+              void b.delete?.(ctx.state.row);
+            } catch {
+            }
           }
         }
       },
       {
-        name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
+        name: "a mutation on one online collection is reflected in a sibling",
         fn: async () => {
           const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable });
           const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable });
@@ -13418,8 +13449,14 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assert([...b.values()].some((v) => v.name === name), "b saw the row (abort broadcast path exercised)");
           } finally {
             restoreVis();
-            a.delete?.(ctx.state.row);
-            b.delete?.(ctx.state.row);
+            try {
+              void a.delete?.(ctx.state.row);
+            } catch {
+            }
+            try {
+              void b.delete?.(ctx.state.row);
+            } catch {
+            }
           }
         }
       }

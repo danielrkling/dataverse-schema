@@ -172,10 +172,44 @@ export const offlineQueueSuite: Suite = {
           assert(errored.length >= 1, `expected the failing mutation in errored store (got ${errored.length})`)
           const found = errored.find((m) => m.id === eid)
           assert(found, "the injected mutation is in the errored store")
-          await db.retryErroredMutation(eid)
-          const afterRetry = await readErrored(db)
-          assert(!afterRetry.some((m) => m.id === eid), "retry removed it from errored store")
+
+          // Discard resolution: removes the errored mutation outright.
           await db.discardErroredMutation(eid)
+          assert(
+            !(await readErrored(db)).some((m) => m.id === eid),
+            "discard removed it from errored store",
+          )
+
+          // Retry resolution: re-seed a failing mutation, then force it. A
+          // PLAIN retry of a stale-etag 412 can never succeed — the 412 is
+          // deterministic, so the mutation determinedly drops back into the
+          // errored store (that fast-fail is by design, see flushQueue).
+          // Force removes the If-Match precondition, so the write succeeds.
+          const rid = `test-err-${Date.now() + 1}`
+          await enqueueRaw(db, {
+            id: rid,
+            type: "update",
+            key: id,
+            value: { id, int: 2 },
+            changes: { int: 2 },
+            entitySetName: ctx.tables.TestTable.entitySetName,
+            timestamp: Date.now(),
+            sequence: 0,
+            attempts: 0,
+            ifMatch: 'W/"999999"',
+          })
+          await waitFor(async () => {
+            await flush(db)
+            await new Promise((r) => setTimeout(r, 1300))
+            return (await readErrored(db)).some((m) => m.id === rid)
+          }, 20000, 1300)
+          await db.retryErroredMutation(rid, { force: true })
+          await waitFor(async () => {
+            const after = await readErrored(db)
+            const record = await ctx.tables.TestTable.getRecord(id)
+            // Force-resolved: out of the errored store AND written to Dataverse.
+            return !after.some((m) => m.id === rid) && record?.int === 2
+          }, 8000)
         } finally {
           await ctx.tables.TestTable.deleteRecord(id).catch(() => undefined)
           restoreVis()
