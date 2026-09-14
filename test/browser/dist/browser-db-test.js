@@ -3549,7 +3549,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:37:36.912Z"}
+      meta.textContent = `build ${"2026-09-14T14:44:04.315Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3642,7 +3642,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:37:36.912Z",
+          build: "2026-09-14T14:44:04.315Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3661,7 +3661,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:37:36.912Z"}\``,
+        `Build: \`${"2026-09-14T14:44:04.315Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -12923,9 +12923,23 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     return ctx.fx.track(ctx.tables.TestTable.getPrimaryId(record));
   }
 
+  const createdEngines = /* @__PURE__ */ new Set();
   function makeSyncDB(tables, version = 1) {
     const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    return new SyncEngine(name, tables, version);
+    const db = new SyncEngine(name, tables, version);
+    createdEngines.add(db);
+    return db;
+  }
+  function closeAllEngines() {
+    let closed = 0;
+    for (const db of [...createdEngines]) {
+      try {
+        db.close();
+        closed++;
+      } catch {
+      }
+    }
+    return closed;
   }
   async function readQueue(db) {
     const idb = await db.getDB();
@@ -12985,16 +12999,28 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     return dbs.map((d) => d.name).filter((n) => !!n && n.startsWith("dvt-db-"));
   }
   async function deleteDatabases(names) {
-    await Promise.all(
-      names.map(
-        (name) => new Promise((resolve) => {
-          const request = indexedDB.deleteDatabase(name);
-          request.onsuccess = () => resolve();
-          request.onerror = () => resolve();
-          request.onblocked = () => resolve();
-        })
-      )
-    );
+    const pending = new Set(names);
+    for (let attempt = 0; attempt < 4 && pending.size > 0; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 150));
+      const batch = [...pending];
+      await Promise.all(
+        batch.map(
+          (name) => new Promise((resolve) => {
+            const request = indexedDB.deleteDatabase(name);
+            const done = (fail) => {
+              fail ? console.warn(`[harness] db sweep blocked/failed for "${name}"`, fail) : pending.delete(name);
+              resolve();
+            };
+            request.onsuccess = () => {
+              pending.delete(name);
+              resolve();
+            };
+            request.onerror = () => done(request.error);
+            request.onblocked = () => done(new Error("blocked"));
+          })
+        )
+      );
+    }
   }
   async function sweepTestDbs() {
     const names = await dvtDbNames();
@@ -13631,7 +13657,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       sweep: () => sweepOrphans(tables.TestTable),
       // Purge the durable dvt-db-* mutation-queue databases from this and
       // earlier runs (queued mutations, errored store, collection caches).
-      sweepDbs: sweepTestDbs
+      // Close any engines whose suites may have leaked before deleting so the
+      // deletions are never held open.
+      sweepDbs: async () => {
+        closeAllEngines();
+        return await sweepTestDbs();
+      }
     });
     reporter.mount(document.body);
     const params = new URLSearchParams(location.search);

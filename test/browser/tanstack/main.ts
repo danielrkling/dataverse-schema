@@ -5,7 +5,7 @@ import { FixtureTracker, sweepOrphans } from "../harness/fixtures"
 import { Runner } from "../harness/runner"
 import { Reporter } from "../harness/reporter"
 import { suites } from "./suites"
-import { sweepTestDbs } from "./db-helper"
+import { sweepTestDbs, closeAllEngines } from "./db-helper"
 
 async function boot(): Promise<void> {
   const cfg = loadConfig()
@@ -19,7 +19,12 @@ async function boot(): Promise<void> {
     sweep: () => sweepOrphans(tables.TestTable),
     // Purge the durable dvt-db-* mutation-queue databases from this and
     // earlier runs (queued mutations, errored store, collection caches).
-    sweepDbs: sweepTestDbs,
+    // Close any engines whose suites may have leaked before deleting so the
+    // deletions are never held open.
+    sweepDbs: async () => {
+      closeAllEngines()
+      return await sweepTestDbs()
+    },
   })
   reporter.mount(document.body)
 

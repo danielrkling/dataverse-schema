@@ -3,10 +3,28 @@ import { SyncEngine, type QueuedMutation } from "../../../src/tanstack-db"
 /**
  * Builds a SyncEngine with a per-run-unique name so multiple harness
  * invocations never collide on the same IndexedDB database or BroadcastChannel.
+ * Every engine is registered with {@link createdEngines} so the run-level
+ * sweep can close anything a suite forgot to close before purging databases.
  */
+const createdEngines = new Set<SyncEngine>()
 export function makeSyncDB(tables: any[], version = 1): SyncEngine {
   const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-  return new SyncEngine(name, tables, version)
+  const db = new SyncEngine(name, tables, version)
+  createdEngines.add(db)
+  return db
+}
+
+/**
+ * Closes every engine created by makeSyncDB in this page (guards against a
+ * suite finally-block that forgot db.close()), so database deletion is not
+ * blocked by an open connection.
+ */
+export function closeAllEngines(): number {
+  let closed = 0
+  for (const db of [...createdEngines]) {
+    try { db.close(); closed++ } catch { /* already closed */ }
+  }
+  return closed
 }
 
 /** Reads the raw mutation queue straight from IndexedDB (durability assertions). */
@@ -103,20 +121,28 @@ export async function dvtDbNames(): Promise<string[]> {
 
 /** Deletes the given databases, resolving on any outcome (best-effort sweep). */
 export async function deleteDatabases(names: string[]): Promise<void> {
-  await Promise.all(
-    names.map(
-      (name) =>
-        new Promise<void>((resolve) => {
-          const request = indexedDB.deleteDatabase(name)
-          // onblocked can fire when a connection is still open (a leaked
-          // engine) — resolve anyway; the sweep is best-effort and the
-          // remaining database will be caught by a later sweep.
-          request.onsuccess = () => resolve()
-          request.onerror = () => resolve()
-          request.onblocked = () => resolve()
-        }),
-    ),
-  )
+  // Deletions can be temporarily blocked by a just-closing connection or a
+  // pending transaction — retry a few times with delay before giving up.
+  const pending = new Set(names)
+  for (let attempt = 0; attempt < 4 && pending.size > 0; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 150))
+    const batch = [...pending]
+    await Promise.all(
+      batch.map(
+        (name) =>
+          new Promise<void>((resolve) => {
+            const request = indexedDB.deleteDatabase(name)
+            const done = (fail?: unknown) => {
+              fail ? console.warn(`[harness] db sweep blocked/failed for "${name}"`, fail) : pending.delete(name)
+              resolve()
+            }
+            request.onsuccess = () => { pending.delete(name); resolve() }
+            request.onerror = () => done(request.error)
+            request.onblocked = () => done(new Error("blocked"))
+          }),
+      ),
+    )
+  }
 }
 
 /**
