@@ -4116,7 +4116,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:32:49.112Z"}
+      meta.textContent = `build ${"2026-09-14T14:37:34.989Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4142,6 +4142,8 @@ data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       this.log("sweeping stale dvt* records from earlier runs…");
       const swept = await this.ctxMeta.sweep();
       if (swept > 0) this.log(`swept ${swept} stale record(s)`);
+      const dbs = await this.sweepDbs();
+      if (dbs > 0) this.log(`swept ${dbs} test IndexedDB database(s)`);
       await this.runner.run(selected, {
         onSuiteStart: (suite) => {
           this.log(`running suite "${suite.title}"…`);
@@ -4159,6 +4161,8 @@ data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
           this.log(`done — cleaned up ${summary.cleanedUp}/${summary.results.length + summary.cleanedUp} tracked records`);
         }
       });
+      const dbsAfter = await this.sweepDbs();
+      if (dbsAfter > 0) this.log(`swept ${dbsAfter} test IndexedDB database(s) after run`);
       this.runButton.disabled = false;
     }
     renderResult(result) {
@@ -4205,7 +4209,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:32:49.112Z",
+          build: "2026-09-14T14:37:34.989Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4224,7 +4228,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:32:49.112Z"}\``,
+        `Build: \`${"2026-09-14T14:37:34.989Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4263,6 +4267,17 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.log("sweeping orphaned dvt* records…");
       const n = await this.ctxMeta.sweep();
       this.log(n >= 0 ? `swept ${n} orphaned record(s)` : "sweep query failed");
+      const d = await this.sweepDbs();
+      this.log(`swept ${d} test database(s)`);
+    }
+    async sweepDbs() {
+      if (!this.ctxMeta.sweepDbs) return 0;
+      try {
+        return await this.ctxMeta.sweepDbs();
+      } catch (err) {
+        this.log(`db sweep failed: ${String(err)}`);
+        return 0;
+      }
     }
   }
   function escapeHtml(s) {

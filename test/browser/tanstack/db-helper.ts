@@ -86,3 +86,48 @@ export async function waitFor(
     await new Promise((r) => setTimeout(r, intervalMs))
   }
 }
+
+/**
+ * Lists the harness-created IndexedDB databases created by earlier runs.
+ * Engines use a `dvt-db-*` name prefix (see makeSyncDB), so every database
+ * matching that stem is sweppable test residue.
+ */
+export async function dvtDbNames(): Promise<string[]> {
+  const anyIdb = indexedDB as unknown as {
+    databases?: () => Promise<Array<{ name?: string }> | undefined>
+  }
+  if (typeof anyIdb.databases !== "function") return []
+  const dbs = (await anyIdb.databases()) ?? []
+  return dbs.map((d) => d.name!).filter((n) => !!n && n.startsWith("dvt-db-"))
+}
+
+/** Deletes the given databases, resolving on any outcome (best-effort sweep). */
+export async function deleteDatabases(names: string[]): Promise<void> {
+  await Promise.all(
+    names.map(
+      (name) =>
+        new Promise<void>((resolve) => {
+          const request = indexedDB.deleteDatabase(name)
+          // onblocked can fire when a connection is still open (a leaked
+          // engine) — resolve anyway; the sweep is best-effort and the
+          // remaining database will be caught by a later sweep.
+          request.onsuccess = () => resolve()
+          request.onerror = () => resolve()
+          request.onblocked = () => resolve()
+        }),
+    ),
+  )
+}
+
+/**
+ * Removes every `dvt-db-*` IndexedDB database (the SyncEngine queue/errored/
+ * per-collection cache stores) left over from this or earlier runs. Safe to
+ * call before or after a run; each suite closes its engines, so sweeps are
+ * only blocked by a genuinely leaked connection, which the next sweep retries.
+ */
+export async function sweepTestDbs(): Promise<number> {
+  const names = await dvtDbNames()
+  if (names.length === 0) return 0
+  await deleteDatabases(names)
+  return names.length
+}

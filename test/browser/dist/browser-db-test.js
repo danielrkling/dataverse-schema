@@ -3549,7 +3549,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:32:43.792Z"}
+      meta.textContent = `build ${"2026-09-14T14:37:36.912Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3575,6 +3575,8 @@ data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       this.log("sweeping stale dvt* records from earlier runs…");
       const swept = await this.ctxMeta.sweep();
       if (swept > 0) this.log(`swept ${swept} stale record(s)`);
+      const dbs = await this.sweepDbs();
+      if (dbs > 0) this.log(`swept ${dbs} test IndexedDB database(s)`);
       await this.runner.run(selected, {
         onSuiteStart: (suite) => {
           this.log(`running suite "${suite.title}"…`);
@@ -3592,6 +3594,8 @@ data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
           this.log(`done — cleaned up ${summary.cleanedUp}/${summary.results.length + summary.cleanedUp} tracked records`);
         }
       });
+      const dbsAfter = await this.sweepDbs();
+      if (dbsAfter > 0) this.log(`swept ${dbsAfter} test IndexedDB database(s) after run`);
       this.runButton.disabled = false;
     }
     renderResult(result) {
@@ -3638,7 +3642,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:32:43.792Z",
+          build: "2026-09-14T14:37:36.912Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3657,7 +3661,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:32:43.792Z"}\``,
+        `Build: \`${"2026-09-14T14:37:36.912Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -3696,6 +3700,17 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.log("sweeping orphaned dvt* records…");
       const n = await this.ctxMeta.sweep();
       this.log(n >= 0 ? `swept ${n} orphaned record(s)` : "sweep query failed");
+      const d = await this.sweepDbs();
+      this.log(`swept ${d} test database(s)`);
+    }
+    async sweepDbs() {
+      if (!this.ctxMeta.sweepDbs) return 0;
+      try {
+        return await this.ctxMeta.sweepDbs();
+      } catch (err) {
+        this.log(`db sweep failed: ${String(err)}`);
+        return 0;
+      }
     }
   }
   function escapeHtml(s) {
@@ -12963,6 +12978,30 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       await new Promise((r) => setTimeout(r, intervalMs));
     }
   }
+  async function dvtDbNames() {
+    const anyIdb = indexedDB;
+    if (typeof anyIdb.databases !== "function") return [];
+    const dbs = await anyIdb.databases() ?? [];
+    return dbs.map((d) => d.name).filter((n) => !!n && n.startsWith("dvt-db-"));
+  }
+  async function deleteDatabases(names) {
+    await Promise.all(
+      names.map(
+        (name) => new Promise((resolve) => {
+          const request = indexedDB.deleteDatabase(name);
+          request.onsuccess = () => resolve();
+          request.onerror = () => resolve();
+          request.onblocked = () => resolve();
+        })
+      )
+    );
+  }
+  async function sweepTestDbs() {
+    const names = await dvtDbNames();
+    if (names.length === 0) return 0;
+    await deleteDatabases(names);
+    return names.length;
+  }
 
   const onlineCollectionSuite = {
     name: "online-collection",
@@ -13589,13 +13628,17 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     const reporter = new Reporter(runner, suites, {
       orgUrl: client.options.url ?? "unknown",
       dataStem: fx.sessionPrefix,
-      sweep: () => sweepOrphans(tables.TestTable)
+      sweep: () => sweepOrphans(tables.TestTable),
+      // Purge the durable dvt-db-* mutation-queue databases from this and
+      // earlier runs (queued mutations, errored store, collection caches).
+      sweepDbs: sweepTestDbs
     });
     reporter.mount(document.body);
     const params = new URLSearchParams(location.search);
     if (params.get("autorun") === "1") void reporter.runSelected();
     window.addEventListener("unload", () => {
       void sweepOrphans(tables.TestTable);
+      void sweepTestDbs();
     });
   }
   if (document.body) {

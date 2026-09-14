@@ -32,7 +32,12 @@ export class Reporter {
   constructor(
     private readonly runner: Runner,
     private readonly suites: Suite[],
-    private readonly ctxMeta: { orgUrl: string; dataStem: string; sweep: () => Promise<number> },
+    private readonly ctxMeta: {
+        orgUrl: string; dataStem: string;
+        sweep: () => Promise<number>;
+        /** Optional: purge test-residue IndexedDB databases (dvt-db-*) before/after a run. */
+        sweepDbs?: () => Promise<number>;
+    },
   ) {}
 
   mount(parent: HTMLElement): void {
@@ -119,6 +124,8 @@ export class Reporter {
     this.log("sweeping stale dvt* records from earlier runs…")
     const swept = await this.ctxMeta.sweep()
     if (swept > 0) this.log(`swept ${swept} stale record(s)`)
+    const dbs = await this.sweepDbs()
+    if (dbs > 0) this.log(`swept ${dbs} test IndexedDB database(s)`)
 
     await this.runner.run(selected, {
       onSuiteStart: (suite) => {
@@ -137,6 +144,11 @@ export class Reporter {
         this.log(`done — cleaned up ${summary.cleanedUp}/${summary.results.length + summary.cleanedUp} tracked records`)
       },
     })
+
+    // Post-run sweep: purge the run's dvt-db-* databases so nothing lingers
+    // once the panel goes quiet.
+    const dbsAfter = await this.sweepDbs()
+    if (dbsAfter > 0) this.log(`swept ${dbsAfter} test IndexedDB database(s) after run`)
     this.runButton.disabled = false
   }
 
@@ -253,6 +265,18 @@ export class Reporter {
     this.log("sweeping orphaned dvt* records…")
     const n = await this.ctxMeta.sweep()
     this.log(n >= 0 ? `swept ${n} orphaned record(s)` : "sweep query failed")
+    const d = await this.sweepDbs()
+    this.log(`swept ${d} test database(s)`)
+  }
+
+  private async sweepDbs(): Promise<number> {
+    if (!this.ctxMeta.sweepDbs) return 0
+    try {
+      return await this.ctxMeta.sweepDbs()
+    } catch (err) {
+      this.log(`db sweep failed: ${String(err)}`)
+      return 0
+    }
   }
 }
 

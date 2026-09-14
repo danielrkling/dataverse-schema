@@ -5,6 +5,7 @@ import { FixtureTracker, sweepOrphans } from "../harness/fixtures"
 import { Runner } from "../harness/runner"
 import { Reporter } from "../harness/reporter"
 import { suites } from "./suites"
+import { sweepTestDbs } from "./db-helper"
 
 async function boot(): Promise<void> {
   const cfg = loadConfig()
@@ -16,6 +17,9 @@ async function boot(): Promise<void> {
     orgUrl: client.options.url ?? "unknown",
     dataStem: fx.sessionPrefix,
     sweep: () => sweepOrphans(tables.TestTable),
+    // Purge the durable dvt-db-* mutation-queue databases from this and
+    // earlier runs (queued mutations, errored store, collection caches).
+    sweepDbs: sweepTestDbs,
   })
   reporter.mount(document.body)
 
@@ -24,8 +28,10 @@ async function boot(): Promise<void> {
 
   window.addEventListener("unload", () => {
     // No global SyncEngine is owned here (each suite creates its own),
-    // but call sweep on leave so interrupted runs don't leave dvt* rows.
+    // but call sweep on leave so interrupted runs don't leave dvt* rows
+    // or dvt-db-* IndexedDB databases behind.
     void sweepOrphans(tables.TestTable)
+    void sweepTestDbs()
   })
 }
 
