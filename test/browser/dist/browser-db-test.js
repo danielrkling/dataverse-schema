@@ -749,652 +749,90 @@
     }
   }
 
-  //#region src/storages/globalConfig/globalConfig.ts
-  const DEFAULT_CONFIG = {
-  	lang: void 0,
-  	message: void 0,
-  	abortEarly: void 0,
-  	abortPipeEarly: void 0
-  };
-  /**
-  * Returns the global configuration.
-  *
-  * @param config The config to merge.
-  *
-  * @returns The configuration.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getGlobalConfig(config$1) {
-  	return DEFAULT_CONFIG;
+  function makeSchema(validate) {
+    return {
+      "~standard": {
+        version: 1,
+        vendor: "dataverse-schema",
+        validate
+      }
+    };
   }
-
-  //#endregion
-  //#region src/storages/globalMessage/globalMessage.ts
-  let store$3;
-  /**
-  * Returns a global error message.
-  *
-  * @param lang The language of the message.
-  *
-  * @returns The error message.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getGlobalMessage(lang) {
-  	return store$3?.get(lang);
+  function checkSchema(check, message) {
+    return makeSchema((value) => check(value) ? { value } : { issues: [{ message }] });
   }
-
-  //#endregion
-  //#region src/storages/schemaMessage/schemaMessage.ts
-  let store$2;
-  /**
-  * Returns a schema error message.
-  *
-  * @param lang The language of the message.
-  *
-  * @returns The error message.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getSchemaMessage(lang) {
-  	return store$2?.get(lang);
+  const STRING_SCHEMA = checkSchema((value) => typeof value === "string", "Expected a string");
+  const NUMBER_SCHEMA = checkSchema((value) => typeof value === "number", "Expected a number");
+  const BOOLEAN_SCHEMA = checkSchema((value) => typeof value === "boolean", "Expected a boolean");
+  const DATE_SCHEMA = checkSchema((value) => value instanceof Date, "Expected a Date");
+  const BLOB_SCHEMA = checkSchema((value) => value instanceof Blob, "Expected a Blob");
+  const GUID_SCHEMA = checkSchema(
+    (value) => typeof value === "string" && rxGUID.test(value),
+    "Expected a GUID"
+  );
+  function composeRecordSchema(children) {
+    const entries = Object.entries(children);
+    return makeSchema(async (value) => {
+      const input = value ?? {};
+      const settled = await Promise.all(entries.map(async ([key, child]) => [key, await child["~standard"].validate(input[key])]));
+      const out = {};
+      const issues = [];
+      for (const [key, result] of settled) {
+        if (result.issues) {
+          for (const issue of result.issues) {
+            issues.push({ ...issue, path: [{ key }, ...issue.path ?? []] });
+          }
+        } else {
+          out[key] = result.value;
+        }
+      }
+      if (issues.length > 0) return { issues };
+      return { value: out };
+    });
   }
-
-  //#endregion
-  //#region src/storages/specificMessage/specificMessage.ts
-  let store$1;
-  /**
-  * Returns a specific error message.
-  *
-  * @param reference The identifier reference.
-  * @param lang The language of the message.
-  *
-  * @returns The error message.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getSpecificMessage(reference, lang) {
-  	return store$1?.get(reference)?.get(lang);
+  function arrayOf(child) {
+    return makeSchema(async (value) => {
+      if (!Array.isArray(value)) return { issues: [{ message: "Expected an array" }] };
+      const settled = await Promise.all(value.map(async (item) => await child["~standard"].validate(item)));
+      const out = [];
+      const issues = [];
+      for (const [i, result] of settled.entries()) {
+        if (result.issues) {
+          for (const issue of result.issues) {
+            issues.push({ ...issue, path: [{ key: i }, ...issue.path ?? []] });
+          }
+        } else {
+          out[i] = result.value;
+        }
+      }
+      if (issues.length > 0) return { issues };
+      return { value: out };
+    });
   }
-
-  //#endregion
-  //#region src/utils/_stringify/_stringify.ts
-  /**
-  * Stringifies an unknown input to a literal or type string.
-  *
-  * @param input The unknown input.
-  *
-  * @returns A literal or type string.
-  *
-  * @internal
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function _stringify(input) {
-  	const type = typeof input;
-  	if (type === "string") return `"${input}"`;
-  	if (type === "number" || type === "bigint" || type === "boolean") return `${input}`;
-  	if (type === "object" || type === "function") return (input && Object.getPrototypeOf(input)?.constructor?.name) ?? "null";
-  	return type;
+  function lazyOf(getChild) {
+    let cached;
+    return makeSchema(
+      (value) => (cached ??= getChild())["~standard"].validate(value)
+    );
   }
-
-  //#endregion
-  //#region src/utils/_addIssue/_addIssue.ts
-  /**
-  * Adds an issue to the dataset.
-  *
-  * @param context The issue context.
-  * @param label The issue label.
-  * @param dataset The input dataset.
-  * @param config The configuration.
-  * @param other The optional props.
-  *
-  * @internal
-  */
-  function _addIssue(context, label, dataset, config$1, other) {
-  	const input = other && "input" in other ? other.input : dataset.value;
-  	const expected = other?.expected ?? context.expects ?? null;
-  	const received = other?.received ?? /* @__PURE__ */ _stringify(input);
-  	const issue = {
-  		kind: context.kind,
-  		type: context.type,
-  		input,
-  		expected,
-  		received,
-  		message: `Invalid ${label}: ${expected ? `Expected ${expected} but r` : "R"}eceived ${received}`,
-  		requirement: context.requirement,
-  		path: other?.path,
-  		issues: other?.issues,
-  		lang: config$1.lang,
-  		abortEarly: config$1.abortEarly,
-  		abortPipeEarly: config$1.abortPipeEarly
-  	};
-  	const isSchema = context.kind === "schema";
-  	const message$1 = other?.message ?? context.message ?? /* @__PURE__ */ getSpecificMessage(context.reference, issue.lang) ?? (isSchema ? /* @__PURE__ */ getSchemaMessage(issue.lang) : null) ?? config$1.message ?? /* @__PURE__ */ getGlobalMessage(issue.lang);
-  	if (message$1 !== void 0) issue.message = typeof message$1 === "function" ? message$1(issue) : message$1;
-  	if (isSchema) dataset.typed = false;
-  	if (dataset.issues) dataset.issues.push(issue);
-  	else dataset.issues = [issue];
+  function nullableOf(child) {
+    return makeSchema((value) => {
+      if (value === null) return { value: null };
+      return child["~standard"].validate(value);
+    });
   }
-
-  //#endregion
-  //#region src/utils/_getStandardProps/_getStandardProps.ts
-  const _standardCache = /* @__PURE__ */ new WeakMap();
-  /**
-  * Returns the Standard Schema properties.
-  *
-  * @param context The schema context.
-  *
-  * @returns The Standard Schema properties.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function _getStandardProps(context) {
-  	let cached = _standardCache.get(context);
-  	if (!cached) {
-  		cached = {
-  			version: 1,
-  			vendor: "valibot",
-  			validate(value$1) {
-  				return context["~run"]({ value: value$1 }, /* @__PURE__ */ getGlobalConfig());
-  			}
-  		};
-  		_standardCache.set(context, cached);
-  	}
-  	return cached;
+  function optionalOf(child) {
+    return makeSchema((value) => {
+      if (value === void 0) return { value: null };
+      return child["~standard"].validate(value);
+    });
   }
-
-  //#endregion
-  //#region src/utils/_joinExpects/_joinExpects.ts
-  /**
-  * Joins multiple `expects` values with the given separator.
-  *
-  * @param values The `expects` values.
-  * @param separator The separator.
-  *
-  * @returns The joined `expects` property.
-  *
-  * @internal
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function _joinExpects(values$1, separator) {
-  	const list = [...new Set(values$1)];
-  	if (list.length > 1) return `(${list.join(` ${separator} `)})`;
-  	return list[0] ?? "never";
-  }
-  /**
-  * [UUID](https://en.wikipedia.org/wiki/Universally_unique_identifier) regex.
-  */
-  const UUID_REGEX = /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/iu;
-
-  //#endregion
-  //#region src/actions/minLength/minLength.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function minLength(requirement, message$1) {
-  	return {
-  		kind: "validation",
-  		type: "min_length",
-  		reference: minLength,
-  		async: false,
-  		expects: `>=${requirement}`,
-  		requirement,
-  		message: message$1,
-  		"~run"(dataset, config$1) {
-  			if (dataset.typed && dataset.value.length < this.requirement) _addIssue(this, "length", dataset, config$1, { received: `${dataset.value.length}` });
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/actions/uuid/uuid.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function uuid(message$1) {
-  	return {
-  		kind: "validation",
-  		type: "uuid",
-  		reference: uuid,
-  		async: false,
-  		expects: null,
-  		requirement: UUID_REGEX,
-  		message: message$1,
-  		"~run"(dataset, config$1) {
-  			if (dataset.typed && !this.requirement.test(dataset.value)) _addIssue(this, "UUID", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/methods/getFallback/getFallback.ts
-  /**
-  * Returns the fallback value of the schema.
-  *
-  * @param schema The schema to get it from.
-  * @param dataset The output dataset if available.
-  * @param config The config if available.
-  *
-  * @returns The fallback value.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getFallback(schema, dataset, config$1) {
-  	return typeof schema.fallback === "function" ? schema.fallback(dataset, config$1) : schema.fallback;
-  }
-
-  //#endregion
-  //#region src/methods/getDefault/getDefault.ts
-  /**
-  * Returns the default value of the schema.
-  *
-  * @param schema The schema to get it from.
-  * @param dataset The input dataset if available.
-  * @param config The config if available.
-  *
-  * @returns The default value.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function getDefault(schema, dataset, config$1) {
-  	return typeof schema.default === "function" ? schema.default(dataset, config$1) : schema.default;
-  }
-
-  //#endregion
-  //#region src/schemas/array/array.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function array(item, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "array",
-  		reference: array,
-  		expects: "Array",
-  		async: false,
-  		item,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			const input = dataset.value;
-  			if (Array.isArray(input)) {
-  				dataset.typed = true;
-  				dataset.value = [];
-  				for (let key = 0; key < input.length; key++) {
-  					const value$1 = input[key];
-  					const itemDataset = this.item["~run"]({ value: value$1 }, config$1);
-  					if (itemDataset.issues) {
-  						const pathItem = {
-  							type: "array",
-  							origin: "value",
-  							input,
-  							key,
-  							value: value$1
-  						};
-  						for (const issue of itemDataset.issues) {
-  							if (issue.path) issue.path.unshift(pathItem);
-  							else issue.path = [pathItem];
-  							dataset.issues?.push(issue);
-  						}
-  						if (!dataset.issues) dataset.issues = itemDataset.issues;
-  						if (config$1.abortEarly) {
-  							dataset.typed = false;
-  							break;
-  						}
-  					}
-  					if (!itemDataset.typed) dataset.typed = false;
-  					dataset.value.push(itemDataset.value);
-  				}
-  			} else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/boolean/boolean.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function boolean$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "boolean",
-  		reference: boolean$1,
-  		expects: "boolean",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (typeof dataset.value === "boolean") dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/custom/custom.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function custom(check$1, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "custom",
-  		reference: custom,
-  		expects: "unknown",
-  		async: false,
-  		check: check$1,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (this.check(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/date/date.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function date$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "date",
-  		reference: date$1,
-  		expects: "Date",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value instanceof Date) if (!isNaN(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1, { received: "\"Invalid Date\"" });
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/instance/instance.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function instance(class_, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "instance",
-  		reference: instance,
-  		expects: class_.name,
-  		async: false,
-  		class: class_,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value instanceof this.class) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/lazy/lazy.ts
-  /**
-  * Creates a lazy schema.
-  *
-  * @param getter The schema getter.
-  *
-  * @returns A lazy schema.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function lazy(getter) {
-  	return {
-  		kind: "schema",
-  		type: "lazy",
-  		reference: lazy,
-  		expects: "unknown",
-  		async: false,
-  		getter,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			return this.getter(dataset.value)["~run"](dataset, config$1);
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/nullable/nullable.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function nullable(wrapped, default_) {
-  	return {
-  		kind: "schema",
-  		type: "nullable",
-  		reference: nullable,
-  		expects: `(${wrapped.expects} | null)`,
-  		async: false,
-  		wrapped,
-  		default: default_,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value === null) {
-  				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
-  				if (dataset.value === null) {
-  					dataset.typed = true;
-  					return dataset;
-  				}
-  			}
-  			return this.wrapped["~run"](dataset, config$1);
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/number/number.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function number$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "number",
-  		reference: number$1,
-  		expects: "number",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (typeof dataset.value === "number" && !isNaN(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/object/object.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function object(entries$1, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "object",
-  		reference: object,
-  		expects: "Object",
-  		async: false,
-  		entries: entries$1,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			const input = dataset.value;
-  			if (input && typeof input === "object") {
-  				dataset.typed = true;
-  				dataset.value = {};
-  				for (const key in this.entries) {
-  					const valueSchema = this.entries[key];
-  					if (key in input || (valueSchema.type === "exact_optional" || valueSchema.type === "optional" || valueSchema.type === "nullish") && valueSchema.default !== void 0) {
-  						const value$1 = key in input ? input[key] : /* @__PURE__ */ getDefault(valueSchema);
-  						const valueDataset = valueSchema["~run"]({ value: value$1 }, config$1);
-  						if (valueDataset.issues) {
-  							const pathItem = {
-  								type: "object",
-  								origin: "value",
-  								input,
-  								key,
-  								value: value$1
-  							};
-  							for (const issue of valueDataset.issues) {
-  								if (issue.path) issue.path.unshift(pathItem);
-  								else issue.path = [pathItem];
-  								dataset.issues?.push(issue);
-  							}
-  							if (!dataset.issues) dataset.issues = valueDataset.issues;
-  							if (config$1.abortEarly) {
-  								dataset.typed = false;
-  								break;
-  							}
-  						}
-  						if (!valueDataset.typed) dataset.typed = false;
-  						dataset.value[key] = valueDataset.value;
-  					} else if (valueSchema.fallback !== void 0) dataset.value[key] = /* @__PURE__ */ getFallback(valueSchema);
-  					else if (valueSchema.type !== "exact_optional" && valueSchema.type !== "optional" && valueSchema.type !== "nullish") {
-  						_addIssue(this, "key", dataset, config$1, {
-  							input: void 0,
-  							expected: `"${key}"`,
-  							path: [{
-  								type: "object",
-  								origin: "key",
-  								input,
-  								key,
-  								value: input[key]
-  							}]
-  						});
-  						if (config$1.abortEarly) break;
-  					}
-  				}
-  			} else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/optional/optional.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function optional(wrapped, default_) {
-  	return {
-  		kind: "schema",
-  		type: "optional",
-  		reference: optional,
-  		expects: `(${wrapped.expects} | undefined)`,
-  		async: false,
-  		wrapped,
-  		default: default_,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (dataset.value === void 0) {
-  				if (this.default !== void 0) dataset.value = /* @__PURE__ */ getDefault(this, dataset, config$1);
-  				if (dataset.value === void 0) {
-  					dataset.typed = true;
-  					return dataset;
-  				}
-  			}
-  			return this.wrapped["~run"](dataset, config$1);
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/picklist/picklist.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function picklist(options, message$1) {
-  	return {
-  		kind: "schema",
-  		type: "picklist",
-  		reference: picklist,
-  		expects: /* @__PURE__ */ _joinExpects(options.map(_stringify), "|"),
-  		async: false,
-  		options,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (this.options.includes(dataset.value)) dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/schemas/string/string.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function string$1(message$1) {
-  	return {
-  		kind: "schema",
-  		type: "string",
-  		reference: string$1,
-  		expects: "string",
-  		async: false,
-  		message: message$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			if (typeof dataset.value === "string") dataset.typed = true;
-  			else _addIssue(this, "type", dataset, config$1);
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/methods/pipe/pipe.ts
-  /* @__NO_SIDE_EFFECTS__ */
-  function pipe(...pipe$1) {
-  	return {
-  		...pipe$1[0],
-  		pipe: pipe$1,
-  		get "~standard"() {
-  			return /* @__PURE__ */ _getStandardProps(this);
-  		},
-  		"~run"(dataset, config$1) {
-  			for (const item of pipe$1) if (item.kind !== "metadata") {
-  				if (dataset.issues && (item.kind === "schema" || item.kind === "transformation")) {
-  					dataset.typed = false;
-  					break;
-  				}
-  				if (!dataset.issues || !config$1.abortEarly && !config$1.abortPipeEarly) dataset = item["~run"](dataset, config$1);
-  			}
-  			return dataset;
-  		}
-  	};
-  }
-
-  //#endregion
-  //#region src/methods/safeParse/safeParse.ts
-  /**
-  * Parses an unknown input based on a schema.
-  *
-  * @param schema The schema to be used.
-  * @param input The input to be parsed.
-  * @param config The parse configuration.
-  *
-  * @returns The parse result.
-  */
-  /* @__NO_SIDE_EFFECTS__ */
-  function safeParse(schema, input, config$1) {
-  	const dataset = schema["~run"]({ value: input }, /* @__PURE__ */ getGlobalConfig());
-  	return {
-  		typed: dataset.typed,
-  		success: !dataset.issues,
-  		output: dataset.value,
-  		issues: dataset.issues
-  	};
+  function requiredOf(child, message = "Value is required") {
+    return makeSchema((value) => {
+      if (value === null || value === void 0) return { issues: [{ message }] };
+      if (typeof value === "string" && value.trim().length === 0) return { issues: [{ message }] };
+      return child["~standard"].validate(value);
+    });
   }
 
   class FieldRef {
@@ -1626,10 +1064,10 @@
     toString() {
       return this._build();
     }
-    _transformRow(v) {
+    async _transformRow(v) {
       const r = { ...v };
       for (const [alias, field] of Object.entries(this._aliasFields)) {
-        if (field && alias in r) r[alias] = field.transformFromDataverse(r[alias]);
+        if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias]);
       }
       r[ETAG] = v["@odata.etag"];
       delete r["@odata.etag"];
@@ -1651,7 +1089,7 @@
       const qs = this.toString();
       const raw = this._table.client.iteratePages(this._table.entitySetName, { ...options, query: qs });
       for await (const page of raw) {
-        yield page.map((v) => this._transformRow(v));
+        yield await Promise.all(page.map((v) => this._transformRow(v)));
       }
     }
   }
@@ -1785,23 +1223,23 @@
     _getSelectedKeys() {
       return this.#selectedKeys;
     }
-    _partialTransform(value) {
+    async _partialTransform(value) {
       const result = {};
       const recordId = value[this.#table.primaryKey.property.fromDataverseName] ?? value[this.#table.primaryKey.property.logicalName];
       const ctx = { table: this.#table, client: this.#table.client, recordId: recordId ?? "" };
       for (const key of this.#selectedKeys) {
         const prop = this.#table.fields[key];
-        result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
+        result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(value[prop.fromDataverseName], ctx);
       }
       for (const expand of this.#expandMeta) {
         if (value[expand.dvName] !== void 0) {
-          result[expand.key] = _processExpand(value[expand.dvName], expand, this.#table);
+          result[expand.key] = await _processExpand(value[expand.dvName], expand, this.#table);
         }
       }
       result[ETAG] = value["@odata.etag"];
       return result;
     }
-    _transformRow(value) {
+    async _transformRow(value) {
       if (this.#selectedKeys.length > 0) {
         return this._partialTransform(value);
       }
@@ -1837,7 +1275,7 @@
         this.#table.entitySetName,
         { ...options, query: qs }
       )) {
-        yield page.map((v) => this._transformRow(v));
+        yield await Promise.all(page.map((v) => this._transformRow(v)));
       }
     }
   }
@@ -1859,7 +1297,7 @@
     if (expand.isCollection) {
       const items = Array.from(raw ?? []);
       if (expand.selectedKeys) {
-        return items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands));
+        return Promise.all(items.map((item) => _partialTransformItem(relatedTable, expand.selectedKeys, item, expand.subExpands)));
       } else {
         return navProp.transformValueFromDataverse(raw);
       }
@@ -1871,20 +1309,20 @@
       }
     }
   }
-  function _partialTransformItem(table, selectedKeys, raw, subExpands) {
+  async function _partialTransformItem(table, selectedKeys, raw, subExpands) {
     const result = {};
     const recordId = raw[table.primaryKey.property.fromDataverseName] ?? raw[table.primaryKey.property.logicalName];
     const ctx = { table, client: table.client, recordId: recordId ?? "" };
     for (const key of selectedKeys) {
       const prop = table.fields[key];
       if (prop) {
-        result[key] = FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
+        result[key] = await FieldRef.fromPath(prop, prop.fromDataverseName ?? prop.logicalName).transformFromDataverse(raw[prop.fromDataverseName], ctx);
       }
     }
     if (subExpands) {
       for (const expand of subExpands) {
         if (raw[expand.dvName] !== void 0) {
-          result[expand.key] = _processExpand(raw[expand.dvName], expand, table);
+          result[expand.key] = await _processExpand(raw[expand.dvName], expand, table);
         }
       }
     }
@@ -1942,6 +1380,13 @@
   }
 
   class DataverseTable {
+    /**
+     * Standard Schema V1 props, delegated to the table's whole-record `schema`.
+     * Lets any Standard Schema–aware consumer validate the table directly.
+     */
+    get "~standard"() {
+      return this.schema["~standard"];
+    }
     client;
     fields;
     logicalName;
@@ -1949,7 +1394,7 @@
     kind = "table";
     type = "table";
     /**
-     * Whole-record valibot schema for this table — either the explicit
+     * Whole-record schema for this table — either the explicit
      * `schema` option or one composed from the individual field schemas.
      */
     schema;
@@ -1996,7 +1441,7 @@
       return this.client.getRecord(this.entitySetName, id, {
         ...options,
         query: tableQuery(this)
-      }).then((v2) => this.transformValueFromDataverse(v2)).catch((err) => {
+      }).then((v) => this.transformValueFromDataverse(v)).catch((err) => {
         if (err instanceof DataverseHttpError && err.status === 404) return null;
         throw err;
       });
@@ -2020,7 +1465,7 @@
       return this.client.getRecords(this.entitySetName, {
         ...options,
         query: tableQuery(this, queryOptions)
-      }).then((values) => values.map((v2) => this.transformValueFromDataverse(v2)));
+      }).then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
     }
     /**
      * Iterates over records one at a time, lazily following `@odata.nextLink` pagination.
@@ -2044,7 +1489,7 @@
           query: tableQuery(this, queryOptions)
         }
       )) {
-        yield this.transformValueFromDataverse(record);
+        yield await this.transformValueFromDataverse(record);
       }
     }
     /**
@@ -2070,7 +1515,7 @@
           query: tableQuery(this, queryOptions)
         }
       )) {
-        yield page.map((v2) => this.transformValueFromDataverse(v2));
+        yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
       }
     }
     /**
@@ -2085,7 +1530,7 @@
       const prop = this.fields[key];
       if (prop.kind === "value" || prop.type === "lookupId") {
         const propertyName = prop.type === "lookupId" ? prop.fromDataverseName : prop.logicalName;
-        return this.client.getPropertyValue(this.entitySetName, id, propertyName).then((v2) => prop.transformValueFromDataverse(v2));
+        return this.client.getPropertyValue(this.entitySetName, id, propertyName).then((v) => prop.transformValueFromDataverse(v));
       }
       if (prop.type === "collection" || prop.type === "collectionIds") {
         return this.client.getAssociatedRecords(
@@ -2094,7 +1539,7 @@
           prop.schemaName,
           { query: tableQuery(prop.table, queryOptions) }
         ).then(
-          (v2) => prop.transformValueFromDataverse(v2)
+          (v) => prop.transformValueFromDataverse(v)
         );
       }
       if (prop.type === "lookup") {
@@ -2104,7 +1549,7 @@
           prop.schemaName,
           { query: tableQuery(prop.table, queryOptions) }
         ).then(
-          (v2) => prop.transformValueFromDataverse(v2)
+          (v) => prop.transformValueFromDataverse(v)
         );
       }
       throw new Error("Invalid Property kind for getPropertyValue");
@@ -2138,16 +1583,16 @@
       } else if (prop.kind === "navigation" && prop.afterSave) {
         await prop.afterSave(ctx, value);
       } else {
-        let v2 = prop.transformValueToDataverse(value, ctx);
-        if (v2 instanceof Promise) v2 = await v2;
-        if (v2 === SKIP) {
+        let v = prop.transformValueToDataverse(value, ctx);
+        if (v instanceof Promise) v = await v;
+        if (v === SKIP) {
           if (prop.afterSave) await prop.afterSave(ctx, value);
         } else {
           await this.client.updatePropertyValue(
             this.entitySetName,
             id,
             this.fields[key].logicalName,
-            v2
+            v
           );
         }
       }
@@ -2198,7 +1643,7 @@
         // $select keeps all columns in the response.
         { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
       );
-      const transformed = this.transformValueFromDataverse(record);
+      const transformed = await this.transformValueFromDataverse(record);
       const guid = this.getPrimaryId(transformed);
       const ctx = { table: this, client: this.client, recordId: guid };
       await this._afterSave(ctx, value);
@@ -2274,7 +1719,7 @@
         transformed,
         { ifMatch: options?.ifMatch, ifNoneMatch: options?.ifNoneMatch, signal: options?.signal, query: tableQuery(this) }
       );
-      const result = this.transformValueFromDataverse(record);
+      const result = await this.transformValueFromDataverse(record);
       ctx.recordId = this.getPrimaryId(result);
       await this._afterSave(ctx, value);
       return result;
@@ -2430,7 +1875,7 @@
     getPrimaryId(value) {
       return value[this.primaryKey.key];
     }
-    transformValueFromDataverse(value) {
+    async transformValueFromDataverse(value) {
       if (value === null) return null;
       const result = {};
       const pk = this.primaryKey;
@@ -2438,7 +1883,7 @@
       const ctx = recordId ? { table: this, client: this.client, recordId } : void 0;
       for (const [key, property] of Object.entries(this.fields)) {
         const raw = value[property.fromDataverseName];
-        result[key] = property.transformValueFromDataverse(raw, ctx);
+        result[key] = await property.transformValueFromDataverse(raw, ctx);
       }
       if (!(pk.key in result) && recordId !== void 0) {
         result[pk.key] = recordId;
@@ -2451,12 +1896,12 @@
       const result = {};
       for (const [key, property] of Object.entries(this.fields)) {
         if (property.getReadOnly() || !(key in value) || value[key] === void 0) continue;
-        let v2 = property.transformValueToDataverse(
+        let v = property.transformValueToDataverse(
           value[key],
           ctx
         );
-        if (v2 instanceof Promise) v2 = await v2;
-        if (v2 !== SKIP) result[property.toDataverseName] = v2;
+        if (v instanceof Promise) v = await v;
+        if (v !== SKIP) result[property.toDataverseName] = v;
       }
       return result;
     }
@@ -2470,7 +1915,7 @@
      */
     pickProperties(...keys) {
       const properties = Object.fromEntries(
-        Object.entries(this.fields).filter((v2) => keys.includes(v2[0]))
+        Object.entries(this.fields).filter((v) => keys.includes(v[0]))
       );
       return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
     }
@@ -2482,7 +1927,7 @@
      */
     omitProperties(...keys) {
       const properties = Object.fromEntries(
-        Object.entries(this.fields).filter((v2) => !keys.includes(v2[0]))
+        Object.entries(this.fields).filter((v) => !keys.includes(v[0]))
       );
       return new DataverseTable({ client: this.client, entitySetName: this.entitySetName, logicalName: this.logicalName, fields: properties, primaryKey: this.primaryKey });
     }
@@ -2537,20 +1982,19 @@
     T;
   }
   function composeFieldSchemas(fields) {
-    const shape = {};
-    for (const [key, field] of Object.entries(fields)) {
-      shape[key] = field.schema;
-    }
-    return object(shape);
+    return composeRecordSchema(Object.fromEntries(
+      Object.entries(fields).map(([key, field]) => [key, field.schema])
+    ));
   }
   function tableQuery(table, options) {
     return serializeODataSelect(buildTableQueryAst(table, options));
   }
 
-  const DATE_SCHEMA = date$1();
-  const NON_EMPTY_STRING_SCHEMA = pipe(string$1(), minLength(1));
   function isValidDate(value) {
-    return safeParse(DATE_SCHEMA, value).success;
+    return value instanceof Date && !isNaN(value.getTime());
+  }
+  function schemasOf(fields) {
+    return Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.schema]));
   }
   function parseValidDateOnly(value) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(value)) throw new Error(`Invalid date-only value: ${value}`);
@@ -2564,6 +2008,13 @@
   }
   const SKIP = Symbol("skip");
   class FieldBase {
+    /**
+     * Standard Schema V1 props, delegated to the field's validation `schema`.
+     * Lets any Standard Schema–aware consumer validate the field directly.
+     */
+    get "~standard"() {
+      return this.schema["~standard"];
+    }
     /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
     schemaName;
     /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
@@ -2582,7 +2033,8 @@
       this.toDataverseName = this.logicalName;
       this.#default = options?.default ?? defaults.defaultValue;
       this.#readOnly = options?.readonly ?? false;
-      this.schema = options?.schema ?? defaults.schema;
+      const base = options?.schema ?? defaults.schema;
+      this.schema = options?.required ? requiredOf(base) : base;
     }
     getDefault() {
       return this.#default;
@@ -2597,18 +2049,11 @@
       return value;
     }
   }
-  function buildObjectSchema(fields) {
-    const shape = {};
-    for (const [key, field] of Object.entries(fields)) {
-      shape[key] = field.schema;
-    }
-    return object(shape);
-  }
   class BooleanField extends FieldBase {
     kind = "value";
     type = "boolean";
     constructor(name, options) {
-      super(name, { defaultValue: false, schema: boolean$1() }, options);
+      super(name, { defaultValue: false, schema: BOOLEAN_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
       if (typeof value === "string") return value.toLowerCase() === "true";
@@ -2619,7 +2064,7 @@
     kind = "value";
     type = "number";
     constructor(name, options) {
-      super(name, { defaultValue: 0, schema: number$1() }, options);
+      super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
       if (typeof value === "string") {
@@ -2633,7 +2078,7 @@
     kind = "value";
     type = "string";
     constructor(name, options) {
-      super(name, { defaultValue: "", schema: string$1() }, options);
+      super(name, { defaultValue: "", schema: STRING_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
       return value ?? "";
@@ -2645,7 +2090,7 @@
     constructor(name, options) {
       super(name, {
         defaultValue: "",
-        schema: pipe(string$1(), uuid())
+        schema: GUID_SCHEMA
       }, options);
     }
     getDefault() {
@@ -2661,7 +2106,7 @@
       if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
       super(name, {
         defaultValue: [],
-        schema: array(custom((value) => values.includes(value), `Value not in [${values}]`))
+        schema: arrayOf(checkSchema((value) => values.includes(value), `Value not in [${values}]`))
       }, options);
       this.choices = Object.freeze(values);
     }
@@ -2670,14 +2115,14 @@
     }
     transformValueFromDataverse(value) {
       if (value == null || value === "") return [];
-      if (Array.isArray(value)) return value.map((v2) => Number(v2));
+      if (Array.isArray(value)) return value.map((v) => Number(v));
       return String(value).split(",").map((part) => Number(part.trim())).filter((n) => !Number.isNaN(n));
     }
     transformValueToDataverse(value) {
       if (value == null) return null;
       const arr = Array.isArray(value) ? value : [value];
       if (arr.length === 0) return null;
-      return arr.map((v2) => Number(v2)).join(",");
+      return arr.map((v) => Number(v)).join(",");
     }
   }
   class ChoiceField extends FieldBase {
@@ -2692,7 +2137,10 @@
       const values = Object.values(choices);
       super(name, {
         defaultValue: choices[Number(firstKey)],
-        schema: picklist(values)
+        schema: checkSchema(
+          (value) => values.includes(value),
+          `Value not in [${values}]`
+        )
       }, options);
       this.#choices = choices;
       this.choices = Object.freeze([...values]);
@@ -2703,8 +2151,8 @@
       return result;
     }
     transformValueToDataverse(value) {
-      for (const [k, v2] of Object.entries(this.#choices)) {
-        if (v2 === value) return Number(k);
+      for (const [k, v] of Object.entries(this.#choices)) {
+        if (v === value) return Number(k);
       }
       throw new Error(`Unknown choice label: ${value}`);
     }
@@ -2715,7 +2163,7 @@
     constructor(name, options) {
       super(name, {
         defaultValue: /* @__PURE__ */ new Date(),
-        schema: instance(Date)
+        schema: DATE_SCHEMA
       }, options);
     }
     getDefault() {
@@ -2734,7 +2182,7 @@
     constructor(name, options) {
       super(name, {
         defaultValue: parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
-        schema: instance(Date)
+        schema: DATE_SCHEMA
       }, options);
     }
     getDefault() {
@@ -2755,10 +2203,10 @@
     constructor(name, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(object({
-          url: optional(string$1()),
-          fullSizeUrl: optional(string$1()),
-          data: optional(nullable(instance(Blob)))
+        schema: nullableOf(composeRecordSchema({
+          url: optionalOf(STRING_SCHEMA),
+          fullSizeUrl: optionalOf(STRING_SCHEMA),
+          data: optionalOf(nullableOf(BLOB_SCHEMA))
         }))
       }, options);
     }
@@ -2789,10 +2237,10 @@
     constructor(name, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(object({
-          name: optional(string$1()),
-          url: optional(string$1()),
-          data: optional(nullable(instance(Blob)))
+        schema: nullableOf(composeRecordSchema({
+          name: optionalOf(STRING_SCHEMA),
+          url: optionalOf(STRING_SCHEMA),
+          data: optionalOf(nullableOf(BLOB_SCHEMA))
         }))
       }, options);
       this.fromDataverseName = `${name}_name`;
@@ -2856,7 +2304,7 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(NON_EMPTY_STRING_SCHEMA)
+        schema: nullableOf(GUID_SCHEMA)
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = `_${this.logicalName}_value`;
@@ -2886,7 +2334,7 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: [],
-        schema: array(lazy(() => buildObjectSchema(getTable().fields)))
+        schema: arrayOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = this.schemaName;
@@ -2895,10 +2343,10 @@
     get table() {
       return this.#table ??= this.#getTable();
     }
-    transformValueFromDataverse(value) {
-      return Array.from(value ?? []).map(
-        (v2) => this.table.transformValueFromDataverse(v2)
-      );
+    async transformValueFromDataverse(value) {
+      return Promise.all(Array.from(value ?? []).map(
+        (v) => this.table.transformValueFromDataverse(v)
+      ));
     }
     transformValueToDataverse() {
       return SKIP;
@@ -2906,7 +2354,7 @@
     async afterSave(ctx, value) {
       if (!Array.isArray(value)) return;
       const ids = await Promise.all(
-        value.map((v2) => this.table.upsertRecord(void 0, v2).then((r) => this.table.getPrimaryId(r)))
+        value.map((v) => this.table.upsertRecord(void 0, v).then((r) => this.table.getPrimaryId(r)))
       );
       await ctx.client.associateRecordToList(
         ctx.table.entitySetName,
@@ -2931,7 +2379,7 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: null,
-        schema: nullable(lazy(() => buildObjectSchema(getTable().fields)))
+        schema: nullableOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = this.schemaName;
@@ -2940,7 +2388,7 @@
     get table() {
       return this.#table ??= this.#getTable();
     }
-    transformValueFromDataverse(value) {
+    async transformValueFromDataverse(value) {
       return value == null ? null : this.table.transformValueFromDataverse(value);
     }
     transformValueToDataverse() {
@@ -2963,6 +2411,813 @@
   }
   function lookup(name, getTable, options) {
     return new LookupProperty(name, getTable, options);
+  }
+
+  const instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
+
+  let idbProxyableTypes;
+  let cursorAdvanceMethods;
+  // This is a function to prevent it throwing up in node environments.
+  function getIdbProxyableTypes() {
+      return (idbProxyableTypes ||
+          (idbProxyableTypes = [
+              IDBDatabase,
+              IDBObjectStore,
+              IDBIndex,
+              IDBCursor,
+              IDBTransaction,
+          ]));
+  }
+  // This is a function to prevent it throwing up in node environments.
+  function getCursorAdvanceMethods() {
+      return (cursorAdvanceMethods ||
+          (cursorAdvanceMethods = [
+              IDBCursor.prototype.advance,
+              IDBCursor.prototype.continue,
+              IDBCursor.prototype.continuePrimaryKey,
+          ]));
+  }
+  const transactionDoneMap = new WeakMap();
+  const transformCache = new WeakMap();
+  const reverseTransformCache = new WeakMap();
+  function promisifyRequest(request) {
+      const promise = new Promise((resolve, reject) => {
+          const unlisten = () => {
+              request.removeEventListener('success', success);
+              request.removeEventListener('error', error);
+          };
+          const success = () => {
+              resolve(wrap(request.result));
+              unlisten();
+          };
+          const error = () => {
+              reject(request.error);
+              unlisten();
+          };
+          request.addEventListener('success', success);
+          request.addEventListener('error', error);
+      });
+      // This mapping exists in reverseTransformCache but doesn't exist in transformCache. This
+      // is because we create many promises from a single IDBRequest.
+      reverseTransformCache.set(promise, request);
+      return promise;
+  }
+  function cacheDonePromiseForTransaction(tx) {
+      // Early bail if we've already created a done promise for this transaction.
+      if (transactionDoneMap.has(tx))
+          return;
+      const done = new Promise((resolve, reject) => {
+          const unlisten = () => {
+              tx.removeEventListener('complete', complete);
+              tx.removeEventListener('error', error);
+              tx.removeEventListener('abort', error);
+          };
+          const complete = () => {
+              resolve();
+              unlisten();
+          };
+          const error = () => {
+              reject(tx.error || new DOMException('AbortError', 'AbortError'));
+              unlisten();
+          };
+          tx.addEventListener('complete', complete);
+          tx.addEventListener('error', error);
+          tx.addEventListener('abort', error);
+      });
+      // Cache it for later retrieval.
+      transactionDoneMap.set(tx, done);
+  }
+  let idbProxyTraps = {
+      get(target, prop, receiver) {
+          if (target instanceof IDBTransaction) {
+              // Special handling for transaction.done.
+              if (prop === 'done')
+                  return transactionDoneMap.get(target);
+              // Make tx.store return the only store in the transaction, or undefined if there are many.
+              if (prop === 'store') {
+                  return receiver.objectStoreNames[1]
+                      ? undefined
+                      : receiver.objectStore(receiver.objectStoreNames[0]);
+              }
+          }
+          // Else transform whatever we get back.
+          return wrap(target[prop]);
+      },
+      set(target, prop, value) {
+          target[prop] = value;
+          return true;
+      },
+      has(target, prop) {
+          if (target instanceof IDBTransaction &&
+              (prop === 'done' || prop === 'store')) {
+              return true;
+          }
+          return prop in target;
+      },
+  };
+  function replaceTraps(callback) {
+      idbProxyTraps = callback(idbProxyTraps);
+  }
+  function wrapFunction(func) {
+      // Due to expected object equality (which is enforced by the caching in `wrap`), we
+      // only create one new func per func.
+      // Cursor methods are special, as the behaviour is a little more different to standard IDB. In
+      // IDB, you advance the cursor and wait for a new 'success' on the IDBRequest that gave you the
+      // cursor. It's kinda like a promise that can resolve with many values. That doesn't make sense
+      // with real promises, so each advance methods returns a new promise for the cursor object, or
+      // undefined if the end of the cursor has been reached.
+      if (getCursorAdvanceMethods().includes(func)) {
+          return function (...args) {
+              // Calling the original function with the proxy as 'this' causes ILLEGAL INVOCATION, so we use
+              // the original object.
+              func.apply(unwrap(this), args);
+              return wrap(this.request);
+          };
+      }
+      return function (...args) {
+          // Calling the original function with the proxy as 'this' causes ILLEGAL INVOCATION, so we use
+          // the original object.
+          return wrap(func.apply(unwrap(this), args));
+      };
+  }
+  function transformCachableValue(value) {
+      if (typeof value === 'function')
+          return wrapFunction(value);
+      // This doesn't return, it just creates a 'done' promise for the transaction,
+      // which is later returned for transaction.done (see idbObjectHandler).
+      if (value instanceof IDBTransaction)
+          cacheDonePromiseForTransaction(value);
+      if (instanceOfAny(value, getIdbProxyableTypes()))
+          return new Proxy(value, idbProxyTraps);
+      // Return the same value back if we're not going to transform it.
+      return value;
+  }
+  function wrap(value) {
+      // We sometimes generate multiple promises from a single IDBRequest (eg when cursoring), because
+      // IDB is weird and a single IDBRequest can yield many responses, so these can't be cached.
+      if (value instanceof IDBRequest)
+          return promisifyRequest(value);
+      // If we've already transformed this value before, reuse the transformed value.
+      // This is faster, but it also provides object equality.
+      if (transformCache.has(value))
+          return transformCache.get(value);
+      const newValue = transformCachableValue(value);
+      // Not all types are transformed.
+      // These may be primitive types, so they can't be WeakMap keys.
+      if (newValue !== value) {
+          transformCache.set(value, newValue);
+          reverseTransformCache.set(newValue, value);
+      }
+      return newValue;
+  }
+  const unwrap = (value) => reverseTransformCache.get(value);
+
+  /**
+   * Open a database.
+   *
+   * @param name Name of the database.
+   * @param version Schema version.
+   * @param callbacks Additional callbacks.
+   */
+  function openDB(name, version, { blocked, upgrade, blocking, terminated } = {}) {
+      const request = indexedDB.open(name, version);
+      const openPromise = wrap(request);
+      if (upgrade) {
+          request.addEventListener('upgradeneeded', (event) => {
+              upgrade(wrap(request.result), event.oldVersion, event.newVersion, wrap(request.transaction), event);
+          });
+      }
+      if (blocked) {
+          request.addEventListener('blocked', (event) => blocked(
+          // Casting due to https://github.com/microsoft/TypeScript-DOM-lib-generator/pull/1405
+          event.oldVersion, event.newVersion, event));
+      }
+      openPromise
+          .then((db) => {
+          if (terminated)
+              db.addEventListener('close', () => terminated());
+          if (blocking) {
+              db.addEventListener('versionchange', (event) => blocking(event.oldVersion, event.newVersion, event));
+          }
+      })
+          .catch(() => { });
+      return openPromise;
+  }
+
+  const readMethods = ['get', 'getKey', 'getAll', 'getAllKeys', 'count'];
+  const writeMethods = ['put', 'add', 'delete', 'clear'];
+  const cachedMethods = new Map();
+  function getMethod(target, prop) {
+      if (!(target instanceof IDBDatabase &&
+          !(prop in target) &&
+          typeof prop === 'string')) {
+          return;
+      }
+      if (cachedMethods.get(prop))
+          return cachedMethods.get(prop);
+      const targetFuncName = prop.replace(/FromIndex$/, '');
+      const useIndex = prop !== targetFuncName;
+      const isWrite = writeMethods.includes(targetFuncName);
+      if (
+      // Bail if the target doesn't exist on the target. Eg, getAll isn't in Edge.
+      !(targetFuncName in (useIndex ? IDBIndex : IDBObjectStore).prototype) ||
+          !(isWrite || readMethods.includes(targetFuncName))) {
+          return;
+      }
+      const method = async function (storeName, ...args) {
+          // isWrite ? 'readwrite' : undefined gzipps better, but fails in Edge :(
+          const tx = this.transaction(storeName, isWrite ? 'readwrite' : 'readonly');
+          let target = tx.store;
+          if (useIndex)
+              target = target.index(args.shift());
+          // Must reject if op rejects.
+          // If it's a write operation, must reject if tx.done rejects.
+          // Must reject with op rejection first.
+          // Must resolve with op value.
+          // Must handle both promises (no unhandled rejections)
+          return (await Promise.all([
+              target[targetFuncName](...args),
+              isWrite && tx.done,
+          ]))[0];
+      };
+      cachedMethods.set(prop, method);
+      return method;
+  }
+  replaceTraps((oldTraps) => ({
+      ...oldTraps,
+      get: (target, prop, receiver) => getMethod(target, prop) || oldTraps.get(target, prop, receiver),
+      has: (target, prop) => !!getMethod(target, prop) || oldTraps.has(target, prop),
+  }));
+
+  const advanceMethodProps = ['continue', 'continuePrimaryKey', 'advance'];
+  const methodMap = {};
+  const advanceResults = new WeakMap();
+  const ittrProxiedCursorToOriginalProxy = new WeakMap();
+  const cursorIteratorTraps = {
+      get(target, prop) {
+          if (!advanceMethodProps.includes(prop))
+              return target[prop];
+          let cachedFunc = methodMap[prop];
+          if (!cachedFunc) {
+              cachedFunc = methodMap[prop] = function (...args) {
+                  advanceResults.set(this, ittrProxiedCursorToOriginalProxy.get(this)[prop](...args));
+              };
+          }
+          return cachedFunc;
+      },
+  };
+  async function* iterate(...args) {
+      // tslint:disable-next-line:no-this-assignment
+      let cursor = this;
+      if (!(cursor instanceof IDBCursor)) {
+          cursor = await cursor.openCursor(...args);
+      }
+      if (!cursor)
+          return;
+      cursor = cursor;
+      const proxiedCursor = new Proxy(cursor, cursorIteratorTraps);
+      ittrProxiedCursorToOriginalProxy.set(proxiedCursor, cursor);
+      // Map this double-proxy back to the original, so other cursor methods work.
+      reverseTransformCache.set(proxiedCursor, unwrap(cursor));
+      while (cursor) {
+          yield proxiedCursor;
+          // If one of the advancing methods was not called, call continue().
+          cursor = await (advanceResults.get(proxiedCursor) || cursor.continue());
+          advanceResults.delete(proxiedCursor);
+      }
+  }
+  function isIteratorProp(target, prop) {
+      return ((prop === Symbol.asyncIterator &&
+          instanceOfAny(target, [IDBIndex, IDBObjectStore, IDBCursor])) ||
+          (prop === 'iterate' && instanceOfAny(target, [IDBIndex, IDBObjectStore])));
+  }
+  replaceTraps((oldTraps) => ({
+      ...oldTraps,
+      get(target, prop, receiver) {
+          if (isIteratorProp(target, prop))
+              return iterate;
+          return oldTraps.get(target, prop, receiver);
+      },
+      has(target, prop) {
+          return isIteratorProp(target, prop) || oldTraps.has(target, prop);
+      },
+  }));
+
+  function serializeError(error) {
+    if (error instanceof DataverseHttpError) {
+      return {
+        name: error.name,
+        message: error.message,
+        status: error.status,
+        statusText: error.statusText,
+        body: error.body
+      };
+    }
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message };
+    }
+    return { name: "UnknownError", value: error };
+  }
+  const KEY_VIOLATION_CODES = /* @__PURE__ */ new Set([
+    "0x80060892",
+    // DuplicateRecordEntityKey
+    "0x80040333"
+    // DuplicateRecordsFound
+  ]);
+  const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
+  function isConcurrencyError(error) {
+    const status = error?.status;
+    if (status !== 412) return false;
+    return !isKeyViolation(error);
+  }
+  function isKeyViolation(error) {
+    if (error instanceof DataverseHttpError) {
+      error = { body: error.body };
+    }
+    const body = error?.body;
+    const code = typeof body?.code === "string" ? body.code.toLowerCase() : void 0;
+    if (code && KEY_VIOLATION_CODES.has(code)) return true;
+    const message = typeof body?.message === "string" ? body.message : void 0;
+    return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
+  }
+
+  function plainClone(value) {
+    if (Array.isArray(value)) {
+      return value.map(plainClone);
+    }
+    if (value instanceof Date) {
+      return new Date(value.getTime());
+    }
+    if (value instanceof Blob || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      return value;
+    }
+    if (value !== null && typeof value === "object") {
+      const out = {};
+      for (const key of Object.keys(value)) {
+        out[key] = plainClone(value[key]);
+      }
+      return out;
+    }
+    return value;
+  }
+  function isMetaKey(key) {
+    return key.startsWith("$");
+  }
+  function isMetaOnly(delta) {
+    const keys = Object.keys(delta ?? {});
+    return keys.length > 0 && keys.every(isMetaKey);
+  }
+  function valuesEqual$1(a, b) {
+    if (a === b) return true;
+    if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+      return a.every((v, i) => valuesEqual$1(v, b[i]));
+    }
+    if (a && b && typeof a === "object" && typeof b === "object") {
+      const ak = Object.keys(a), bk = Object.keys(b);
+      if (ak.length !== bk.length) return false;
+      return ak.every((k) => valuesEqual$1(a[k], b[k]));
+    }
+    return false;
+  }
+
+  class MutationPersistenceError extends Error {
+    constructor(message, mutationIds, cause) {
+      super(message);
+      this.mutationIds = mutationIds;
+      this.cause = cause;
+      this.name = "MutationPersistenceError";
+    }
+  }
+
+  const MAX_MUTATION_ATTEMPTS = 3;
+  const RETRY_BASE_DELAY = 1e3;
+  const RETRY_MAX_DELAY = 6e4;
+  class SyncEngine {
+    name;
+    version;
+    // Widened deliberately: the sync DB stores heterogeneous tables.
+    tables = /* @__PURE__ */ new Map();
+    MUTATION_QUEUE_NAME = "Mutations";
+    ERRORED_MUTATIONS_NAME = "Errored Mutations";
+    channel;
+    closed = false;
+    // Per-collection cache stores (keyed by collection id). Unlike the table
+    // stores derived from entitySetName, these exist so multiple filtered
+    // collections over the same entity don't overwrite each other's snapshots.
+    collectionStores = /* @__PURE__ */ new Set();
+    collectionStorePromises = /* @__PURE__ */ new Map();
+    // The version passed to openDB — grows when a late-registered collection
+    // needs its own object store and the DB must be reopened to create it.
+    dbVersion;
+    activeFetchControllers = /* @__PURE__ */ new Set();
+    collectionCleanups = /* @__PURE__ */ new Set();
+    // Last etag we successfully wrote for each record key. Lets a queued update
+    // that was built against a stale optimistic snapshot borrow the fresher etag
+    // produced by an earlier update in the same flush (or a prior flush), so
+    // consecutive conditional updates don't 412 each other. Seeded from the
+    // mutation's own ifMatch when empty.
+    keyEtags = /* @__PURE__ */ new Map();
+    // Schedules a wake-up for the soonest delayed retry so a failed mutation
+    // re-attempts even while the app is idle and online. Cleared on each
+    // queueMutations/flush and on close().
+    retryTimer;
+    channelMessageHandler;
+    // Subscribers notified whenever the mutation queue or errored store
+    // changes (mutations enqueued, flushed, errored, retried, discarded).
+    // Listeners receive no payload — call getQueueCount()/getErroredMutations()
+    // to read the current state (see the conflict-dashboard use case).
+    mutationListeners = /* @__PURE__ */ new Set();
+    constructor(name, tables, version) {
+      this.name = name;
+      this.channel = new BroadcastChannel(name);
+      this.version = version;
+      this.dbVersion = version;
+      for (const table of tables) this.tables.set(table.entitySetName, table);
+      this.channelMessageHandler = (event) => {
+        if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
+          this.abortActiveFetches();
+        }
+      };
+      this.channel.addEventListener("message", this.channelMessageHandler);
+    }
+    // Monotonic ordering counter for queued mutations — adapters assign it
+    // when serializing their mutation format into {@link QueuedMutation}.
+    sequence = 0;
+    nextSequence() {
+      return this.sequence++;
+    }
+    /**
+     * Registers a listener invoked (synchronously, best-effort) whenever the
+     * offline mutation state changes in this tab: mutations get enqueued,
+     * flushed, moved to/from the errored store, or discarded. Returns an
+     * unsubscribe function. Cross-tab changes are not delivered directly —
+     * each tab's own queueMutations/flushQueue activity fires the hook, so
+     * attach a listener per tab that redraws from
+     * {@link getQueueCount}/{@link getErroredMutations}.
+     */
+    onMutationsChanged(listener) {
+      this.mutationListeners.add(listener);
+      return () => {
+        this.mutationListeners.delete(listener);
+      };
+    }
+    notifyMutationsChanged() {
+      for (const listener of [...this.mutationListeners]) {
+        try {
+          listener();
+        } catch (err) {
+          console.warn("[dataverse-offline] listener failed:", err);
+        }
+      }
+    }
+    db;
+    async getDB() {
+      if (!this.db) {
+        const self = this;
+        this.db = await openDB(this.name, this.dbVersion, {
+          upgrade(database, _oldVersion, _newVersion, transaction) {
+            for (const storeName of Array.from(database.objectStoreNames)) {
+              if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) {
+                database.deleteObjectStore(storeName);
+              }
+            }
+            let store = database.objectStoreNames.contains(self.MUTATION_QUEUE_NAME) ? transaction.objectStore(self.MUTATION_QUEUE_NAME) : database.createObjectStore(self.MUTATION_QUEUE_NAME, { keyPath: "id" });
+            if (!store.indexNames.contains("by_timestamp")) {
+              store.createIndex("by_timestamp", ["timestamp", "sequence"]);
+            }
+            if (!database.objectStoreNames.contains(self.ERRORED_MUTATIONS_NAME)) {
+              database.createObjectStore(self.ERRORED_MUTATIONS_NAME, { keyPath: "id" });
+            }
+            for (const table of self.tables.values()) {
+              if (!database.objectStoreNames.contains(table.entitySetName)) {
+                database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
+              }
+            }
+          }
+        });
+      }
+      return this.db;
+    }
+    /**
+     * Registers a per-collection cache store (keyed by collection id). If the
+     * database is already open without this store, it is reopened with a
+     * bumped version so the upgrade callback can create it. The returned
+     * promise resolves once the store is safe to read/write.
+     */
+    ensureCollectionStore(name) {
+      let p = this.collectionStorePromises.get(name);
+      if (!p) {
+        p = (async () => {
+          this.collectionStores.add(name);
+          let db = await this.getDB();
+          if (!db.objectStoreNames.contains(name)) {
+            db.close();
+            this.db = void 0;
+            this.dbVersion = db.version + 1;
+            await this.getDB();
+          }
+        })();
+        this.collectionStorePromises.set(name, p);
+      }
+      return p;
+    }
+    /**
+     * Instantly aborts any in-flight remote server GET requests across all collections.
+     */
+    abortActiveFetches() {
+      for (const controller of this.activeFetchControllers) {
+        controller.abort("New mutation enqueued");
+      }
+      this.activeFetchControllers.clear();
+    }
+    /** Registers a collection-scoped cleanup to run when the queue closes. */
+    addCollectionCleanup(cleanup) {
+      this.collectionCleanups.add(cleanup);
+    }
+    /** Registers an in-flight fetch controller so abortActiveFetches can cancel it. */
+    trackActiveFetch(controller) {
+      this.activeFetchControllers.add(controller);
+    }
+    /** Unregisters a fetch controller previously registered with trackActiveFetch. */
+    untrackActiveFetch(controller) {
+      this.activeFetchControllers.delete(controller);
+    }
+    get isClosed() {
+      return this.closed;
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      this.abortActiveFetches();
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+      }
+      for (const cleanup of [...this.collectionCleanups]) cleanup();
+      this.collectionCleanups.clear();
+      this.mutationListeners.clear();
+      this.channel.removeEventListener("message", this.channelMessageHandler);
+      this.channel.close();
+      this.db?.close();
+      this.db = void 0;
+    }
+    /**
+     * Flushes the mutation queue to Dataverse. After a successful flush the
+     * authoritative server records (carrying fresh etags) are broadcast via the
+     * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
+     * and IDB cache store — see the offline adapter's handleTabMessage.
+     */
+    async flushQueue() {
+      await navigator.locks.request(this.name, async () => {
+        const db = await this.getDB();
+        const flushed = [];
+        let changed = false;
+        while (true) {
+          const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
+          const index = tx.store.index("by_timestamp");
+          const cursor = await index.openCursor(null, "next");
+          if (!cursor) break;
+          const mutation = cursor.value;
+          if (mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) {
+            break;
+          }
+          const table = this.tables.get(mutation.entitySetName);
+          if (!table) {
+            console.error(`Table ${mutation.entitySetName} not registered in DB`);
+            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+            continue;
+          }
+          if ((mutation.type === "update" || mutation.type === "delete") && !mutation.force) {
+            const fresh = this.keyEtags.get(mutation.key);
+            if (fresh && fresh !== mutation.ifMatch) {
+              mutation.ifMatch = fresh;
+            }
+          }
+          try {
+            if (mutation.type === "insert") {
+              const record = await table.createRecord(mutation.value);
+              flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record), value: record, entitySetName: mutation.entitySetName });
+            } else if (mutation.type === "update") {
+              const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
+              const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
+              const etag = getEtag(record);
+              if (etag) {
+                this.keyEtags.set(mutation.key, etag);
+                mutation.ifMatch = etag;
+                await db.put(this.MUTATION_QUEUE_NAME, mutation);
+              }
+              flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
+            } else if (mutation.type === "delete") {
+              await table.deleteRecord(mutation.key, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
+              this.keyEtags.delete(mutation.key);
+              flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: void 0, entitySetName: mutation.entitySetName });
+            }
+            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+            changed = true;
+          } catch (e) {
+            if (!navigator.onLine) break;
+            console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
+            mutation.error = serializeError(e);
+            mutation.lastAttemptAt = Date.now();
+            if (isConcurrencyError(e) || isKeyViolation(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+            else mutation.attempts++;
+            if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
+              mutation.nextAttemptAt = void 0;
+              await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+              await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
+              changed = true;
+            } else {
+              const delay = Math.min(
+                RETRY_MAX_DELAY,
+                RETRY_BASE_DELAY * 2 ** (mutation.attempts - 1)
+              );
+              mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
+              await db.put(this.MUTATION_QUEUE_NAME, mutation);
+              if (navigator.onLine) {
+                if (this.retryTimer) clearTimeout(this.retryTimer);
+                this.retryTimer = setTimeout(() => {
+                  this.retryTimer = void 0;
+                  void this.flushQueue();
+                }, delay);
+              }
+              break;
+            }
+          }
+        }
+        if (flushed.length > 0) {
+          this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
+        }
+        if (changed) this.notifyMutationsChanged();
+      });
+    }
+    async getQueueCount() {
+      const db = await this.getDB();
+      return db.count(this.MUTATION_QUEUE_NAME);
+    }
+    async getErroredMutations() {
+      const db = await this.getDB();
+      return db.getAll(this.ERRORED_MUTATIONS_NAME);
+    }
+    /**
+     * Snapshot for presenting a conflicted mutation to a user: the server's
+     * current authoritative record, and which of the mutation's fields the
+     * server state actually differs on. A differing etag only *means*
+     * something touched the record — the field diff is what makes "Force",
+     * "Rebase" or "Discard" an informed choice instead of a blind button.
+     *
+     * Semantics:
+     * - `server` is the transformed record (null when the record was deleted
+     *   server-side), including *all* of the table's fields — not just the
+     *   locally changed ones.
+     * - `conflictingFields` compares only the fields the local mutation
+     *   touches against the server record (see {@link ConflictDetails}).
+     * Unknown fields (e.g. navigation blobs not present in the snapshot) are
+     * treated as conflicting rather than silently ignored.
+     */
+    async getConflictDetails(mutation) {
+      const table = this.tables.get(mutation.entitySetName);
+      if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this SyncEngine`);
+      const server = await table.getRecord(mutation.key);
+      const proposed = {};
+      const changed = /* @__PURE__ */ new Map();
+      const fill = (source, record) => {
+        for (const [k, v] of Object.entries(source ?? {})) {
+          if (isMetaKey(k)) continue;
+          if (record) changed.set(k, v);
+          proposed[k] = v;
+        }
+      };
+      fill(mutation.value, false);
+      fill(mutation.type === "update" ? mutation.changes : void 0, true);
+      const changesMetaOnly = isMetaOnly(mutation.changes);
+      const fields = [];
+      for (const [name] of Object.entries(table.fields)) {
+        const local = proposed[name];
+        const serverValue = server?.[name];
+        const explicitlyChanged = changed.has(name);
+        const differs = !valuesEqual$1(local, serverValue);
+        const status = differs ? explicitlyChanged || changesMetaOnly ? "conflict" : "server-change" : explicitlyChanged ? "local-change" : "unchanged";
+        fields.push({
+          field: name,
+          local,
+          server: serverValue,
+          changed: explicitlyChanged ? changed.get(name) : void 0,
+          status
+        });
+      }
+      return {
+        server,
+        fields,
+        conflictingFields: fields.filter((f) => f.status === "conflict").map((f) => f.field)
+      };
+    }
+    /**
+     * Moves an errored mutation back into the retry queue and flushes.
+     *
+     * Resolution options ({@link RetryOptions}):
+     *
+     * - **Force** (`{ force: true }`): re-applied without its `If-Match`
+     *   precondition — updates overwrite the server's current state
+     *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
+     *   concurrency failure (see {@link isConcurrencyError}) when the local
+     *   changes should win regardless of concurrent server-side edits.
+     * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
+     *   record and re-applies the local changes on top of its *fresh* etag
+     *   — a "resend my edits, accept the server's state as the base"
+     *   resolution. Fails with 412 again if the record is touched between
+     *   reading the etag and the write. If the server cannot be reached the
+     *   freshest etag already known to this DB is used instead of aborting.
+     * - Plain (`{}`): retries with the etag it last carried — useful only if
+     *   the server record has since reverted to the expected etag.
+     *
+     * The resolution is a property of the retry call, not of the mutation:
+     * a mutation previously retried with `force` is un-forced by a later
+     * plain or `useFreshEtag` retry (and, once un-forced, inherits the
+     * freshest known etag rather than a bare precondition).
+     */
+    async retryErroredMutation(id, options) {
+      const db = await this.getDB();
+      const mutation = await db.get(this.ERRORED_MUTATIONS_NAME, id);
+      if (!mutation) return;
+      mutation.attempts = 0;
+      mutation.error = void 0;
+      mutation.lastAttemptAt = void 0;
+      mutation.nextAttemptAt = void 0;
+      mutation.force = options?.force === true;
+      if (mutation.force) {
+        mutation.ifMatch = void 0;
+      } else if (options?.useFreshEtag && mutation.type !== "insert") {
+        const table = this.tables.get(mutation.entitySetName);
+        if (table) {
+          let fresh;
+          try {
+            const server = await table.getRecord(mutation.key);
+            fresh = server ? getEtag(server) : void 0;
+          } catch {
+            fresh = this.keyEtags.get(mutation.key);
+          }
+          if (fresh && fresh !== mutation.ifMatch) {
+            mutation.ifMatch = fresh;
+            this.keyEtags.set(mutation.key, fresh);
+          }
+        }
+      } else if (mutation.ifMatch === void 0) {
+        const fresh = this.keyEtags.get(mutation.key);
+        if (fresh) mutation.ifMatch = fresh;
+      }
+      const tx = db.transaction(
+        [this.MUTATION_QUEUE_NAME, this.ERRORED_MUTATIONS_NAME],
+        "readwrite"
+      );
+      const erroredStore = tx.objectStore(this.ERRORED_MUTATIONS_NAME);
+      const queueStore = tx.objectStore(this.MUTATION_QUEUE_NAME);
+      await Promise.all([
+        erroredStore.delete(id),
+        queueStore.put(mutation)
+      ]);
+      await tx.done;
+      this.notifyMutationsChanged();
+      if (navigator.onLine) await this.flushQueue();
+    }
+    async discardErroredMutation(id) {
+      const db = await this.getDB();
+      await db.delete(this.ERRORED_MUTATIONS_NAME, id);
+      this.notifyMutationsChanged();
+    }
+    async queueMutations(mutations) {
+      if (mutations.length === 0) return;
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+      }
+      try {
+        const db = await this.getDB();
+        const storeNames = [
+          this.MUTATION_QUEUE_NAME,
+          ...new Set(mutations.map((mutation) => mutation.entitySetName))
+        ];
+        const tx = db.transaction(storeNames, "readwrite");
+        for (const mutation of mutations) {
+          if (mutation.type === "insert" || mutation.type === "update") {
+            tx.objectStore(mutation.entitySetName).put(mutation.value);
+          } else if (mutation.type === "delete") {
+            tx.objectStore(mutation.entitySetName).delete(mutation.key);
+          }
+          tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
+        }
+        await tx.done;
+        this.notifyMutationsChanged();
+      } catch (e) {
+        console.error("[dataverse-offline] Error writing mutation to IDB:", e);
+        throw new MutationPersistenceError(
+          "Failed to persist offline mutations",
+          mutations.map((mutation) => mutation.id),
+          e
+        );
+      }
+    }
   }
 
   const defaults = {
@@ -3294,7 +3549,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-08-26T15:33:41.643Z"}
+      meta.textContent = `build ${"2026-09-14T14:26:39.241Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3383,7 +3638,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-08-26T15:33:41.643Z",
+          build: "2026-09-14T14:26:39.241Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3402,7 +3657,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-08-26T15:33:41.643Z"}\``,
+        `Build: \`${"2026-09-14T14:26:39.241Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -3757,6 +4012,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.name = `SyncCleanupError`;
     }
   }
+  class SyncTransactionAbortedError extends Error {
+    constructor() {
+      super(`Sync transaction was aborted before application`);
+      this.name = `AbortError`;
+    }
+  }
 
   function deepEquals(a, b) {
     return deepEqualsInternal(a, b, /* @__PURE__ */ new Map());
@@ -3924,11 +4185,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       return a.getTime() - b.getTime();
     }
     if (isTemporal(a) && isTemporal(b)) {
-      const aStr = a.toString();
-      const bStr = b.toString();
-      if (aStr < bStr) return -1;
-      if (aStr > bStr) return 1;
-      return 0;
+      return compareTemporalValues(a, b);
     }
     const aIsObject = typeof a === `object`;
     const bIsObject = typeof b === `object`;
@@ -3960,6 +4217,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     };
   }
+  const defaultComparator = makeComparator({
+    direction: `asc`,
+    nulls: `first`,
+    stringSort: `locale`
+  });
   function areUint8ArraysEqual(a, b) {
     if (a.byteLength !== b.byteLength) {
       return false;
@@ -3972,6 +4234,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     return true;
   }
   const UINT8ARRAY_NORMALIZE_THRESHOLD = 128;
+  const UNDEFINED_SENTINEL = `__TS_DB_BTREE_UNDEFINED_VALUE__`;
   function normalizeValue(value) {
     if (typeof value !== `object` || value === null) {
       return value;
@@ -3989,6 +4252,47 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     }
     return value;
+  }
+  function normalizeForBTree(value) {
+    if (value === void 0) {
+      return UNDEFINED_SENTINEL;
+    }
+    return normalizeValue(value);
+  }
+  function areSameValueZeroEqual(a, b) {
+    return a === b || Number.isNaN(a) && Number.isNaN(b);
+  }
+  function denormalizeUndefined(value) {
+    if (value === UNDEFINED_SENTINEL) {
+      return void 0;
+    }
+    return value;
+  }
+  const temporalCompareByTag = /* @__PURE__ */ new Map();
+  function compareTemporalValues(a, b) {
+    const aTag = a[Symbol.toStringTag];
+    const bTag = b[Symbol.toStringTag];
+    if (aTag !== bTag) {
+      throw new TypeError(
+        `Cannot order Temporal values of different types: ${aTag} vs ${bTag}`
+      );
+    }
+    let compare = temporalCompareByTag.get(aTag);
+    if (compare === void 0) {
+      const fn = a.constructor.compare;
+      compare = typeof fn === `function` ? fn : null;
+      temporalCompareByTag.set(aTag, compare);
+    }
+    if (compare === null) {
+      throw new TypeError(`${aTag} has no defined ordering`);
+    }
+    return compare(a, b);
+  }
+  function compareValues(a, b) {
+    if (isTemporal(a) && isTemporal(b)) {
+      return compareTemporalValues(a, b);
+    }
+    return a < b ? -1 : a > b ? 1 : 0;
   }
   function areValuesEqual(a, b) {
     if (a === b) {
@@ -4157,7 +4461,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (isUnorderable(a) || isUnorderable(b)) {
             return isUnorderable(a) && !isUnorderable(b);
           }
-          return a > b;
+          return compareValues(a, b) > 0;
         };
       }
       case `gte`: {
@@ -4172,7 +4476,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (isUnorderable(a) || isUnorderable(b)) {
             return isUnorderable(a);
           }
-          return a >= b;
+          return compareValues(a, b) >= 0;
         };
       }
       case `lt`: {
@@ -4187,7 +4491,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (isUnorderable(a) || isUnorderable(b)) {
             return isUnorderable(b) && !isUnorderable(a);
           }
-          return a < b;
+          return compareValues(a, b) < 0;
         };
       }
       case `lte`: {
@@ -4202,7 +4506,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (isUnorderable(a) || isUnorderable(b)) {
             return isUnorderable(b);
           }
-          return a <= b;
+          return compareValues(a, b) <= 0;
         };
       }
       // Boolean operators
@@ -5479,6 +5783,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.pendingSyncedTransactions = [];
       this.syncedMetadata = /* @__PURE__ */ new Map();
       this.syncedCollectionMetadata = /* @__PURE__ */ new Map();
+      this.hydrationSeedKeys = /* @__PURE__ */ new Set();
+      this.hydratedKeys = /* @__PURE__ */ new Set();
       this.optimisticUpserts = /* @__PURE__ */ new Map();
       this.optimisticDeletes = /* @__PURE__ */ new Set();
       this.pendingOptimisticUpserts = /* @__PURE__ */ new Map();
@@ -5535,6 +5841,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           }
         );
         if (!hasPersistingTransaction || hasTruncateSync || hasImmediateSync) {
+          for (const transaction of committedSyncedTransactions) {
+            transaction.applicationStarted = true;
+          }
           this.isCommittingSyncTransactions = true;
           const truncateOptimisticSnapshot = hasTruncateSync ? committedSyncedTransactions.find((t) => t.truncate)?.optimisticSnapshot : null;
           let truncatePendingLocalChanges;
@@ -5603,6 +5912,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               this.syncedData.clear();
               this.syncedMetadata.clear();
               this.syncedKeys.clear();
+              this.hydrationSeedKeys.clear();
+              this.hydratedKeys.clear();
               this.clearOriginTrackingState();
               for (const key of changedKeys) {
                 currentVisibleState.delete(key);
@@ -5658,6 +5969,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                   this.pendingOptimisticDirectUpserts.delete(key);
                   this.pendingOptimisticDirectDeletes.delete(key);
                   break;
+              }
+              if (!transaction.preserveHydrationSeedKeys) {
+                this.hydrationSeedKeys.delete(key);
+                this.hydratedKeys.delete(key);
               }
             }
             for (const [key, metadataWrite] of transaction.rowMetadataWrites) {
@@ -5864,6 +6179,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           });
           if (!this.hasReceivedFirstCommit) {
             this.hasReceivedFirstCommit = true;
+          }
+          for (const transaction of committedSyncedTransactions) {
+            transaction.applied.resolve();
           }
         }
       };
@@ -6370,6 +6688,34 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       return this.syncedData.get(key);
     }
+    /** Abandons one committed transaction before it becomes visible. */
+    cancelPendingSyncedTransaction(transaction) {
+      if (transaction.applicationStarted) return;
+      const index = this.pendingSyncedTransactions.indexOf(transaction);
+      if (index === -1) return;
+      this.pendingSyncedTransactions.splice(index, 1);
+      transaction.applied.reject(new SyncTransactionAbortedError());
+      const remainingPendingKeys = /* @__PURE__ */ new Set();
+      for (const pending of this.pendingSyncedTransactions) {
+        for (const operation of pending.operations) {
+          remainingPendingKeys.add(operation.key);
+        }
+      }
+      for (const operation of transaction.operations) {
+        const key = operation.key;
+        if (!remainingPendingKeys.has(key)) {
+          this.recentlySyncedKeys.delete(key);
+          this.preSyncVisibleState.delete(key);
+        }
+      }
+      if (this.pendingSyncedTransactions.length === 0) {
+        this.preSyncVisibleState.clear();
+        this.recentlySyncedKeys.clear();
+        this.changes.emitEvents([], true);
+      } else {
+        this.recomputeOptimisticState(false);
+      }
+    }
     /**
      * Schedule cleanup of a transaction when it completes
      */
@@ -6421,6 +6767,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      * This can be called manually or automatically by garbage collection
      */
     cleanup() {
+      for (const transaction of this.pendingSyncedTransactions) {
+        transaction.applied.reject(new SyncTransactionAbortedError());
+      }
       this.syncedData.clear();
       this.syncedMetadata.clear();
       this.syncedCollectionMetadata.clear();
@@ -6430,12 +6779,168 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.pendingOptimisticDeletes.clear();
       this.pendingOptimisticDirectUpserts.clear();
       this.pendingOptimisticDirectDeletes.clear();
+      this.hydrationSeedKeys.clear();
+      this.hydratedKeys.clear();
       this.clearOriginTrackingState();
       this.isLocalOnly = false;
       this.size = 0;
       this.pendingSyncedTransactions = [];
       this.syncedKeys.clear();
       this.hasReceivedFirstCommit = false;
+    }
+  }
+
+  function isPendingAwareJob(dep) {
+    return typeof dep === `object` && dep !== null && typeof dep.hasPendingGraphRun === `function`;
+  }
+  class Scheduler {
+    constructor() {
+      this.contexts = /* @__PURE__ */ new Map();
+      this.clearListeners = /* @__PURE__ */ new Set();
+    }
+    /**
+     * Get or create the state bucket for a context.
+     */
+    getOrCreateContext(contextId) {
+      let context = this.contexts.get(contextId);
+      if (!context) {
+        context = {
+          queue: [],
+          jobs: /* @__PURE__ */ new Map(),
+          dependencies: /* @__PURE__ */ new Map(),
+          completed: /* @__PURE__ */ new Set()
+        };
+        this.contexts.set(contextId, context);
+      }
+      return context;
+    }
+    /**
+     * Schedule work. Without a context id, executes immediately.
+     * Otherwise queues the job to be flushed once dependencies are satisfied.
+     * Scheduling the same jobId again replaces the previous run function.
+     */
+    schedule({ contextId, jobId, dependencies, run }) {
+      if (typeof contextId === `undefined`) {
+        run();
+        return;
+      }
+      const context = this.getOrCreateContext(contextId);
+      if (!context.jobs.has(jobId)) {
+        context.queue.push(jobId);
+      }
+      context.jobs.set(jobId, run);
+      if (dependencies) {
+        const depSet = new Set(dependencies);
+        depSet.delete(jobId);
+        context.dependencies.set(jobId, depSet);
+      } else if (!context.dependencies.has(jobId)) {
+        context.dependencies.set(jobId, /* @__PURE__ */ new Set());
+      }
+      context.completed.delete(jobId);
+    }
+    /**
+     * Flush all queued work for a context. Jobs with unmet dependencies are retried.
+     * Throws if a pass completes without running any job (dependency cycle).
+     */
+    flush(contextId) {
+      const context = this.contexts.get(contextId);
+      if (!context) return;
+      const { queue, jobs, dependencies, completed } = context;
+      while (queue.length > 0) {
+        let ranThisPass = false;
+        const jobsThisPass = queue.length;
+        for (let i = 0; i < jobsThisPass; i++) {
+          const jobId = queue.shift();
+          const run = jobs.get(jobId);
+          if (!run) {
+            dependencies.delete(jobId);
+            completed.delete(jobId);
+            continue;
+          }
+          const deps = dependencies.get(jobId);
+          let ready = !deps;
+          if (deps) {
+            ready = true;
+            for (const dep of deps) {
+              if (dep === jobId) continue;
+              const depHasPending = isPendingAwareJob(dep) && dep.hasPendingGraphRun(contextId);
+              if (jobs.has(dep) && !completed.has(dep) || !jobs.has(dep) && depHasPending) {
+                ready = false;
+                break;
+              }
+            }
+          }
+          if (ready) {
+            jobs.delete(jobId);
+            dependencies.delete(jobId);
+            run();
+            completed.add(jobId);
+            ranThisPass = true;
+          } else {
+            queue.push(jobId);
+          }
+        }
+        if (!ranThisPass) {
+          throw new Error(
+            `Scheduler detected unresolved dependencies for context ${String(
+            contextId
+          )}.`
+          );
+        }
+      }
+      this.contexts.delete(contextId);
+    }
+    /**
+     * Flush all contexts with pending work. Useful during tear-down.
+     */
+    flushAll() {
+      for (const contextId of Array.from(this.contexts.keys())) {
+        this.flush(contextId);
+      }
+    }
+    /** Clear all scheduled jobs for a context. */
+    clear(contextId) {
+      this.contexts.delete(contextId);
+      this.clearListeners.forEach((listener) => listener(contextId));
+    }
+    /** Register a listener to be notified when a context is cleared. */
+    onClear(listener) {
+      this.clearListeners.add(listener);
+      return () => this.clearListeners.delete(listener);
+    }
+    /** Check if a context has pending jobs. */
+    hasPendingJobs(contextId) {
+      const context = this.contexts.get(contextId);
+      return !!context && context.jobs.size > 0;
+    }
+    /** Remove a single job from a context and clean up its dependencies. */
+    clearJob(contextId, jobId) {
+      const context = this.contexts.get(contextId);
+      if (!context) return;
+      context.jobs.delete(jobId);
+      context.dependencies.delete(jobId);
+      context.completed.delete(jobId);
+      context.queue = context.queue.filter((id) => id !== jobId);
+      if (context.jobs.size === 0) {
+        this.contexts.delete(contextId);
+      }
+    }
+  }
+  const transactionScopedScheduler = new Scheduler();
+  let activePublicationContext;
+  function withPublicationContext(publish) {
+    if (activePublicationContext !== void 0) return publish();
+    const contextId = /* @__PURE__ */ Symbol(`collection-publication`);
+    activePublicationContext = contextId;
+    try {
+      const result = publish();
+      transactionScopedScheduler.flush(contextId);
+      return result;
+    } catch (error) {
+      transactionScopedScheduler.clear(contextId);
+      throw error;
+    } finally {
+      activePublicationContext = void 0;
     }
   }
 
@@ -6655,23 +7160,27 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.loadedInitialState = false;
       this.skipFiltering = false;
       this.snapshotSent = false;
-      this.loadedSubsets = [];
+      this.subsetDemands = [];
+      this.requestedSubsetWhere = /* @__PURE__ */ new WeakMap();
       this.sentKeys = /* @__PURE__ */ new Set();
+      this.publishedRows = /* @__PURE__ */ new Map();
+      this.stalePublishedRows = /* @__PURE__ */ new Map();
       this.limitedSnapshotRowCount = 0;
       this._status = `ready`;
       this.pendingLoadSubsetPromises = /* @__PURE__ */ new Set();
-      this.isBufferingForTruncate = false;
-      this.truncateBuffer = [];
-      this.pendingTruncateRefetches = /* @__PURE__ */ new Set();
       if (options.onUnsubscribe) {
-        this.on(`unsubscribed`, (event) => options.onUnsubscribe(event));
+        this.on(`unsubscribed`, options.onUnsubscribe);
+      }
+      if (options.onLoadSubsetError) {
+        this.on(`loadSubset:error`, options.onLoadSubsetError);
       }
       if (options.whereExpression) {
         ensureIndexForExpression(options.whereExpression, this.collection);
       }
       const callbackWithSentKeysTracking = (changes) => {
-        callback(changes);
+        this.trackPublishedRows(changes);
         this.trackSentKeys(changes);
+        callback(changes);
       };
       this.callback = callbackWithSentKeysTracking;
       this.filteredCallback = options.whereExpression ? createFilteredCallback(this.callback, options) : (changes) => {
@@ -6685,70 +7194,214 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     get status() {
       return this._status;
     }
+    get lastError() {
+      return this._lastError;
+    }
     /**
      * Handle collection truncate event by resetting state and re-requesting subsets.
      * This is called when the sync layer receives a must-refetch and clears all data.
      *
      * To prevent a flash of missing content, we buffer all changes (deletes from truncate
-     * and inserts from refetch) until all loadSubset promises resolve, then emit them together.
+     * and inserts from refetch) until all loadSubset calls succeed, then emit them together.
+     * A failed replay keeps the last published snapshot, resumes ordinary deltas,
+     * and retains subset ownership so a later truncate can retry the replay.
      */
     handleTruncate() {
-      const subsetsToReload = [...this.loadedSubsets];
+      const demandsToReload = [...this.subsetDemands];
       const hasLoadSubsetHandler = this.collection._sync.syncLoadSubsetFn !== null;
-      if (subsetsToReload.length === 0 || !hasLoadSubsetHandler) {
+      if (demandsToReload.length === 0 || !hasLoadSubsetHandler) {
         this.snapshotSent = false;
         this.loadedInitialState = false;
         this.limitedSnapshotRowCount = 0;
         this.lastSentKey = void 0;
-        this.loadedSubsets = [];
         return;
       }
-      this.isBufferingForTruncate = true;
-      this.truncateBuffer = [];
-      this.pendingTruncateRefetches.clear();
+      const attempt = {
+        pending: /* @__PURE__ */ new Set(),
+        failed: false,
+        setupComplete: false
+      };
+      let session = this.truncateReplaySession;
+      if (!session) {
+        session = {
+          publicationState: {
+            loadedInitialState: this.loadedInitialState,
+            snapshotSent: this.snapshotSent,
+            sentKeys: new Set(this.sentKeys),
+            publishedRows: new Map(this.publishedRows),
+            limitedSnapshotRowCount: this.limitedSnapshotRowCount,
+            lastSentKey: this.lastSentKey
+          },
+          buffer: [],
+          attempts: /* @__PURE__ */ new Set(),
+          currentAttempt: attempt
+        };
+        this.truncateReplaySession = session;
+      }
+      session.attempts.add(attempt);
+      session.currentAttempt = attempt;
+      for (const demand of demandsToReload) {
+        demand.abortController?.abort();
+      }
       this.snapshotSent = false;
       this.loadedInitialState = false;
       this.limitedSnapshotRowCount = 0;
       this.lastSentKey = void 0;
-      this.loadedSubsets = [];
       queueMicrotask(() => {
-        if (!this.isBufferingForTruncate) {
-          return;
-        }
-        for (const options of subsetsToReload) {
-          const syncResult = this.collection._sync.loadSubset(options);
-          this.loadedSubsets.push(options);
-          this.trackLoadSubsetPromise(syncResult);
+        if (this.truncateReplaySession !== session) return;
+        for (const demand of demandsToReload) {
+          if (!this.subsetDemands.includes(demand)) continue;
+          const isCurrentAttempt = () => this.truncateReplaySession === session && session.currentAttempt === attempt;
+          const nextAcquisition = this.createSubsetAcquisition(demand);
+          let syncResult;
+          try {
+            syncResult = this.loadSubset(
+              nextAcquisition.options,
+              isCurrentAttempt
+            );
+          } catch {
+            nextAcquisition.abortController.abort();
+            nextAcquisition.removeRequestAbortListener?.();
+            attempt.failed = true;
+            continue;
+          }
+          this.observeLoadSubsetResult(
+            syncResult,
+            nextAcquisition.options,
+            true,
+            () => isCurrentAttempt() && !nextAcquisition.options.signal?.aborted
+          );
           if (syncResult instanceof Promise) {
-            this.pendingTruncateRefetches.add(syncResult);
-            syncResult.catch(() => {
-            }).finally(() => {
-              this.pendingTruncateRefetches.delete(syncResult);
-              this.checkTruncateRefetchComplete();
-            });
+            const pending = { promise: syncResult };
+            attempt.pending.add(pending);
+            void syncResult.then(
+              () => this.settleTruncateReplay(session, attempt, pending),
+              () => {
+                if (this.subsetDemands.includes(demand) && !nextAcquisition.options.signal?.aborted) {
+                  attempt.failed = true;
+                }
+                this.settleTruncateReplay(session, attempt, pending);
+              }
+            );
+          }
+          try {
+            this.replaceSubsetAcquisition(demand, nextAcquisition);
+          } catch (error) {
+            nextAcquisition.abortController.abort();
+            nextAcquisition.removeRequestAbortListener?.();
+            try {
+              this.collection._sync.unloadSubset(nextAcquisition.options);
+            } catch {
+            }
+            this.recordLoadSubsetError(demand.options, error, true);
+            attempt.failed = true;
           }
         }
-        if (this.pendingTruncateRefetches.size === 0) {
-          this.flushTruncateBuffer();
-        }
+        attempt.setupComplete = true;
+        this.checkTruncateReplayComplete(session);
       });
     }
-    /**
-     * Check if all truncate refetch promises have completed and flush buffer if so
-     */
-    checkTruncateRefetchComplete() {
-      if (this.pendingTruncateRefetches.size === 0 && this.isBufferingForTruncate) {
-        this.flushTruncateBuffer();
+    settleTruncateReplay(session, attempt, pending) {
+      if (this.truncateReplaySession !== session) return;
+      attempt.pending.delete(pending);
+      this.checkTruncateReplayComplete(session);
+    }
+    /** Publish only after every overlapping replay attempt has settled. */
+    checkTruncateReplayComplete(session) {
+      if (this.truncateReplaySession !== session) return;
+      for (const attempt of session.attempts) {
+        if (!attempt.setupComplete || attempt.pending.size > 0) return;
+      }
+      if (session.currentAttempt.failed) {
+        this.abandonTruncateReplay(session);
+      } else {
+        this.flushTruncateReplay(session);
       }
     }
     /**
-     * Flush the truncate buffer, emitting all buffered changes to the callback
+     * Discard an incomplete current replay and restore the last publication.
+     * Rows in that publication remain stale until a later source delta or replay
+     * reconciles them with the source collection.
      */
-    flushTruncateBuffer() {
-      this.isBufferingForTruncate = false;
-      const merged = this.truncateBuffer.flat();
-      if (merged.length > 0) this.filteredCallback(merged);
-      this.truncateBuffer = [];
+    abandonTruncateReplay(session) {
+      if (this.truncateReplaySession !== session) return;
+      const publicationState = session.publicationState;
+      this.loadedInitialState = publicationState.loadedInitialState;
+      this.snapshotSent = publicationState.snapshotSent;
+      this.sentKeys = new Set(publicationState.sentKeys);
+      this.publishedRows = new Map(publicationState.publishedRows);
+      this.stalePublishedRows = new Map(publicationState.publishedRows);
+      this.limitedSnapshotRowCount = publicationState.limitedSnapshotRowCount;
+      this.lastSentKey = publicationState.lastSentKey;
+      this.truncateReplaySession = void 0;
+    }
+    /** Publish the complete buffered replacement as one subscriber batch. */
+    flushTruncateReplay(session) {
+      if (this.truncateReplaySession !== session) return;
+      this.truncateReplaySession = void 0;
+      const retainedDeletes = [...this.stalePublishedRows].map(
+        ([key, value]) => ({
+          type: `delete`,
+          key,
+          value
+        })
+      );
+      this.stalePublishedRows.clear();
+      const merged = [...session.buffer.flat(), ...retainedDeletes];
+      const activeDemandFilters = this.subsetDemands.map(
+        (demand) => demand.requestOptions.where ? createFilterFunctionFromExpression(demand.requestOptions.where) : void 0
+      );
+      const replacement = this.createPublicationDiff(
+        session.publicationState.publishedRows,
+        merged,
+        (value) => activeDemandFilters.some((filter) => filter?.(value) ?? true)
+      );
+      if (replacement.length > 0) this.filteredCallback(replacement);
+      this.sentKeys = new Set(this.publishedRows.keys());
+      if (this.orderByIndex) {
+        this.limitedSnapshotRowCount = this.sentKeys.size;
+        const orderedSentKeys = this.orderByIndex.takeFromStart(
+          this.sentKeys.size,
+          (key) => this.sentKeys.has(key)
+        );
+        this.lastSentKey = orderedSentKeys.at(-1);
+      }
+    }
+    /** Reduce a replay's raw delete/insert stream to one exact semantic delta. */
+    createPublicationDiff(baseline, changes, isCoveredByActiveDemand) {
+      const finalRows = new Map(baseline);
+      for (const change of changes) {
+        if (change.type === `delete`) finalRows.delete(change.key);
+        else finalRows.set(change.key, change.value);
+      }
+      for (const [key, value] of finalRows) {
+        if (!isCoveredByActiveDemand(value)) finalRows.delete(key);
+      }
+      const replacement = [];
+      for (const [key, previousValue] of baseline) {
+        const value = finalRows.get(key);
+        if (value === void 0) {
+          replacement.push({
+            type: `delete`,
+            key,
+            value: previousValue
+          });
+        } else if (!deepEquals(value, previousValue)) {
+          replacement.push({
+            type: `update`,
+            key,
+            value,
+            previousValue
+          });
+        }
+      }
+      for (const [key, value] of finalRows) {
+        if (!baseline.has(key)) replacement.push({ type: `insert`, key, value });
+      }
+      return replacement;
+    }
+    get isBufferingForTruncate() {
+      return this.truncateReplaySession !== void 0;
     }
     setOrderByIndex(index) {
       this.orderByIndex = index;
@@ -6782,21 +7435,103 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         status: newStatus
       });
     }
-    /**
-     * Track a loadSubset promise and manage loading status
-     */
-    trackLoadSubsetPromise(syncResult) {
-      if (syncResult instanceof Promise) {
+    /** Observe an asynchronous subset load and restore status on settlement. */
+    observeLoadSubsetResult(syncResult, options, trackStatus, shouldReportError = () => true) {
+      if (!(syncResult instanceof Promise)) return;
+      if (trackStatus) {
         this.pendingLoadSubsetPromises.add(syncResult);
         this.setStatus(`loadingSubset`);
-        const finish = () => {
+      }
+      const finish = () => {
+        if (trackStatus) {
           this.pendingLoadSubsetPromises.delete(syncResult);
           if (this.pendingLoadSubsetPromises.size === 0) {
             this.setStatus(`ready`);
           }
-        };
-        void syncResult.then(finish, finish);
+        }
+      };
+      void syncResult.then(finish, (error) => {
+        if (shouldReportError()) this.recordLoadSubsetError(options, error);
+        finish();
+      });
+    }
+    loadSubset(options, shouldReportError = () => true) {
+      try {
+        return this.collection._sync.loadSubset(options);
+      } catch (error) {
+        if (shouldReportError()) this.recordLoadSubsetError(options, error);
+        throw error;
       }
+    }
+    /** Create a fresh, abortable adapter acquisition for a replay generation. */
+    createSubsetAcquisition(demand) {
+      const abortController = new AbortController();
+      const requestSignal = demand.requestOptions.signal;
+      let removeRequestAbortListener;
+      if (requestSignal?.aborted) {
+        abortController.abort(requestSignal.reason);
+      } else if (requestSignal) {
+        const abort = () => abortController.abort(requestSignal.reason);
+        requestSignal.addEventListener(`abort`, abort, { once: true });
+        removeRequestAbortListener = () => requestSignal.removeEventListener(`abort`, abort);
+      }
+      return {
+        options: {
+          ...demand.requestOptions,
+          signal: abortController.signal
+        },
+        abortController,
+        removeRequestAbortListener
+      };
+    }
+    /** Replace the adapter lease held for one logical subset demand. */
+    replaceSubsetAcquisition(demand, next) {
+      const previousOptions = demand.options;
+      const removePreviousAbortListener = demand.removeRequestAbortListener;
+      this.collection._sync.unloadSubset(previousOptions);
+      removePreviousAbortListener?.();
+      demand.options = next.options;
+      demand.abortController = next.abortController;
+      demand.removeRequestAbortListener = next.removeRequestAbortListener;
+    }
+    /** Abort and release one current adapter acquisition. */
+    releaseSubsetDemand(demand) {
+      demand.abortController?.abort();
+      try {
+        this.collection._sync.unloadSubset(demand.options);
+      } finally {
+        demand.removeRequestAbortListener?.();
+      }
+    }
+    /** Start and retain the first acquisition for one logical subset demand. */
+    startSubsetDemand(requestOptions) {
+      const demand = {
+        requestOptions,
+        options: requestOptions
+      };
+      const acquisition = this.createSubsetAcquisition(demand);
+      try {
+        const result = this.loadSubset(acquisition.options);
+        demand.options = acquisition.options;
+        demand.abortController = acquisition.abortController;
+        demand.removeRequestAbortListener = acquisition.removeRequestAbortListener;
+        this.subsetDemands.push(demand);
+        return { demand, result };
+      } catch (error) {
+        acquisition.abortController.abort();
+        acquisition.removeRequestAbortListener?.();
+        throw error;
+      }
+    }
+    recordLoadSubsetError(options, error, reportAborted = false) {
+      if (options.signal?.aborted && !reportAborted) return;
+      this._lastError = error;
+      this.emitInner(`loadSubset:error`, {
+        type: `loadSubset:error`,
+        subscription: this,
+        options,
+        error
+      });
     }
     hasLoadedInitialState() {
       return this.loadedInitialState;
@@ -6806,9 +7541,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
     emitEvents(changes) {
       const newChanges = this.filterAndFlipChanges(changes);
+      if (changes.length > 0 && newChanges.length === 0) return false;
       if (this.isBufferingForTruncate) {
         if (newChanges.length > 0) {
-          this.truncateBuffer.push(newChanges);
+          this.truncateReplaySession.buffer.push(newChanges);
         }
         return false;
       } else {
@@ -6846,19 +7582,36 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       const loadOptions = {
         where: stateOpts.where,
+        signal: opts?.signal,
         subscription: this,
         // Include orderBy and limit if provided so sync layer can optimize the query
         orderBy: opts?.orderBy,
         limit: opts?.limit
       };
-      const syncResult = this.collection._sync.loadSubset(loadOptions);
+      const { demand, result: syncResult } = this.startSubsetDemand(loadOptions);
+      if (opts?.where) this.requestedSubsetWhere.set(loadOptions, opts.where);
       opts?.onLoadSubsetResult?.(syncResult);
-      this.loadedSubsets.push(loadOptions);
-      const trackLoadSubsetPromise = opts?.trackLoadSubsetPromise ?? true;
-      if (trackLoadSubsetPromise) {
-        this.trackLoadSubsetPromise(syncResult);
+      this.observeLoadSubsetResult(
+        syncResult,
+        demand.options,
+        opts?.trackLoadSubsetPromise ?? true
+      );
+      let snapshot;
+      if (opts?.onUnoptimized) {
+        snapshot = this.collection.currentStateAsChanges({
+          ...stateOpts,
+          optimizedOnly: true
+        });
+        if (snapshot === void 0) {
+          opts.onUnoptimized();
+          snapshot = this.collection.currentStateAsChanges({
+            ...stateOpts,
+            optimizedOnly: false
+          });
+        }
+      } else {
+        snapshot = this.collection.currentStateAsChanges(stateOpts);
       }
-      const snapshot = this.collection.currentStateAsChanges(stateOpts);
       if (snapshot === void 0) {
         return false;
       }
@@ -6871,6 +7624,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.snapshotSent = true;
       this.callback(filteredSnapshot);
       return true;
+    }
+    /** Release one exact subset request while keeping the subscription alive. */
+    releaseSnapshot(where) {
+      const index = this.subsetDemands.findIndex(
+        (demand2) => demand2.requestOptions.where === where || this.requestedSubsetWhere.get(demand2.requestOptions) === where
+      );
+      if (index === -1) return;
+      const [demand] = this.subsetDemands.splice(index, 1);
+      if (demand) this.releaseSubsetDemand(demand);
     }
     /**
      * Sends a snapshot that fulfills the `where` clause and all rows are bigger or equal to the cursor.
@@ -6961,7 +7723,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         this.sentKeys.add(change.key);
       }
       this.callback(changes);
-      this.limitedSnapshotRowCount += changes.length;
+      this.limitedSnapshotRowCount = Math.max(
+        this.limitedSnapshotRowCount,
+        currentOffset + changes.length
+      );
       if (changes.length > 0) {
         this.lastSentKey = changes[changes.length - 1].key;
       }
@@ -6999,12 +7764,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         // Use provided offset, or auto-tracked offset
         subscription: this
       };
-      const syncResult = this.collection._sync.loadSubset(loadOptions);
+      const { demand, result: syncResult } = this.startSubsetDemand(loadOptions);
       onLoadSubsetResult?.(syncResult);
-      this.loadedSubsets.push(loadOptions);
-      if (shouldTrackLoadSubsetPromise) {
-        this.trackLoadSubsetPromise(syncResult);
-      }
+      this.observeLoadSubsetResult(
+        syncResult,
+        demand.options,
+        shouldTrackLoadSubsetPromise
+      );
     }
     // TODO: also add similar test but that checks that it can also load it from the collection's loadSubset function
     //       and that that also works properly (i.e. does not skip duplicate values)
@@ -7015,6 +7781,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      * Duplicate inserts are filtered out to prevent D2 multiplicity > 1.
      */
     filterAndFlipChanges(changes) {
+      changes = this.reconcileStalePublishedChanges(changes);
       if (this.loadedInitialState || this.skipFiltering) {
         return changes;
       }
@@ -7026,12 +7793,14 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         if (!keyInSentKeys) {
           if (change.type === `update`) {
             newChange = { ...change, type: `insert`, previousValue: void 0 };
+            this.sentKeys.add(change.key);
           } else if (change.type === `delete`) {
             if (!skipDeleteFilter) {
               continue;
             }
+          } else {
+            this.sentKeys.add(change.key);
           }
-          this.sentKeys.add(change.key);
         } else {
           if (change.type === `insert`) {
             continue;
@@ -7042,6 +7811,47 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         newChanges.push(newChange);
       }
       return newChanges;
+    }
+    /**
+     * After a failed replay, the source collection is empty but subscribers still
+     * hold the last good publication. Reconcile the first later source delta for
+     * each retained key against that publication instead of treating it as a
+     * duplicate insert.
+     */
+    reconcileStalePublishedChanges(changes) {
+      if (this.stalePublishedRows.size === 0) return changes;
+      const reconciled = [];
+      for (const change of changes) {
+        const previous = this.stalePublishedRows.get(change.key);
+        if (previous === void 0) {
+          reconciled.push(change);
+          continue;
+        }
+        this.stalePublishedRows.delete(change.key);
+        if (change.type === `delete`) {
+          reconciled.push({
+            ...change,
+            value: previous,
+            previousValue: void 0
+          });
+        } else if (!deepEquals(previous, change.value)) {
+          reconciled.push({
+            ...change,
+            type: `update`,
+            previousValue: previous
+          });
+        }
+      }
+      return reconciled;
+    }
+    trackPublishedRows(changes) {
+      for (const change of changes) {
+        if (change.type === `delete`) {
+          this.publishedRows.delete(change.key);
+        } else {
+          this.publishedRows.set(change.key, change.value);
+        }
+      }
     }
     trackSentKeys(changes) {
       if (this.loadedInitialState || this.skipFiltering) {
@@ -7070,20 +7880,34 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.skipFiltering = true;
     }
     unsubscribe() {
-      this.truncateCleanup?.();
-      this.truncateCleanup = void 0;
-      this.isBufferingForTruncate = false;
-      this.truncateBuffer = [];
-      this.pendingTruncateRefetches.clear();
-      for (const options of this.loadedSubsets) {
-        this.collection._sync.unloadSubset(options);
+      let firstCleanupError;
+      try {
+        this.truncateCleanup?.();
+      } catch (error) {
+        firstCleanupError = error;
       }
-      this.loadedSubsets = [];
-      this.emitInner(`unsubscribed`, {
-        type: `unsubscribed`,
-        subscription: this
-      });
-      this.clearListeners();
+      this.truncateCleanup = void 0;
+      this.truncateReplaySession = void 0;
+      this.stalePublishedRows.clear();
+      for (const demand of this.subsetDemands) {
+        try {
+          this.releaseSubsetDemand(demand);
+        } catch (error) {
+          firstCleanupError ??= error;
+        }
+      }
+      this.subsetDemands = [];
+      try {
+        this.emitInner(`unsubscribed`, {
+          type: `unsubscribed`,
+          subscription: this
+        });
+      } catch (error) {
+        firstCleanupError ??= error;
+      } finally {
+        this.clearListeners();
+      }
+      if (firstCleanupError !== void 0) throw firstCleanupError;
     }
   }
 
@@ -7096,6 +7920,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.changeSubscriptions = /* @__PURE__ */ new Set();
       this.batchedEvents = [];
       this.shouldBatchEvents = false;
+      this.publicationDeferralDepth = 0;
+      this.discardDeferredPublications = false;
+      this.deferredPublications = [];
       this.layoutChangeListeners = /* @__PURE__ */ new Set();
       this.stateRevision = 0;
       this.layoutRevision = 0;
@@ -7112,9 +7939,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      * This bypasses the normal empty array check in emitEvents
      */
     emitEmptyReadyEvent() {
-      for (const subscription of this.changeSubscriptions) {
-        subscription.emitEvents([]);
-      }
+      withPublicationContext(() => {
+        for (const subscription of this.changeSubscriptions) {
+          subscription.emitEvents([]);
+        }
+      });
     }
     /**
      * Enriches a change message with virtual properties ($synced, $origin, $key, $collectionId).
@@ -7141,16 +7970,56 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         this.batchedEvents = [];
         this.shouldBatchEvents = false;
       }
+      if (this.publicationDeferralDepth > 0) {
+        this.deferredPublications.push({ changes: rawEvents, layoutChanged });
+        return;
+      }
+      this.publishEvents(rawEvents, layoutChanged);
+    }
+    /**
+     * Defers subscriber delivery while a coherent multi-Collection publication
+     * installs all of its visible state. State and indexes still commit at their
+     * normal transaction boundaries.
+     */
+    deferPublication() {
+      this.publicationDeferralDepth++;
+      let closed = false;
+      const close = (discard) => {
+        if (closed) return;
+        closed = true;
+        if (this.publicationDeferralDepth === 0) return;
+        this.discardDeferredPublications ||= discard;
+        this.publicationDeferralDepth--;
+        if (this.publicationDeferralDepth > 0) return;
+        const publications = this.deferredPublications;
+        this.deferredPublications = [];
+        if (this.discardDeferredPublications) {
+          this.discardDeferredPublications = false;
+          return;
+        }
+        this.publishEvents(
+          publications.flatMap(({ changes }) => changes),
+          publications.some(({ layoutChanged }) => layoutChanged)
+        );
+      };
+      return {
+        publish: () => close(false),
+        discard: () => close(true)
+      };
+    }
+    publishEvents(rawEvents, layoutChanged) {
       if (rawEvents.length === 0 && !layoutChanged) {
         return;
       }
-      if (rawEvents.length === 0) {
-        for (const listener of this.layoutChangeListeners) listener();
-      }
       const enrichedEvents = rawEvents.map((change) => this.enrichChangeWithVirtualProps(change));
-      for (const subscription of this.changeSubscriptions) {
-        subscription.emitEvents(enrichedEvents);
-      }
+      withPublicationContext(() => {
+        if (rawEvents.length === 0) {
+          for (const listener of this.layoutChangeListeners) listener();
+        }
+        for (const subscription of this.changeSubscriptions) {
+          subscription.emitEvents(enrichedEvents);
+        }
+      });
     }
     /** Subscribe to layout-only publications. Internal observer channel. */
     subscribeLayoutChanges(listener) {
@@ -7161,7 +8030,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      * Subscribe to changes in the collection
      */
     subscribeChanges(callback, options = {}) {
-      this.addSubscriber();
       if (options.where && options.whereExpression) {
         throw new Error(
           `Cannot specify both 'where' and 'whereExpression' options. Use one or the other.`
@@ -7174,28 +8042,42 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         const result = where(proxy);
         whereExpression = toExpression(result);
       }
-      const subscription = new CollectionSubscription(this.collection, callback, {
-        ...opts,
-        whereExpression,
-        onUnsubscribe: () => {
-          this.removeSubscriber();
-          this.changeSubscriptions.delete(subscription);
-        }
-      });
-      if (options.onStatusChange) {
-        subscription.on(`status:change`, options.onStatusChange);
-      }
-      if (options.includeInitialState) {
-        subscription.requestSnapshot({
-          trackLoadSubsetPromise: false,
-          orderBy: options.orderBy,
-          limit: options.limit,
-          onLoadSubsetResult: options.onLoadSubsetResult
+      this.addSubscriber();
+      let subscription;
+      try {
+        subscription = new CollectionSubscription(this.collection, callback, {
+          ...opts,
+          whereExpression,
+          onUnsubscribe: () => {
+            this.removeSubscriber();
+            if (subscription) this.changeSubscriptions.delete(subscription);
+          }
         });
-      } else if (options.includeInitialState === false) {
-        subscription.markAllStateAsSeen();
+        if (options.onStatusChange) {
+          subscription.on(`status:change`, options.onStatusChange);
+        }
+        if (options.includeInitialState) {
+          subscription.requestSnapshot({
+            trackLoadSubsetPromise: false,
+            orderBy: options.orderBy,
+            limit: options.limit,
+            onLoadSubsetResult: options.onLoadSubsetResult
+          });
+        } else if (options.includeInitialState === false) {
+          subscription.markAllStateAsSeen();
+        }
+        this.changeSubscriptions.add(subscription);
+      } catch (error) {
+        if (subscription) {
+          try {
+            subscription.unsubscribe();
+          } catch {
+          }
+        } else {
+          this.removeSubscriber();
+        }
+        throw error;
       }
-      this.changeSubscriptions.add(subscription);
       return subscription;
     }
     /**
@@ -7205,8 +8087,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const previousSubscriberCount = this.activeSubscribersCount;
       this.activeSubscribersCount++;
       this.lifecycle.cancelGCTimer();
-      if (this.lifecycle.status === `cleaned-up` || this.lifecycle.status === `idle`) {
-        this.sync.startSync();
+      try {
+        if (this.lifecycle.status === `cleaned-up` || this.lifecycle.status === `idle`) {
+          this.sync.startSync();
+        }
+      } catch (error) {
+        this.activeSubscribersCount = previousSubscriberCount;
+        if (this.activeSubscribersCount === 0) {
+          this.lifecycle.startGCTimer();
+        }
+        throw error;
       }
       this.events.emitSubscribersChange(
         this.activeSubscribersCount,
@@ -7236,6 +8126,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     cleanup() {
       this.batchedEvents = [];
       this.shouldBatchEvents = false;
+      this.deferredPublications = [];
+      this.publicationDeferralDepth = 0;
     }
   }
 
@@ -7374,7 +8266,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         idle: [`loading`, `error`, `cleaned-up`],
         loading: [`ready`, `error`, `cleaned-up`],
         ready: [`cleaned-up`, `error`],
-        error: [`cleaned-up`, `idle`],
+        error: [`ready`, `cleaned-up`, `idle`],
         "cleaned-up": [`loading`, `error`]
       };
       if (!validTransitions[from].includes(to)) {
@@ -7417,7 +8309,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      */
     markReady() {
       this.validateStatusTransition(this.status, `ready`);
-      if (this.status === `loading`) {
+      if (this.status === `loading` || this.status === `error`) {
+        this.syncError = void 0;
         this.setStatus(`ready`, true);
         if (!this.hasBeenReady) {
           this.hasBeenReady = true;
@@ -7432,6 +8325,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           this.changes.emitEmptyReadyEvent();
         }
       }
+    }
+    /** Mark an asynchronous sync failure after sync has started. */
+    markError(error) {
+      this.validateStatusTransition(this.status, `error`);
+      this.syncError = error;
+      this.setStatus(`error`);
+    }
+    /** Return the cause supplied by the current sync session, if any. */
+    getSyncError() {
+      return this.syncError;
     }
     /**
      * Start the garbage collection timer
@@ -7494,6 +8397,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         this.indexes.cleanup();
         CleanupQueue.getInstance().cancel(this);
         this.hasBeenReady = false;
+        this.syncError = void 0;
         const callbacks = [...this.onFirstReadyCallbacks];
         this.onFirstReadyCallbacks = [];
         callbacks.forEach((callback) => {
@@ -7524,9 +8428,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     onFirstReady(callback) {
       if (this.hasBeenReady) {
         callback();
-        return;
+        return () => {
+        };
       }
       this.onFirstReadyCallbacks.push(callback);
+      return () => {
+        const index = this.onFirstReadyCallbacks.indexOf(callback);
+        if (index !== -1) {
+          this.onFirstReadyCallbacks.splice(index, 1);
+        }
+      };
     }
     cleanup() {
       if (this.idleCallbackId !== null) {
@@ -7535,6 +8446,28 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       this.performCleanup();
     }
+  }
+
+  function createDeferred() {
+    let resolve;
+    let reject;
+    let isPending = true;
+    const promise = new Promise((res, rej) => {
+      resolve = (value) => {
+        isPending = false;
+        res(value);
+      };
+      reject = (reason) => {
+        isPending = false;
+        rej(reason);
+      };
+    });
+    return {
+      promise,
+      resolve,
+      reject,
+      isPending: () => isPending
+    };
   }
 
   const LIVE_QUERY_INTERNAL = /* @__PURE__ */ Symbol(`liveQueryInternal`);
@@ -7549,6 +8482,12 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.syncLoadSubsetFn = null;
       this.syncUnloadSubsetFn = null;
       this.pendingLoadSubsetPromises = /* @__PURE__ */ new Set();
+      this.loadSubsetOperations = /* @__PURE__ */ new Set();
+      this.syncStartDeferred = false;
+      this.syncStartRequested = false;
+      this.deferredLoadSubsets = [];
+      this.syncEpoch = 0;
+      this.loadSubsetSession = 0;
       this.config = config;
       this.id = id;
       this.syncMode = config.syncMode ?? `eager`;
@@ -7571,23 +8510,35 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       if (this.lifecycle.status !== `idle` && this.lifecycle.status !== `cleaned-up`) {
         return;
       }
+      if (this.syncStartDeferred) {
+        this.syncStartRequested = true;
+        return;
+      }
+      const syncEpoch = ++this.syncEpoch;
+      const isCurrentSync = () => syncEpoch === this.syncEpoch;
       this.lifecycle.setStatus(`loading`);
       try {
         const syncRes = normalizeSyncFnResult(
           this.config.sync.sync({
             collection: this.collection,
             begin: (options) => {
+              if (!isCurrentSync()) return;
+              const applied = createDeferred();
+              void applied.promise.catch(() => void 0);
               this.state.pendingSyncedTransactions.push({
                 committed: false,
+                applicationStarted: false,
                 layoutChanged: false,
                 operations: [],
                 deletedKeys: /* @__PURE__ */ new Set(),
                 rowMetadataWrites: /* @__PURE__ */ new Map(),
                 collectionMetadataWrites: /* @__PURE__ */ new Map(),
-                immediate: options?.immediate
+                immediate: options?.immediate,
+                applied
               });
             },
             write: (messageWithOptionalKey) => {
+              if (!isCurrentSync()) return;
               const pendingTransaction = this.state.pendingSyncedTransactions[this.state.pendingSyncedTransactions.length - 1];
               if (!pendingTransaction) {
                 throw new NoPendingSyncTransactionWriteError();
@@ -7612,7 +8563,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                 if (insertingIntoExistingSynced && !hasPendingDeleteForKey && !isTruncateTransaction) {
                   const existingValue = this.state.syncedData.get(key);
                   const valuesEqual = existingValue !== void 0 && deepEquals(existingValue, messageWithOptionalKey.value);
-                  if (valuesEqual) {
+                  if (valuesEqual || this.state.hydrationSeedKeys.has(key)) {
                     messageType = `update`;
                   } else {
                     const utils = this.config.utils;
@@ -7652,7 +8603,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                 });
               }
             },
-            commit: () => {
+            commit: (signal) => {
+              if (!isCurrentSync()) return true;
               const pendingTransaction = this.state.pendingSyncedTransactions[this.state.pendingSyncedTransactions.length - 1];
               if (!pendingTransaction) {
                 throw new NoPendingSyncTransactionCommitError();
@@ -7660,13 +8612,37 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               if (pendingTransaction.committed) {
                 throw new SyncTransactionAlreadyCommittedError();
               }
+              if (signal?.aborted) {
+                this.state.cancelPendingSyncedTransaction(pendingTransaction);
+                return pendingTransaction.applied.promise;
+              }
               pendingTransaction.committed = true;
+              const cancel = () => {
+                this.state.cancelPendingSyncedTransaction(pendingTransaction);
+              };
+              signal?.addEventListener(`abort`, cancel, { once: true });
               this.state.commitPendingTransactions();
+              if (!pendingTransaction.applied.isPending()) {
+                signal?.removeEventListener(`abort`, cancel);
+                return true;
+              }
+              const receipt = pendingTransaction.applied.promise;
+              if (signal) {
+                const removeAbortListener = () => {
+                  signal.removeEventListener(`abort`, cancel);
+                };
+                void receipt.then(removeAbortListener, removeAbortListener);
+              }
+              return receipt;
             },
             markReady: () => {
-              this.lifecycle.markReady();
+              if (isCurrentSync()) this.lifecycle.markReady();
+            },
+            markError: (error) => {
+              if (isCurrentSync()) this.lifecycle.markError(error);
             },
             truncate: () => {
+              if (!isCurrentSync()) return;
               const pendingTransaction = this.state.pendingSyncedTransactions[this.state.pendingSyncedTransactions.length - 1];
               if (!pendingTransaction) {
                 throw new NoPendingSyncTransactionWriteError();
@@ -7683,7 +8659,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
                 deletes: new Set(this.state.optimisticDeletes)
               };
             },
-            metadata: this.createSyncMetadataApi()
+            metadata: this.createSyncMetadataApi(isCurrentSync)
           })
         );
         this.syncCleanupFn = syncRes?.cleanup ?? null;
@@ -7695,8 +8671,50 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           );
         }
       } catch (error) {
-        this.lifecycle.setStatus(`error`);
+        this.lifecycle.markError(error);
         throw error;
+      }
+    }
+    deferStart() {
+      if (this.lifecycle.status !== `idle` && this.lifecycle.status !== `cleaned-up`) {
+        return false;
+      }
+      this.syncStartDeferred = true;
+      return true;
+    }
+    resumeStart() {
+      if (!this.syncStartDeferred) {
+        return;
+      }
+      this.syncStartDeferred = false;
+      const shouldStart = this.syncStartRequested || this.deferredLoadSubsets.length > 0;
+      this.syncStartRequested = false;
+      const deferredLoadSubsets = this.deferredLoadSubsets;
+      this.deferredLoadSubsets = [];
+      try {
+        if (shouldStart) {
+          this.startSync();
+        }
+      } catch (error) {
+        for (const { deferred } of deferredLoadSubsets) {
+          deferred.reject(error);
+        }
+        throw error;
+      }
+      for (const { options, deferred } of deferredLoadSubsets) {
+        try {
+          const result = this.syncLoadSubsetFn?.(options) ?? true;
+          if (result instanceof Promise) {
+            void result.then(
+              () => deferred.resolve(void 0),
+              (error) => deferred.reject(error)
+            );
+          } else {
+            deferred.resolve(void 0);
+          }
+        } catch (error) {
+          deferred.reject(error);
+        }
       }
     }
     getActivePendingSyncTransaction() {
@@ -7709,10 +8727,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       return pendingTransaction;
     }
-    createSyncMetadataApi() {
+    createSyncMetadataApi(isCurrentSync) {
       return {
         row: {
           get: (key) => {
+            if (!isCurrentSync()) return void 0;
             const pendingTransaction = this.state.pendingSyncedTransactions[this.state.pendingSyncedTransactions.length - 1];
             const pendingWrite = pendingTransaction?.rowMetadataWrites.get(key);
             if (pendingWrite) {
@@ -7724,6 +8743,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             return this.state.syncedMetadata.get(key);
           },
           set: (key, metadata) => {
+            if (!isCurrentSync()) return;
             const pendingTransaction = this.getActivePendingSyncTransaction();
             pendingTransaction.rowMetadataWrites.set(key, {
               type: `set`,
@@ -7731,6 +8751,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             });
           },
           delete: (key) => {
+            if (!isCurrentSync()) return;
             const pendingTransaction = this.getActivePendingSyncTransaction();
             pendingTransaction.rowMetadataWrites.set(key, {
               type: `delete`
@@ -7739,6 +8760,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         },
         collection: {
           get: (key) => {
+            if (!isCurrentSync()) return void 0;
             const pendingTransaction = this.state.pendingSyncedTransactions[this.state.pendingSyncedTransactions.length - 1];
             const pendingWrite = pendingTransaction?.collectionMetadataWrites.get(key);
             if (pendingWrite) {
@@ -7747,6 +8769,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             return this.state.syncedCollectionMetadata.get(key);
           },
           set: (key, value) => {
+            if (!isCurrentSync()) return;
             const pendingTransaction = this.getActivePendingSyncTransaction();
             pendingTransaction.collectionMetadataWrites.set(key, {
               type: `set`,
@@ -7754,12 +8777,14 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             });
           },
           delete: (key) => {
+            if (!isCurrentSync()) return;
             const pendingTransaction = this.getActivePendingSyncTransaction();
             pendingTransaction.collectionMetadataWrites.set(key, {
               type: `delete`
             });
           },
           list: (prefix) => {
+            if (!isCurrentSync()) return [];
             const merged = new Map(this.state.syncedCollectionMetadata);
             const pendingTransaction = this.state.pendingSyncedTransactions[this.state.pendingSyncedTransactions.length - 1];
             if (pendingTransaction) {
@@ -7795,28 +8820,68 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           `${this.id ? `[${this.id}] ` : ``}Calling .preload() on a collection with syncMode "on-demand" is a no-op. In on-demand mode, data is only loaded when queries request it. Instead, create a live query and call .preload() on that to load the specific data you need. See https://tanstack.com/blog/tanstack-db-0.5-query-driven-sync for more details.`
         );
       }
-      this.preloadPromise = new Promise((resolve, reject) => {
+      const attempt = new Promise((resolve, reject) => {
         if (this.lifecycle.status === `ready`) {
           resolve();
           return;
         }
         if (this.lifecycle.status === `error`) {
-          reject(new CollectionIsInErrorStateError());
+          reject(this.getPreloadError());
           return;
         }
-        this.lifecycle.onFirstReady(() => {
+        let settled = false;
+        let startingSync = false;
+        let unsubscribeError = () => {
+        };
+        let unsubscribeReady = () => {
+        };
+        const resolveReady = () => {
+          if (settled) return;
+          settled = true;
+          unsubscribeError();
+          unsubscribeReady();
           resolve();
+        };
+        const rejectError = (error) => {
+          if (settled) return;
+          settled = true;
+          unsubscribeError();
+          unsubscribeReady();
+          reject(error);
+        };
+        unsubscribeReady = this.lifecycle.onFirstReady(resolveReady);
+        unsubscribeError = this.collection.on(`status:error`, () => {
+          if (startingSync) {
+            return;
+          }
+          rejectError(this.getPreloadError());
         });
         if (this.lifecycle.status === `idle` || this.lifecycle.status === `cleaned-up`) {
+          startingSync = true;
           try {
             this.startSync();
           } catch (error) {
-            reject(error);
+            rejectError(error);
             return;
+          } finally {
+            startingSync = false;
+          }
+          if (this.collection.status === `error`) {
+            rejectError(this.getPreloadError());
           }
         }
       });
-      return this.preloadPromise;
+      this.preloadPromise = attempt;
+      void attempt.then(void 0, () => {
+        if (this.preloadPromise === attempt) {
+          this.preloadPromise = null;
+        }
+      });
+      return attempt;
+    }
+    getPreloadError() {
+      const syncError = this.lifecycle.getSyncError();
+      return syncError === void 0 ? new CollectionIsInErrorStateError() : syncError;
     }
     /**
      * Gets whether the collection is currently loading more data
@@ -7829,6 +8894,75 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       if (this.pendingLoadSubsetPromises.size === 0) return true;
       return this.waitForPendingLoadSubset();
     }
+    /** @internal Observe subset requests caused by one imperative operation. */
+    beginLoadSubsetOperation() {
+      const operation = {
+        pending: /* @__PURE__ */ new Set(),
+        waiting: false,
+        completed: false,
+        hasError: false
+      };
+      this.activeLoadSubsetOperation = operation;
+      this.loadSubsetOperations.add(operation);
+      return {
+        wait: () => this.waitForLoadSubsetOperation(operation),
+        cancel: () => {
+          operation.completed = true;
+          this.loadSubsetOperations.delete(operation);
+          if (this.activeLoadSubsetOperation === operation) {
+            this.activeLoadSubsetOperation = void 0;
+          }
+        }
+      };
+    }
+    waitForLoadSubsetOperation(operation) {
+      operation.waiting = true;
+      if (operation.pending.size === 0) {
+        operation.completed = true;
+        this.loadSubsetOperations.delete(operation);
+        if (this.activeLoadSubsetOperation === operation) {
+          this.activeLoadSubsetOperation = void 0;
+        }
+        return operation.hasError ? Promise.reject(operation.error) : true;
+      }
+      operation.deferred = createDeferred();
+      return operation.deferred.promise;
+    }
+    settleLoadSubsetOperation(operation, promise, outcome) {
+      if (operation.completed) return;
+      operation.pending.delete(promise);
+      if (!outcome.ok && !operation.hasError) {
+        operation.hasError = true;
+        operation.error = outcome.error;
+      }
+      if (!operation.waiting || operation.pending.size > 0) return;
+      queueMicrotask(() => {
+        if (operation.completed || operation.pending.size > 0) return;
+        operation.completed = true;
+        this.loadSubsetOperations.delete(operation);
+        if (this.activeLoadSubsetOperation === operation) {
+          this.activeLoadSubsetOperation = void 0;
+        }
+        if (operation.hasError) {
+          operation.deferred.reject(operation.error);
+        } else {
+          operation.deferred.resolve();
+        }
+      });
+    }
+    /** @internal Attach a relevant existing request to the active operation. */
+    trackLoadSubsetOperationPromise(promise) {
+      const operation = this.activeLoadSubsetOperation;
+      if (!operation || operation.pending.has(promise)) return;
+      operation.pending.add(promise);
+      void promise.then(
+        () => this.settleLoadSubsetOperation(operation, promise, { ok: true }),
+        (error) => this.settleLoadSubsetOperation(operation, promise, {
+          ok: false,
+          error
+        })
+      );
+    }
     async waitForPendingLoadSubset() {
       do {
         await Promise.all([...this.pendingLoadSubsetPromises]);
@@ -7839,8 +8973,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      * @internal This is for internal coordination (e.g., live-query glue code), not for general use.
      */
     trackLoadPromise(promise) {
+      const loadSubsetSession = this.loadSubsetSession;
       const loadingStarting = !this.isLoadingSubset;
       this.pendingLoadSubsetPromises.add(promise);
+      this.trackLoadSubsetOperationPromise(promise);
       if (loadingStarting) {
         this._events.emit(`loadingSubset:change`, {
           type: `loadingSubset:change`,
@@ -7851,6 +8987,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         });
       }
       const finish = () => {
+        if (loadSubsetSession !== this.loadSubsetSession) return;
         const loadingEnding = this.pendingLoadSubsetPromises.size === 1 && this.pendingLoadSubsetPromises.has(promise);
         this.pendingLoadSubsetPromises.delete(promise);
         if (loadingEnding) {
@@ -7872,8 +9009,18 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      *          Returns true if no sync function is configured, if syncMode is 'eager', or if there is no work to do.
      */
     loadSubset(options) {
+      if (options.signal?.aborted) {
+        return true;
+      }
       if (this.syncMode === `eager`) {
         return true;
+      }
+      if (this.syncStartDeferred) {
+        this.syncStartRequested = true;
+        const deferred = createDeferred();
+        this.deferredLoadSubsets.push({ options, deferred });
+        this.trackLoadPromise(deferred.promise);
+        return deferred.promise;
       }
       if (this.syncLoadSubsetFn) {
         const result = this.syncLoadSubsetFn(options);
@@ -7889,11 +9036,23 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      * @param options Options that identify what data is being unloaded
      */
     unloadSubset(options) {
+      if (this.syncStartDeferred) {
+        this.deferredLoadSubsets = this.deferredLoadSubsets.filter((request) => {
+          if (request.options !== options) {
+            return true;
+          }
+          request.deferred.resolve(void 0);
+          return false;
+        });
+        return;
+      }
       if (this.syncUnloadSubsetFn) {
         this.syncUnloadSubsetFn(options);
       }
     }
     cleanup() {
+      this.syncEpoch++;
+      this.loadSubsetSession++;
       try {
         if (this.syncCleanupFn) {
           this.syncCleanupFn();
@@ -7912,6 +9071,35 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         });
       }
       this.preloadPromise = null;
+      this.syncLoadSubsetFn = null;
+      this.syncUnloadSubsetFn = null;
+      this.syncStartDeferred = false;
+      this.syncStartRequested = false;
+      const wasLoadingSubset = this.pendingLoadSubsetPromises.size > 0;
+      this.pendingLoadSubsetPromises.clear();
+      if (wasLoadingSubset) {
+        this._events.emit(`loadingSubset:change`, {
+          type: `loadingSubset:change`,
+          collection: this.collection,
+          isLoadingSubset: false,
+          previousIsLoadingSubset: true,
+          loadingSubsetTransition: `end`
+        });
+      }
+      this.activeLoadSubsetOperation = void 0;
+      for (const operation of this.loadSubsetOperations) {
+        if (!operation.completed) {
+          operation.completed = true;
+          operation.pending.clear();
+          operation.deferred?.resolve();
+        }
+      }
+      this.loadSubsetOperations.clear();
+      const deferredLoadSubsets = this.deferredLoadSubsets;
+      this.deferredLoadSubsets = [];
+      for (const { deferred } of deferredLoadSubsets) {
+        deferred.resolve(void 0);
+      }
     }
   }
   function normalizeSyncFnResult(result) {
@@ -8861,169 +10049,110 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     return getChanges();
   }
 
-  function createDeferred() {
-    let resolve;
-    let reject;
-    let isPending = true;
-    const promise = new Promise((res, rej) => {
-      resolve = (value) => {
-        isPending = false;
-        res(value);
-      };
-      reject = (reason) => {
-        isPending = false;
-        rej(reason);
-      };
-    });
-    return {
-      promise,
-      resolve,
-      reject,
-      isPending: () => isPending
-    };
-  }
-
-  function isPendingAwareJob(dep) {
-    return typeof dep === `object` && dep !== null && typeof dep.hasPendingGraphRun === `function`;
-  }
-  class Scheduler {
+  class TransactionScope {
     constructor() {
-      this.contexts = /* @__PURE__ */ new Map();
-      this.clearListeners = /* @__PURE__ */ new Set();
+      this.transactions = [];
+      this.transactionStack = [];
+      this.sequenceNumber = 0;
     }
-    /**
-     * Get or create the state bucket for a context.
-     */
-    getOrCreateContext(contextId) {
-      let context = this.contexts.get(contextId);
-      if (!context) {
-        context = {
-          queue: [],
-          jobs: /* @__PURE__ */ new Map(),
-          dependencies: /* @__PURE__ */ new Map(),
-          completed: /* @__PURE__ */ new Set()
-        };
-        this.contexts.set(contextId, context);
-      }
-      return context;
+    createTransaction(config) {
+      const transaction = new Transaction(config, this, this.sequenceNumber++);
+      this.transactions.push(transaction);
+      return transaction;
     }
-    /**
-     * Schedule work. Without a context id, executes immediately.
-     * Otherwise queues the job to be flushed once dependencies are satisfied.
-     * Scheduling the same jobId again replaces the previous run function.
-     */
-    schedule({ contextId, jobId, dependencies, run }) {
-      if (typeof contextId === `undefined`) {
-        run();
-        return;
-      }
-      const context = this.getOrCreateContext(contextId);
-      if (!context.jobs.has(jobId)) {
-        context.queue.push(jobId);
-      }
-      context.jobs.set(jobId, run);
-      if (dependencies) {
-        const depSet = new Set(dependencies);
-        depSet.delete(jobId);
-        context.dependencies.set(jobId, depSet);
-      } else if (!context.dependencies.has(jobId)) {
-        context.dependencies.set(jobId, /* @__PURE__ */ new Set());
-      }
-      context.completed.delete(jobId);
+    getActiveTransaction() {
+      return this.transactionStack.at(-1);
     }
-    /**
-     * Flush all queued work for a context. Jobs with unmet dependencies are retried.
-     * Throws if a pass completes without running any job (dependency cycle).
-     */
-    flush(contextId) {
-      const context = this.contexts.get(contextId);
-      if (!context) return;
-      const { queue, jobs, dependencies, completed } = context;
-      while (queue.length > 0) {
-        let ranThisPass = false;
-        const jobsThisPass = queue.length;
-        for (let i = 0; i < jobsThisPass; i++) {
-          const jobId = queue.shift();
-          const run = jobs.get(jobId);
-          if (!run) {
-            dependencies.delete(jobId);
-            completed.delete(jobId);
-            continue;
-          }
-          const deps = dependencies.get(jobId);
-          let ready = !deps;
-          if (deps) {
-            ready = true;
-            for (const dep of deps) {
-              if (dep === jobId) continue;
-              const depHasPending = isPendingAwareJob(dep) && dep.hasPendingGraphRun(contextId);
-              if (jobs.has(dep) && !completed.has(dep) || !jobs.has(dep) && depHasPending) {
-                ready = false;
-                break;
-              }
-            }
-          }
-          if (ready) {
-            jobs.delete(jobId);
-            dependencies.delete(jobId);
-            run();
-            completed.add(jobId);
-            ranThisPass = true;
-          } else {
-            queue.push(jobId);
-          }
-        }
-        if (!ranThisPass) {
-          throw new Error(
-            `Scheduler detected unresolved dependencies for context ${String(
-            contextId
-          )}.`
-          );
+    getActiveTransactionForCollection() {
+      const activeTransaction = this.getActiveTransaction();
+      if (activeTransaction) {
+        return activeTransaction;
+      }
+      if (this === defaultTransactionScope) {
+        return void 0;
+      }
+      return defaultTransactionScope.claimActiveTransaction(this);
+    }
+    claimActiveTransaction(targetScope) {
+      const transaction = this.getActiveTransaction();
+      if (!transaction) {
+        return void 0;
+      }
+      const owner = getTransactionScope(transaction);
+      if (owner === targetScope) {
+        return transaction;
+      }
+      if (owner !== this) {
+        throw new Error(
+          `A transaction created with createTransaction() cannot mutate collections from multiple DbClient instances. Use dbClient.createTransaction() for explicit client scope.`
+        );
+      }
+      this.removeTransaction(transaction);
+      targetScope.transactions.push(transaction);
+      targetScope.transactionStack.push(transaction);
+      transaction.sequenceNumber = targetScope.sequenceNumber++;
+      transactionScopes.set(transaction, targetScope);
+      return transaction;
+    }
+    registerTransaction(transaction) {
+      transactionScopedScheduler.clear(transaction.id);
+      this.transactionStack.push(transaction);
+    }
+    unregisterTransaction(transaction) {
+      try {
+        transactionScopedScheduler.flush(transaction.id);
+      } finally {
+        this.transactionStack = this.transactionStack.filter(
+          (candidate) => candidate.id !== transaction.id
+        );
+      }
+    }
+    removeTransaction(transaction) {
+      const index = this.transactions.findIndex(
+        (candidate) => candidate.id === transaction.id
+      );
+      if (index !== -1) {
+        this.transactions.splice(index, 1);
+      }
+    }
+    rollbackConflictingTransactions(transaction, mutationIds) {
+      for (const candidate of [...this.transactions]) {
+        if (candidate !== transaction && candidate.state === `pending` && candidate.mutations.some(
+          (mutation) => mutationIds.has(mutation.globalKey)
+        )) {
+          candidate.rollback({ isSecondaryRollback: true });
         }
       }
-      this.contexts.delete(contextId);
     }
-    /**
-     * Flush all contexts with pending work. Useful during tear-down.
-     */
-    flushAll() {
-      for (const contextId of Array.from(this.contexts.keys())) {
-        this.flush(contextId);
+    clear() {
+      const transactionIds = /* @__PURE__ */ new Set([
+        ...this.transactions.map((transaction) => transaction.id),
+        ...this.transactionStack.map((transaction) => transaction.id)
+      ]);
+      for (const transactionId of transactionIds) {
+        transactionScopedScheduler.clear(transactionId);
       }
-    }
-    /** Clear all scheduled jobs for a context. */
-    clear(contextId) {
-      this.contexts.delete(contextId);
-      this.clearListeners.forEach((listener) => listener(contextId));
-    }
-    /** Register a listener to be notified when a context is cleared. */
-    onClear(listener) {
-      this.clearListeners.add(listener);
-      return () => this.clearListeners.delete(listener);
-    }
-    /** Check if a context has pending jobs. */
-    hasPendingJobs(contextId) {
-      const context = this.contexts.get(contextId);
-      return !!context && context.jobs.size > 0;
-    }
-    /** Remove a single job from a context and clean up its dependencies. */
-    clearJob(contextId, jobId) {
-      const context = this.contexts.get(contextId);
-      if (!context) return;
-      context.jobs.delete(jobId);
-      context.dependencies.delete(jobId);
-      context.completed.delete(jobId);
-      context.queue = context.queue.filter((id) => id !== jobId);
-      if (context.jobs.size === 0) {
-        this.contexts.delete(contextId);
-      }
+      this.transactions = [];
+      this.transactionStack = [];
     }
   }
-  const transactionScopedScheduler = new Scheduler();
-
-  const transactions = [];
-  let transactionStack = [];
-  let sequenceNumber = 0;
+  const defaultTransactionScope = new TransactionScope();
+  const transactionScopes = /* @__PURE__ */ new WeakMap();
+  const transactionAmbientScopes = /* @__PURE__ */ new WeakMap();
+  function getTransactionScope(transaction) {
+    const scope = transactionScopes.get(transaction);
+    if (!scope) {
+      throw new Error(`Transaction is not associated with a TransactionScope.`);
+    }
+    return scope;
+  }
+  function getTransactionAmbientScope(transaction) {
+    const scope = transactionAmbientScopes.get(transaction);
+    if (!scope) {
+      throw new Error(`Transaction is not associated with an ambient scope.`);
+    }
+    return scope;
+  }
   function mergePendingMutations(existing, incoming) {
     switch (`${existing.type}-${incoming.type}`) {
       case `insert-update`: {
@@ -9070,36 +10199,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
   }
   function createTransaction(config) {
-    const newTransaction = new Transaction(config);
-    transactions.push(newTransaction);
-    return newTransaction;
+    return defaultTransactionScope.createTransaction(config);
   }
   function getActiveTransaction() {
-    if (transactionStack.length > 0) {
-      return transactionStack.slice(-1)[0];
-    } else {
-      return void 0;
-    }
-  }
-  function registerTransaction(tx) {
-    transactionScopedScheduler.clear(tx.id);
-    transactionStack.push(tx);
-  }
-  function unregisterTransaction(tx) {
-    try {
-      transactionScopedScheduler.flush(tx.id);
-    } finally {
-      transactionStack = transactionStack.filter((t) => t.id !== tx.id);
-    }
-  }
-  function removeFromPendingList(tx) {
-    const index = transactions.findIndex((t) => t.id === tx.id);
-    if (index !== -1) {
-      transactions.splice(index, 1);
-    }
+    return defaultTransactionScope.getActiveTransaction();
   }
   class Transaction {
-    constructor(config) {
+    constructor(config, scope, sequenceNumber) {
       if (typeof config.mutationFn === `undefined`) {
         throw new MissingMutationFunctionError();
       }
@@ -9110,13 +10216,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.isPersisted = createDeferred();
       this.autoCommit = config.autoCommit ?? true;
       this.createdAt = /* @__PURE__ */ new Date();
-      this.sequenceNumber = sequenceNumber++;
+      this.sequenceNumber = sequenceNumber;
       this.metadata = config.metadata ?? {};
+      transactionScopes.set(this, scope);
+      transactionAmbientScopes.set(this, scope);
     }
     setState(newState) {
       this.state = newState;
       if (newState === `completed` || newState === `failed`) {
-        removeFromPendingList(this);
+        getTransactionScope(this).removeTransaction(this);
       }
     }
     /**
@@ -9172,11 +10280,21 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       if (this.state !== `pending`) {
         throw new TransactionNotPendingMutateError();
       }
-      registerTransaction(this);
+      const initialScope = getTransactionScope(this);
+      const registeredScopes = /* @__PURE__ */ new Set([
+        initialScope,
+        getTransactionAmbientScope(this)
+      ]);
+      for (const scope of registeredScopes) {
+        scope.registerTransaction(this);
+      }
       try {
         callback();
       } finally {
-        unregisterTransaction(this);
+        registeredScopes.add(getTransactionScope(this));
+        for (const scope of registeredScopes) {
+          scope.unregisterTransaction(this);
+        }
       }
       if (this.autoCommit) {
         this.commit().catch(() => {
@@ -9269,11 +10387,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       this.setState(`failed`);
       if (!isSecondaryRollback) {
-        const mutationIds = /* @__PURE__ */ new Set();
-        this.mutations.forEach((m) => mutationIds.add(m.globalKey));
-        for (const t of transactions) {
-          t.state === `pending` && t.mutations.some((m) => mutationIds.has(m.globalKey)) && t.rollback({ isSecondaryRollback: true });
-        }
+        const mutationIds = new Set(
+          this.mutations.map((mutation) => mutation.globalKey)
+        );
+        getTransactionScope(this).rollbackConflictingTransactions(
+          this,
+          mutationIds
+        );
       }
       this.isPersisted.reject(this.error?.error);
       this.touchCollection();
@@ -9379,7 +10499,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.insert = (data, config2) => {
         this.lifecycle.validateCollectionUsable(`insert`);
         const state = this.state;
-        const ambientTransaction = getActiveTransaction();
+        const ambientTransaction = this.getActiveTransaction();
         if (!ambientTransaction && !this.config.onInsert) {
           throw new MissingInsertHandlerError();
         }
@@ -9426,7 +10546,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           state.recomputeOptimisticState(true);
           return ambientTransaction;
         } else {
-          const directOpTransaction = createTransaction({
+          const directOpTransaction = this.createTransaction({
             metadata: { [DIRECT_TRANSACTION_METADATA_KEY]: true },
             mutationFn: async (params) => {
               return await this.config.onInsert({
@@ -9447,7 +10567,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.delete = (keys, config2) => {
         const state = this.state;
         this.lifecycle.validateCollectionUsable(`delete`);
-        const ambientTransaction = getActiveTransaction();
+        const ambientTransaction = this.getActiveTransaction();
         if (!ambientTransaction && !this.config.onDelete) {
           throw new MissingDeleteHandlerError();
         }
@@ -9485,7 +10605,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           state.recomputeOptimisticState(true);
           return ambientTransaction;
         }
-        const directOpTransaction = createTransaction({
+        const directOpTransaction = this.createTransaction({
           autoCommit: true,
           metadata: { [DIRECT_TRANSACTION_METADATA_KEY]: true },
           mutationFn: async (params) => {
@@ -9510,6 +10630,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.lifecycle = deps.lifecycle;
       this.state = deps.state;
       this.collection = deps.collection;
+    }
+    setTransactionScope(transactionScope) {
+      this.transactionScope = transactionScope;
+    }
+    getActiveTransaction() {
+      return this.transactionScope ? this.transactionScope.getActiveTransactionForCollection() : getActiveTransaction();
+    }
+    createTransaction(config) {
+      return this.transactionScope ? this.transactionScope.createTransaction(config) : createTransaction(config);
     }
     ensureStandardSchema(schema) {
       if (schema && `~standard` in schema) {
@@ -9579,7 +10708,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       const state = this.state;
       this.lifecycle.validateCollectionUsable(`update`);
-      const ambientTransaction = getActiveTransaction();
+      const ambientTransaction = this.getActiveTransaction();
       if (!ambientTransaction && !this.config.onUpdate) {
         throw new MissingUpdateHandlerError();
       }
@@ -9658,7 +10787,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         };
       }).filter(Boolean);
       if (mutations.length === 0) {
-        const emptyTransaction = createTransaction({
+        const emptyTransaction = this.createTransaction({
           mutationFn: async () => {
           }
         });
@@ -9673,7 +10802,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         state.recomputeOptimisticState(true);
         return ambientTransaction;
       }
-      const directOpTransaction = createTransaction({
+      const directOpTransaction = this.createTransaction({
         metadata: { [DIRECT_TRANSACTION_METADATA_KEY]: true },
         mutationFn: async (params) => {
           return this.config.onUpdate({
@@ -9891,6 +11020,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     _markLayoutChange() {
       this._sync.markLayoutChange();
     }
+    /** Defer subscriber events until a coherent multi-Collection commit ends. */
+    _deferPublication() {
+      return this._changes.deferPublication();
+    }
     /**
      * Register a callback to be executed when the collection first becomes ready
      * Useful for preloading collections
@@ -9932,6 +11065,22 @@ tracked records deleted after run: ${summary.cleanedUp}`;
      */
     startSyncImmediate() {
       this._sync.startSync();
+    }
+    /** @internal */
+    _setTransactionScope(transactionScope) {
+      this._mutations.setTransactionScope(transactionScope);
+    }
+    /** @internal */
+    _hasHydratedKey(key) {
+      return this._state.hydratedKeys.has(key);
+    }
+    /** @internal */
+    _deferSyncStart() {
+      return this._sync.deferStart();
+    }
+    /** @internal */
+    _resumeSyncStart() {
+      this._sync.resumeStart();
     }
     /**
      * Preload the collection data by starting sync if not already started
@@ -10246,308 +11395,1109 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
   }
 
-  const instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
+  function normalizeLocaleOptions(options) {
+    return Object.fromEntries(
+      Object.entries(options ?? {}).filter(([, value]) => value !== void 0)
+    );
+  }
+  function canonicalizeLocale(locale) {
+    return locale === void 0 ? void 0 : Intl.getCanonicalLocales(locale)[0];
+  }
+  function usesLocaleCollation(options) {
+    return (options.stringSort ?? DEFAULT_COMPARE_OPTIONS.stringSort) === `locale`;
+  }
+  class BaseIndex {
+    constructor(id, expression, name, options) {
+      this.lookupCount = 0;
+      this.totalLookupTime = 0;
+      this.lastUpdated = /* @__PURE__ */ new Date();
+      this.hasCustomComparator = false;
+      this.id = id;
+      this.expression = expression;
+      this.compareOptions = DEFAULT_COMPARE_OPTIONS;
+      this.name = name;
+      this.initialize(options);
+    }
+    // Common methods
+    supports(operation) {
+      return this.supportedOperations.has(operation);
+    }
+    get supportsRangeOptimization() {
+      return !this.hasCustomComparator;
+    }
+    matchesField(fieldPath) {
+      return this.expression.type === `ref` && this.expression.path.length === fieldPath.length && this.expression.path.every((part, i) => part === fieldPath[i]);
+    }
+    /**
+     * Checks if the compare options match the index's compare options.
+     * The direction is ignored because the index can be reversed if the direction is different.
+     */
+    matchesCompareOptions(compareOptions) {
+      const indexCompareOptions = this.compareOptions;
+      const indexUsesLocale = usesLocaleCollation(indexCompareOptions);
+      const requestedUsesLocale = usesLocaleCollation(compareOptions);
+      if (indexCompareOptions.nulls !== compareOptions.nulls || indexUsesLocale !== requestedUsesLocale) {
+        return false;
+      }
+      if (!indexUsesLocale || !requestedUsesLocale) {
+        return true;
+      }
+      return canonicalizeLocale(indexCompareOptions.locale) === canonicalizeLocale(compareOptions.locale) && deepEquals(
+        normalizeLocaleOptions(indexCompareOptions.localeOptions),
+        normalizeLocaleOptions(compareOptions.localeOptions)
+      );
+    }
+    /**
+     * Checks if the index matches the provided direction.
+     */
+    matchesDirection(direction) {
+      return this.compareOptions.direction === direction;
+    }
+    getStats() {
+      return {
+        entryCount: this.keyCount,
+        lookupCount: this.lookupCount,
+        averageLookupTime: this.lookupCount > 0 ? this.totalLookupTime / this.lookupCount : 0,
+        lastUpdated: this.lastUpdated
+      };
+    }
+    evaluateIndexExpression(item) {
+      const evaluator = this.compiledIndexEvaluator ??= compileSingleRowExpression(this.expression);
+      return evaluator(item);
+    }
+    trackLookup(startTime) {
+      const duration = performance.now() - startTime;
+      this.lookupCount++;
+      this.totalLookupTime += duration;
+    }
+    updateTimestamp() {
+      this.lastUpdated = /* @__PURE__ */ new Date();
+    }
+  }
 
-  let idbProxyableTypes;
-  let cursorAdvanceMethods;
-  // This is a function to prevent it throwing up in node environments.
-  function getIdbProxyableTypes() {
-      return (idbProxyableTypes ||
-          (idbProxyableTypes = [
-              IDBDatabase,
-              IDBObjectStore,
-              IDBIndex,
-              IDBCursor,
-              IDBTransaction,
-          ]));
+  class BTree {
+    /**
+     * Initializes an empty B+ tree.
+     * @param compare Custom function to compare pairs of elements in the tree.
+     *   If not specified, defaultComparator will be used which is valid as long as K extends DefaultComparable.
+     * @param entries A set of key-value pairs to initialize the tree
+     * @param maxNodeSize Branching factor (maximum items or children per node)
+     *   Must be in range 4..256. If undefined or <4 then default is used; if >256 then 256.
+     */
+    constructor(compare, entries, maxNodeSize) {
+      this._root = EmptyLeaf;
+      this._size = 0;
+      this._maxNodeSize = maxNodeSize >= 4 ? Math.min(maxNodeSize, 256) : 32;
+      this._compare = compare;
+      if (entries) this.setPairs(entries);
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // ES6 Map<K,V> methods /////////////////////////////////////////////////////
+    /** Gets the number of key-value pairs in the tree. */
+    get size() {
+      return this._size;
+    }
+    /** Gets the number of key-value pairs in the tree. */
+    get length() {
+      return this._size;
+    }
+    /** Returns true iff the tree contains no key-value pairs. */
+    get isEmpty() {
+      return this._size === 0;
+    }
+    /** Releases the tree so that its size is 0. */
+    clear() {
+      this._root = EmptyLeaf;
+      this._size = 0;
+    }
+    /**
+     * Finds a pair in the tree and returns the associated value.
+     * @param defaultValue a value to return if the key was not found.
+     * @returns the value, or defaultValue if the key was not found.
+     * @description Computational complexity: O(log size)
+     */
+    get(key, defaultValue) {
+      return this._root.get(key, defaultValue, this);
+    }
+    /**
+     * Adds or overwrites a key-value pair in the B+ tree.
+     * @param key the key is used to determine the sort order of
+     *        data in the tree.
+     * @param value data to associate with the key (optional)
+     * @param overwrite Whether to overwrite an existing key-value pair
+     *        (default: true). If this is false and there is an existing
+     *        key-value pair then this method has no effect.
+     * @returns true if a new key-value pair was added.
+     * @description Computational complexity: O(log size)
+     * Note: when overwriting a previous entry, the key is updated
+     * as well as the value. This has no effect unless the new key
+     * has data that does not affect its sort order.
+     */
+    set(key, value, overwrite) {
+      if (this._root.isShared) this._root = this._root.clone();
+      const result = this._root.set(key, value, overwrite, this);
+      if (result === true || result === false) return result;
+      this._root = new BNodeInternal([this._root, result]);
+      return true;
+    }
+    /**
+     * Returns true if the key exists in the B+ tree, false if not.
+     * Use get() for best performance; use has() if you need to
+     * distinguish between "undefined value" and "key not present".
+     * @param key Key to detect
+     * @description Computational complexity: O(log size)
+     */
+    has(key) {
+      return this.forRange(key, key, true, void 0) !== 0;
+    }
+    /**
+     * Removes a single key-value pair from the B+ tree.
+     * @param key Key to find
+     * @returns true if a pair was found and removed, false otherwise.
+     * @description Computational complexity: O(log size)
+     */
+    delete(key) {
+      return this.editRange(key, key, true, DeleteRange) !== 0;
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // Additional methods ///////////////////////////////////////////////////////
+    /** Returns the maximum number of children/values before nodes will split. */
+    get maxNodeSize() {
+      return this._maxNodeSize;
+    }
+    /** Gets the lowest key in the tree. Complexity: O(log size) */
+    minKey() {
+      return this._root.minKey();
+    }
+    /** Gets the highest key in the tree. Complexity: O(1) */
+    maxKey() {
+      return this._root.maxKey();
+    }
+    /** Gets an array of all keys, sorted */
+    keysArray() {
+      const results = [];
+      this._root.forRange(
+        this.minKey(),
+        this.maxKey(),
+        true,
+        false,
+        this,
+        0,
+        (k, _v) => {
+          results.push(k);
+        }
+      );
+      return results;
+    }
+    /** Returns the next pair whose key is larger than the specified key (or undefined if there is none).
+     * If key === undefined, this function returns the lowest pair.
+     * @param key The key to search for.
+     * @param reusedArray Optional array used repeatedly to store key-value pairs, to
+     * avoid creating a new array on every iteration.
+     */
+    nextHigherPair(key, reusedArray) {
+      reusedArray = reusedArray || [];
+      if (key === void 0) {
+        return this._root.minPair(reusedArray);
+      }
+      return this._root.getPairOrNextHigher(
+        key,
+        this._compare,
+        false,
+        reusedArray
+      );
+    }
+    /** Returns the next key larger than the specified key, or undefined if there is none.
+     *  Also, nextHigherKey(undefined) returns the lowest key.
+     */
+    nextHigherKey(key) {
+      const p = this.nextHigherPair(key, ReusedArray);
+      return p && p[0];
+    }
+    /** Returns the next pair whose key is smaller than the specified key (or undefined if there is none).
+     *  If key === undefined, this function returns the highest pair.
+     * @param key The key to search for.
+     * @param reusedArray Optional array used repeatedly to store key-value pairs, to
+     *        avoid creating a new array each time you call this method.
+     */
+    nextLowerPair(key, reusedArray) {
+      reusedArray = reusedArray || [];
+      if (key === void 0) {
+        return this._root.maxPair(reusedArray);
+      }
+      return this._root.getPairOrNextLower(key, this._compare, false, reusedArray);
+    }
+    /** Returns the next key smaller than the specified key, or undefined if there is none.
+     *  Also, nextLowerKey(undefined) returns the highest key.
+     */
+    nextLowerKey(key) {
+      const p = this.nextLowerPair(key, ReusedArray);
+      return p && p[0];
+    }
+    /** Adds all pairs from a list of key-value pairs.
+     * @param pairs Pairs to add to this tree. If there are duplicate keys,
+     *        later pairs currently overwrite earlier ones (e.g. [[0,1],[0,7]]
+     *        associates 0 with 7.)
+     * @param overwrite Whether to overwrite pairs that already exist (if false,
+     *        pairs[i] is ignored when the key pairs[i][0] already exists.)
+     * @returns The number of pairs added to the collection.
+     * @description Computational complexity: O(pairs.length * log(size + pairs.length))
+     */
+    setPairs(pairs, overwrite) {
+      let added = 0;
+      for (const pair of pairs) {
+        if (this.set(pair[0], pair[1], overwrite)) added++;
+      }
+      return added;
+    }
+    /**
+     * Scans the specified range of keys, in ascending order by key.
+     * Note: the callback `onFound` must not insert or remove items in the
+     * collection. Doing so may cause incorrect data to be sent to the
+     * callback afterward.
+     * @param low The first key scanned will be greater than or equal to `low`.
+     * @param high Scanning stops when a key larger than this is reached.
+     * @param includeHigh If the `high` key is present, `onFound` is called for
+     *        that final pair if and only if this parameter is true.
+     * @param onFound A function that is called for each key-value pair. This
+     *        function can return {break:R} to stop early with result R.
+     * @param initialCounter Initial third argument of onFound. This value
+     *        increases by one each time `onFound` is called. Default: 0
+     * @returns The number of values found, or R if the callback returned
+     *        `{break:R}` to stop early.
+     * @description Computational complexity: O(number of items scanned + log size)
+     */
+    forRange(low, high, includeHigh, onFound, initialCounter) {
+      const r = this._root.forRange(
+        low,
+        high,
+        includeHigh,
+        false,
+        this,
+        initialCounter || 0,
+        onFound
+      );
+      return typeof r === `number` ? r : r.break;
+    }
+    /**
+     * Scans and potentially modifies values for a subsequence of keys.
+     * Note: the callback `onFound` should ideally be a pure function.
+     *   Specfically, it must not insert items, call clone(), or change
+     *   the collection except via return value; out-of-band editing may
+     *   cause an exception or may cause incorrect data to be sent to
+     *   the callback (duplicate or missed items). It must not cause a
+     *   clone() of the collection, otherwise the clone could be modified
+     *   by changes requested by the callback.
+     * @param low The first key scanned will be greater than or equal to `low`.
+     * @param high Scanning stops when a key larger than this is reached.
+     * @param includeHigh If the `high` key is present, `onFound` is called for
+     *        that final pair if and only if this parameter is true.
+     * @param onFound A function that is called for each key-value pair. This
+     *        function can return `{value:v}` to change the value associated
+     *        with the current key, `{delete:true}` to delete the current pair,
+     *        `{break:R}` to stop early with result R, or it can return nothing
+     *        (undefined or {}) to cause no effect and continue iterating.
+     *        `{break:R}` can be combined with one of the other two commands.
+     *        The third argument `counter` is the number of items iterated
+     *        previously; it equals 0 when `onFound` is called the first time.
+     * @returns The number of values scanned, or R if the callback returned
+     *        `{break:R}` to stop early.
+     * @description
+     *   Computational complexity: O(number of items scanned + log size)
+     *   Note: if the tree has been cloned with clone(), any shared
+     *   nodes are copied before `onFound` is called. This takes O(n) time
+     *   where n is proportional to the amount of shared data scanned.
+     */
+    editRange(low, high, includeHigh, onFound, initialCounter) {
+      let root = this._root;
+      if (root.isShared) this._root = root = root.clone();
+      try {
+        const r = root.forRange(
+          low,
+          high,
+          includeHigh,
+          true,
+          this,
+          initialCounter || 0,
+          onFound
+        );
+        return typeof r === `number` ? r : r.break;
+      } finally {
+        let isShared;
+        while (root.keys.length <= 1 && !root.isLeaf) {
+          isShared ||= root.isShared;
+          this._root = root = root.keys.length === 0 ? EmptyLeaf : root.children[0];
+        }
+        if (isShared) {
+          root.isShared = true;
+        }
+      }
+    }
   }
-  // This is a function to prevent it throwing up in node environments.
-  function getCursorAdvanceMethods() {
-      return (cursorAdvanceMethods ||
-          (cursorAdvanceMethods = [
-              IDBCursor.prototype.advance,
-              IDBCursor.prototype.continue,
-              IDBCursor.prototype.continuePrimaryKey,
-          ]));
-  }
-  const transactionDoneMap = new WeakMap();
-  const transformCache = new WeakMap();
-  const reverseTransformCache = new WeakMap();
-  function promisifyRequest(request) {
-      const promise = new Promise((resolve, reject) => {
-          const unlisten = () => {
-              request.removeEventListener('success', success);
-              request.removeEventListener('error', error);
-          };
-          const success = () => {
-              resolve(wrap(request.result));
-              unlisten();
-          };
-          const error = () => {
-              reject(request.error);
-              unlisten();
-          };
-          request.addEventListener('success', success);
-          request.addEventListener('error', error);
-      });
-      // This mapping exists in reverseTransformCache but doesn't exist in transformCache. This
-      // is because we create many promises from a single IDBRequest.
-      reverseTransformCache.set(promise, request);
-      return promise;
-  }
-  function cacheDonePromiseForTransaction(tx) {
-      // Early bail if we've already created a done promise for this transaction.
-      if (transactionDoneMap.has(tx))
-          return;
-      const done = new Promise((resolve, reject) => {
-          const unlisten = () => {
-              tx.removeEventListener('complete', complete);
-              tx.removeEventListener('error', error);
-              tx.removeEventListener('abort', error);
-          };
-          const complete = () => {
-              resolve();
-              unlisten();
-          };
-          const error = () => {
-              reject(tx.error || new DOMException('AbortError', 'AbortError'));
-              unlisten();
-          };
-          tx.addEventListener('complete', complete);
-          tx.addEventListener('error', error);
-          tx.addEventListener('abort', error);
-      });
-      // Cache it for later retrieval.
-      transactionDoneMap.set(tx, done);
-  }
-  let idbProxyTraps = {
-      get(target, prop, receiver) {
-          if (target instanceof IDBTransaction) {
-              // Special handling for transaction.done.
-              if (prop === 'done')
-                  return transactionDoneMap.get(target);
-              // Make tx.store return the only store in the transaction, or undefined if there are many.
-              if (prop === 'store') {
-                  return receiver.objectStoreNames[1]
-                      ? undefined
-                      : receiver.objectStore(receiver.objectStoreNames[0]);
-              }
+  class BNode {
+    get isLeaf() {
+      return this.children === void 0;
+    }
+    constructor(keys = [], values) {
+      this.keys = keys;
+      this.values = values || undefVals;
+      this.isShared = void 0;
+    }
+    // /////////////////////////////////////////////////////////////////////////
+    // Shared methods /////////////////////////////////////////////////////////
+    maxKey() {
+      return this.keys[this.keys.length - 1];
+    }
+    // If key not found, returns i^failXor where i is the insertion index.
+    // Callers that don't care whether there was a match will set failXor=0.
+    indexOf(key, failXor, cmp) {
+      const keys = this.keys;
+      let lo = 0, hi = keys.length, mid = hi >> 1;
+      while (lo < hi) {
+        const c = cmp(keys[mid], key);
+        if (c < 0) lo = mid + 1;
+        else if (c > 0)
+          hi = mid;
+        else if (c === 0) return mid;
+        else {
+          if (key === key)
+            return keys.length;
+          else throw new Error(`BTree: NaN was used as a key`);
+        }
+        mid = lo + hi >> 1;
+      }
+      return mid ^ failXor;
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // Leaf Node: misc //////////////////////////////////////////////////////////
+    minKey() {
+      return this.keys[0];
+    }
+    minPair(reusedArray) {
+      if (this.keys.length === 0) return void 0;
+      reusedArray[0] = this.keys[0];
+      reusedArray[1] = this.values[0];
+      return reusedArray;
+    }
+    maxPair(reusedArray) {
+      if (this.keys.length === 0) return void 0;
+      const lastIndex = this.keys.length - 1;
+      reusedArray[0] = this.keys[lastIndex];
+      reusedArray[1] = this.values[lastIndex];
+      return reusedArray;
+    }
+    clone() {
+      const v = this.values;
+      return new BNode(this.keys.slice(0), v === undefVals ? v : v.slice(0));
+    }
+    get(key, defaultValue, tree) {
+      const i = this.indexOf(key, -1, tree._compare);
+      return i < 0 ? defaultValue : this.values[i];
+    }
+    getPairOrNextLower(key, compare, inclusive, reusedArray) {
+      const i = this.indexOf(key, -1, compare);
+      const indexOrLower = i < 0 ? ~i - 1 : inclusive ? i : i - 1;
+      if (indexOrLower >= 0) {
+        reusedArray[0] = this.keys[indexOrLower];
+        reusedArray[1] = this.values[indexOrLower];
+        return reusedArray;
+      }
+      return void 0;
+    }
+    getPairOrNextHigher(key, compare, inclusive, reusedArray) {
+      const i = this.indexOf(key, -1, compare);
+      const indexOrLower = i < 0 ? ~i : inclusive ? i : i + 1;
+      const keys = this.keys;
+      if (indexOrLower < keys.length) {
+        reusedArray[0] = keys[indexOrLower];
+        reusedArray[1] = this.values[indexOrLower];
+        return reusedArray;
+      }
+      return void 0;
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // Leaf Node: set & node splitting //////////////////////////////////////////
+    set(key, value, overwrite, tree) {
+      let i = this.indexOf(key, -1, tree._compare);
+      if (i < 0) {
+        i = ~i;
+        tree._size++;
+        if (this.keys.length < tree._maxNodeSize) {
+          return this.insertInLeaf(i, key, value, tree);
+        } else {
+          const newRightSibling = this.splitOffRightSide();
+          let target = this;
+          if (i > this.keys.length) {
+            i -= this.keys.length;
+            target = newRightSibling;
           }
-          // Else transform whatever we get back.
-          return wrap(target[prop]);
-      },
-      set(target, prop, value) {
-          target[prop] = value;
+          target.insertInLeaf(i, key, value, tree);
+          return newRightSibling;
+        }
+      } else {
+        if (overwrite !== false) {
+          if (value !== void 0) this.reifyValues();
+          this.keys[i] = key;
+          this.values[i] = value;
+        }
+        return false;
+      }
+    }
+    reifyValues() {
+      if (this.values === undefVals)
+        return this.values = this.values.slice(0, this.keys.length);
+      return this.values;
+    }
+    insertInLeaf(i, key, value, tree) {
+      this.keys.splice(i, 0, key);
+      if (this.values === undefVals) {
+        while (undefVals.length < tree._maxNodeSize) undefVals.push(void 0);
+        if (value === void 0) {
           return true;
-      },
-      has(target, prop) {
-          if (target instanceof IDBTransaction &&
-              (prop === 'done' || prop === 'store')) {
-              return true;
+        } else {
+          this.values = undefVals.slice(0, this.keys.length - 1);
+        }
+      }
+      this.values.splice(i, 0, value);
+      return true;
+    }
+    takeFromRight(rhs) {
+      let v = this.values;
+      if (rhs.values === undefVals) {
+        if (v !== undefVals) v.push(void 0);
+      } else {
+        v = this.reifyValues();
+        v.push(rhs.values.shift());
+      }
+      this.keys.push(rhs.keys.shift());
+    }
+    takeFromLeft(lhs) {
+      let v = this.values;
+      if (lhs.values === undefVals) {
+        if (v !== undefVals) v.unshift(void 0);
+      } else {
+        v = this.reifyValues();
+        v.unshift(lhs.values.pop());
+      }
+      this.keys.unshift(lhs.keys.pop());
+    }
+    splitOffRightSide() {
+      const half = this.keys.length >> 1, keys = this.keys.splice(half);
+      const values = this.values === undefVals ? undefVals : this.values.splice(half);
+      return new BNode(keys, values);
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // Leaf Node: scanning & deletions //////////////////////////////////////////
+    forRange(low, high, includeHigh, editMode, tree, count, onFound) {
+      const cmp = tree._compare;
+      let iLow, iHigh;
+      if (high === low) {
+        if (!includeHigh) return count;
+        iHigh = (iLow = this.indexOf(low, -1, cmp)) + 1;
+        if (iLow < 0) return count;
+      } else {
+        iLow = this.indexOf(low, 0, cmp);
+        iHigh = this.indexOf(high, -1, cmp);
+        if (iHigh < 0) iHigh = ~iHigh;
+        else if (includeHigh === true) iHigh++;
+      }
+      const keys = this.keys, values = this.values;
+      if (onFound !== void 0) {
+        for (let i = iLow; i < iHigh; i++) {
+          const key = keys[i];
+          const result = onFound(key, values[i], count++);
+          if (result !== void 0) {
+            if (editMode === true) {
+              if (key !== keys[i] || this.isShared === true)
+                throw new Error(`BTree illegally changed or cloned in editRange`);
+              if (result.delete) {
+                this.keys.splice(i, 1);
+                if (this.values !== undefVals) this.values.splice(i, 1);
+                tree._size--;
+                i--;
+                iHigh--;
+              } else if (result.hasOwnProperty(`value`)) {
+                values[i] = result.value;
+              }
+            }
+            if (result.break !== void 0) return result;
           }
-          return prop in target;
-      },
-  };
-  function replaceTraps(callback) {
-      idbProxyTraps = callback(idbProxyTraps);
-  }
-  function wrapFunction(func) {
-      // Due to expected object equality (which is enforced by the caching in `wrap`), we
-      // only create one new func per func.
-      // Cursor methods are special, as the behaviour is a little more different to standard IDB. In
-      // IDB, you advance the cursor and wait for a new 'success' on the IDBRequest that gave you the
-      // cursor. It's kinda like a promise that can resolve with many values. That doesn't make sense
-      // with real promises, so each advance methods returns a new promise for the cursor object, or
-      // undefined if the end of the cursor has been reached.
-      if (getCursorAdvanceMethods().includes(func)) {
-          return function (...args) {
-              // Calling the original function with the proxy as 'this' causes ILLEGAL INVOCATION, so we use
-              // the original object.
-              func.apply(unwrap(this), args);
-              return wrap(this.request);
-          };
+        }
+      } else count += iHigh - iLow;
+      return count;
+    }
+    /** Adds entire contents of right-hand sibling (rhs is left unchanged) */
+    mergeSibling(rhs, _) {
+      this.keys.push.apply(this.keys, rhs.keys);
+      if (this.values === undefVals) {
+        if (rhs.values === undefVals) return;
+        this.values = this.values.slice(0, this.keys.length);
       }
-      return function (...args) {
-          // Calling the original function with the proxy as 'this' causes ILLEGAL INVOCATION, so we use
-          // the original object.
-          return wrap(func.apply(unwrap(this), args));
-      };
+      this.values.push.apply(this.values, rhs.reifyValues());
+    }
   }
-  function transformCachableValue(value) {
-      if (typeof value === 'function')
-          return wrapFunction(value);
-      // This doesn't return, it just creates a 'done' promise for the transaction,
-      // which is later returned for transaction.done (see idbObjectHandler).
-      if (value instanceof IDBTransaction)
-          cacheDonePromiseForTransaction(value);
-      if (instanceOfAny(value, getIdbProxyableTypes()))
-          return new Proxy(value, idbProxyTraps);
-      // Return the same value back if we're not going to transform it.
-      return value;
-  }
-  function wrap(value) {
-      // We sometimes generate multiple promises from a single IDBRequest (eg when cursoring), because
-      // IDB is weird and a single IDBRequest can yield many responses, so these can't be cached.
-      if (value instanceof IDBRequest)
-          return promisifyRequest(value);
-      // If we've already transformed this value before, reuse the transformed value.
-      // This is faster, but it also provides object equality.
-      if (transformCache.has(value))
-          return transformCache.get(value);
-      const newValue = transformCachableValue(value);
-      // Not all types are transformed.
-      // These may be primitive types, so they can't be WeakMap keys.
-      if (newValue !== value) {
-          transformCache.set(value, newValue);
-          reverseTransformCache.set(newValue, value);
+  class BNodeInternal extends BNode {
+    /**
+     * This does not mark `children` as shared, so it is the responsibility of the caller
+     * to ensure children are either marked shared, or aren't included in another tree.
+     */
+    constructor(children, keys) {
+      if (!keys) {
+        keys = [];
+        for (let i = 0; i < children.length; i++) keys[i] = children[i].maxKey();
       }
-      return newValue;
-  }
-  const unwrap = (value) => reverseTransformCache.get(value);
-
-  /**
-   * Open a database.
-   *
-   * @param name Name of the database.
-   * @param version Schema version.
-   * @param callbacks Additional callbacks.
-   */
-  function openDB(name, version, { blocked, upgrade, blocking, terminated } = {}) {
-      const request = indexedDB.open(name, version);
-      const openPromise = wrap(request);
-      if (upgrade) {
-          request.addEventListener('upgradeneeded', (event) => {
-              upgrade(wrap(request.result), event.oldVersion, event.newVersion, wrap(request.transaction), event);
-          });
+      super(keys);
+      this.children = children;
+    }
+    minKey() {
+      return this.children[0].minKey();
+    }
+    minPair(reusedArray) {
+      return this.children[0].minPair(reusedArray);
+    }
+    maxPair(reusedArray) {
+      return this.children[this.children.length - 1].maxPair(reusedArray);
+    }
+    get(key, defaultValue, tree) {
+      const i = this.indexOf(key, 0, tree._compare), children = this.children;
+      return i < children.length ? children[i].get(key, defaultValue, tree) : void 0;
+    }
+    getPairOrNextLower(key, compare, inclusive, reusedArray) {
+      const i = this.indexOf(key, 0, compare), children = this.children;
+      if (i >= children.length) return this.maxPair(reusedArray);
+      const result = children[i].getPairOrNextLower(
+        key,
+        compare,
+        inclusive,
+        reusedArray
+      );
+      if (result === void 0 && i > 0) {
+        return children[i - 1].maxPair(reusedArray);
       }
-      if (blocked) {
-          request.addEventListener('blocked', (event) => blocked(
-          // Casting due to https://github.com/microsoft/TypeScript-DOM-lib-generator/pull/1405
-          event.oldVersion, event.newVersion, event));
+      return result;
+    }
+    getPairOrNextHigher(key, compare, inclusive, reusedArray) {
+      const i = this.indexOf(key, 0, compare), children = this.children, length = children.length;
+      if (i >= length) return void 0;
+      const result = children[i].getPairOrNextHigher(
+        key,
+        compare,
+        inclusive,
+        reusedArray
+      );
+      if (result === void 0 && i < length - 1) {
+        return children[i + 1].minPair(reusedArray);
       }
-      openPromise
-          .then((db) => {
-          if (terminated)
-              db.addEventListener('close', () => terminated());
-          if (blocking) {
-              db.addEventListener('versionchange', (event) => blocking(event.oldVersion, event.newVersion, event));
+      return result;
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // Internal Node: set & node splitting //////////////////////////////////////
+    set(key, value, overwrite, tree) {
+      const c = this.children, max = tree._maxNodeSize, cmp = tree._compare;
+      let i = Math.min(this.indexOf(key, 0, cmp), c.length - 1), child = c[i];
+      if (child.isShared) c[i] = child = child.clone();
+      if (child.keys.length >= max) {
+        let other;
+        if (i > 0 && (other = c[i - 1]).keys.length < max && cmp(child.keys[0], key) < 0) {
+          if (other.isShared) c[i - 1] = other = other.clone();
+          other.takeFromRight(child);
+          this.keys[i - 1] = other.maxKey();
+        } else if ((other = c[i + 1]) !== void 0 && other.keys.length < max && cmp(child.maxKey(), key) < 0) {
+          if (other.isShared) c[i + 1] = other = other.clone();
+          other.takeFromLeft(child);
+          this.keys[i] = c[i].maxKey();
+        }
+      }
+      const result = child.set(key, value, overwrite, tree);
+      if (result === false) return false;
+      this.keys[i] = child.maxKey();
+      if (result === true) return true;
+      if (this.keys.length < max) {
+        this.insert(i + 1, result);
+        return true;
+      } else {
+        const newRightSibling = this.splitOffRightSide();
+        let target = this;
+        if (cmp(result.maxKey(), this.maxKey()) > 0) {
+          target = newRightSibling;
+          i -= this.keys.length;
+        }
+        target.insert(i + 1, result);
+        return newRightSibling;
+      }
+    }
+    /**
+     * Inserts `child` at index `i`.
+     * This does not mark `child` as shared, so it is the responsibility of the caller
+     * to ensure that either child is marked shared, or it is not included in another tree.
+     */
+    insert(i, child) {
+      this.children.splice(i, 0, child);
+      this.keys.splice(i, 0, child.maxKey());
+    }
+    /**
+     * Split this node.
+     * Modifies this to remove the second half of the items, returning a separate node containing them.
+     */
+    splitOffRightSide() {
+      const half = this.children.length >> 1;
+      return new BNodeInternal(
+        this.children.splice(half),
+        this.keys.splice(half)
+      );
+    }
+    takeFromRight(rhs) {
+      this.keys.push(rhs.keys.shift());
+      this.children.push(rhs.children.shift());
+    }
+    takeFromLeft(lhs) {
+      this.keys.unshift(lhs.keys.pop());
+      this.children.unshift(lhs.children.pop());
+    }
+    // ///////////////////////////////////////////////////////////////////////////
+    // Internal Node: scanning & deletions //////////////////////////////////////
+    // Note: `count` is the next value of the third argument to `onFound`.
+    //       A leaf node's `forRange` function returns a new value for this counter,
+    //       unless the operation is to stop early.
+    forRange(low, high, includeHigh, editMode, tree, count, onFound) {
+      const cmp = tree._compare;
+      const keys = this.keys, children = this.children;
+      let iLow = this.indexOf(low, 0, cmp), i = iLow;
+      const iHigh = Math.min(
+        high === low ? iLow : this.indexOf(high, 0, cmp),
+        keys.length - 1
+      );
+      if (!editMode) {
+        for (; i <= iHigh; i++) {
+          const result = children[i].forRange(
+            low,
+            high,
+            includeHigh,
+            editMode,
+            tree,
+            count,
+            onFound
+          );
+          if (typeof result !== `number`) return result;
+          count = result;
+        }
+      } else if (i <= iHigh) {
+        try {
+          for (; i <= iHigh; i++) {
+            if (children[i].isShared) children[i] = children[i].clone();
+            const result = children[i].forRange(
+              low,
+              high,
+              includeHigh,
+              editMode,
+              tree,
+              count,
+              onFound
+            );
+            keys[i] = children[i].maxKey();
+            if (typeof result !== `number`) return result;
+            count = result;
           }
-      })
-          .catch(() => { });
-      return openPromise;
-  }
-
-  const readMethods = ['get', 'getKey', 'getAll', 'getAllKeys', 'count'];
-  const writeMethods = ['put', 'add', 'delete', 'clear'];
-  const cachedMethods = new Map();
-  function getMethod(target, prop) {
-      if (!(target instanceof IDBDatabase &&
-          !(prop in target) &&
-          typeof prop === 'string')) {
-          return;
-      }
-      if (cachedMethods.get(prop))
-          return cachedMethods.get(prop);
-      const targetFuncName = prop.replace(/FromIndex$/, '');
-      const useIndex = prop !== targetFuncName;
-      const isWrite = writeMethods.includes(targetFuncName);
-      if (
-      // Bail if the target doesn't exist on the target. Eg, getAll isn't in Edge.
-      !(targetFuncName in (useIndex ? IDBIndex : IDBObjectStore).prototype) ||
-          !(isWrite || readMethods.includes(targetFuncName))) {
-          return;
-      }
-      const method = async function (storeName, ...args) {
-          // isWrite ? 'readwrite' : undefined gzipps better, but fails in Edge :(
-          const tx = this.transaction(storeName, isWrite ? 'readwrite' : 'readonly');
-          let target = tx.store;
-          if (useIndex)
-              target = target.index(args.shift());
-          // Must reject if op rejects.
-          // If it's a write operation, must reject if tx.done rejects.
-          // Must reject with op rejection first.
-          // Must resolve with op value.
-          // Must handle both promises (no unhandled rejections)
-          return (await Promise.all([
-              target[targetFuncName](...args),
-              isWrite && tx.done,
-          ]))[0];
-      };
-      cachedMethods.set(prop, method);
-      return method;
-  }
-  replaceTraps((oldTraps) => ({
-      ...oldTraps,
-      get: (target, prop, receiver) => getMethod(target, prop) || oldTraps.get(target, prop, receiver),
-      has: (target, prop) => !!getMethod(target, prop) || oldTraps.has(target, prop),
-  }));
-
-  const advanceMethodProps = ['continue', 'continuePrimaryKey', 'advance'];
-  const methodMap = {};
-  const advanceResults = new WeakMap();
-  const ittrProxiedCursorToOriginalProxy = new WeakMap();
-  const cursorIteratorTraps = {
-      get(target, prop) {
-          if (!advanceMethodProps.includes(prop))
-              return target[prop];
-          let cachedFunc = methodMap[prop];
-          if (!cachedFunc) {
-              cachedFunc = methodMap[prop] = function (...args) {
-                  advanceResults.set(this, ittrProxiedCursorToOriginalProxy.get(this)[prop](...args));
-              };
+        } finally {
+          const half = tree._maxNodeSize >> 1;
+          if (iLow > 0) iLow--;
+          for (i = iHigh; i >= iLow; i--) {
+            if (children[i].keys.length <= half) {
+              if (children[i].keys.length !== 0) {
+                this.tryMerge(i, tree._maxNodeSize);
+              } else {
+                keys.splice(i, 1);
+                children.splice(i, 1);
+              }
+            }
           }
-          return cachedFunc;
-      },
-  };
-  async function* iterate(...args) {
-      // tslint:disable-next-line:no-this-assignment
-      let cursor = this;
-      if (!(cursor instanceof IDBCursor)) {
-          cursor = await cursor.openCursor(...args);
+          if (children.length !== 0 && children[0].keys.length === 0)
+            check(false, `emptiness bug`);
+        }
       }
-      if (!cursor)
-          return;
-      cursor = cursor;
-      const proxiedCursor = new Proxy(cursor, cursorIteratorTraps);
-      ittrProxiedCursorToOriginalProxy.set(proxiedCursor, cursor);
-      // Map this double-proxy back to the original, so other cursor methods work.
-      reverseTransformCache.set(proxiedCursor, unwrap(cursor));
-      while (cursor) {
-          yield proxiedCursor;
-          // If one of the advancing methods was not called, call continue().
-          cursor = await (advanceResults.get(proxiedCursor) || cursor.continue());
-          advanceResults.delete(proxiedCursor);
+      return count;
+    }
+    /** Merges child i with child i+1 if their combined size is not too large */
+    tryMerge(i, maxSize) {
+      const children = this.children;
+      if (i >= 0 && i + 1 < children.length) {
+        if (children[i].keys.length + children[i + 1].keys.length <= maxSize) {
+          if (children[i].isShared)
+            children[i] = children[i].clone();
+          children[i].mergeSibling(children[i + 1], maxSize);
+          children.splice(i + 1, 1);
+          this.keys.splice(i + 1, 1);
+          this.keys[i] = children[i].maxKey();
+          return true;
+        }
       }
+      return false;
+    }
+    /**
+     * Move children from `rhs` into this.
+     * `rhs` must be part of this tree, and be removed from it after this call
+     * (otherwise isShared for its children could be incorrect).
+     */
+    mergeSibling(rhs, maxNodeSize) {
+      const oldLength = this.keys.length;
+      this.keys.push.apply(this.keys, rhs.keys);
+      const rhsChildren = rhs.children;
+      this.children.push.apply(this.children, rhsChildren);
+      if (rhs.isShared && !this.isShared) {
+        for (const child of rhsChildren) child.isShared = true;
+      }
+      this.tryMerge(oldLength - 1, maxNodeSize);
+    }
   }
-  function isIteratorProp(target, prop) {
-      return ((prop === Symbol.asyncIterator &&
-          instanceOfAny(target, [IDBIndex, IDBObjectStore, IDBCursor])) ||
-          (prop === 'iterate' && instanceOfAny(target, [IDBIndex, IDBObjectStore])));
+  const undefVals = [];
+  const Delete = { delete: true }, DeleteRange = () => Delete;
+  const EmptyLeaf = (function() {
+    const n = new BNode();
+    n.isShared = true;
+    return n;
+  })();
+  const ReusedArray = [];
+  function check(fact, ...args) {
+    {
+      args.unshift(`B+ tree`);
+      throw new Error(args.join(` `));
+    }
   }
-  replaceTraps((oldTraps) => ({
-      ...oldTraps,
-      get(target, prop, receiver) {
-          if (isIteratorProp(target, prop))
-              return iterate;
-          return oldTraps.get(target, prop, receiver);
-      },
-      has(target, prop) {
-          return isIteratorProp(target, prop) || oldTraps.has(target, prop);
-      },
-  }));
+
+  class BTreeIndex extends BaseIndex {
+    constructor(id, expression, name, options) {
+      super(id, expression, name, options);
+      this.supportedOperations = /* @__PURE__ */ new Set([
+        `eq`,
+        `gt`,
+        `gte`,
+        `lt`,
+        `lte`,
+        `in`
+      ]);
+      this.valueMap = /* @__PURE__ */ new Map();
+      this.indexedKeys = /* @__PURE__ */ new Set();
+      this.compareFn = defaultComparator;
+      const baseCompareFn = options?.compareFn ?? defaultComparator;
+      this.hasCustomComparator = options?.compareFn != null;
+      this.compareFn = (a, b) => baseCompareFn(denormalizeUndefined(a), denormalizeUndefined(b));
+      if (options?.compareOptions) {
+        this.compareOptions = options.compareOptions;
+      }
+      this.orderedEntries = new BTree(this.compareFn);
+    }
+    initialize(_options) {
+    }
+    /**
+     * Adds a value to the index
+     */
+    add(key, item) {
+      let indexedValue;
+      try {
+        indexedValue = this.evaluateIndexExpression(item);
+      } catch (error) {
+        throw new Error(
+          `Failed to evaluate index expression for key ${key}: ${error}`
+        );
+      }
+      const normalizedValue = normalizeForBTree(indexedValue);
+      this.addToBucket(key, normalizedValue);
+      this.indexedKeys.add(key);
+      this.updateTimestamp();
+    }
+    addToBucket(key, normalizedValue) {
+      const keySet = this.valueMap.get(normalizedValue);
+      if (keySet) {
+        keySet.add(key);
+      } else {
+        const newKeySet = /* @__PURE__ */ new Set([key]);
+        this.valueMap.set(normalizedValue, newKeySet);
+        this.orderedEntries.set(normalizedValue, void 0);
+      }
+    }
+    /**
+     * Removes a value from the index
+     */
+    remove(key, item) {
+      let indexedValue;
+      try {
+        indexedValue = this.evaluateIndexExpression(item);
+      } catch (error) {
+        console.warn(
+          `Failed to evaluate index expression for key ${key} during removal:`,
+          error
+        );
+        return;
+      }
+      const normalizedValue = normalizeForBTree(indexedValue);
+      this.removeFromBucket(key, normalizedValue);
+      this.indexedKeys.delete(key);
+      this.updateTimestamp();
+    }
+    removeFromBucket(key, normalizedValue) {
+      const keySet = this.valueMap.get(normalizedValue);
+      if (keySet) {
+        keySet.delete(key);
+        if (keySet.size === 0) {
+          this.valueMap.delete(normalizedValue);
+          this.orderedEntries.delete(normalizedValue);
+        }
+      }
+    }
+    /**
+     * Updates a value in the index
+     */
+    update(key, oldItem, newItem) {
+      let oldValue;
+      let newValue;
+      try {
+        oldValue = normalizeForBTree(this.evaluateIndexExpression(oldItem));
+        newValue = normalizeForBTree(this.evaluateIndexExpression(newItem));
+      } catch {
+        this.remove(key, oldItem);
+        this.add(key, newItem);
+        return;
+      }
+      if (areSameValueZeroEqual(oldValue, newValue) && this.valueMap.get(newValue)?.has(key)) {
+        return;
+      }
+      this.removeFromBucket(key, oldValue);
+      this.addToBucket(key, newValue);
+      this.indexedKeys.add(key);
+      this.updateTimestamp();
+    }
+    /**
+     * Builds the index from a collection of entries
+     */
+    build(entries) {
+      this.clear();
+      for (const [key, item] of entries) {
+        this.add(key, item);
+      }
+    }
+    /**
+     * Clears all data from the index
+     */
+    clear() {
+      this.orderedEntries.clear();
+      this.valueMap.clear();
+      this.indexedKeys.clear();
+      this.updateTimestamp();
+    }
+    /**
+     * Performs a lookup operation
+     */
+    lookup(operation, value) {
+      const startTime = performance.now();
+      let result;
+      switch (operation) {
+        case `eq`:
+          result = this.equalityLookup(value);
+          break;
+        case `gt`:
+          result = this.rangeQuery({ from: value, fromInclusive: false });
+          break;
+        case `gte`:
+          result = this.rangeQuery({ from: value, fromInclusive: true });
+          break;
+        case `lt`:
+          result = this.rangeQuery({ to: value, toInclusive: false });
+          break;
+        case `lte`:
+          result = this.rangeQuery({ to: value, toInclusive: true });
+          break;
+        case `in`:
+          result = this.inArrayLookup(value);
+          break;
+        default:
+          throw new Error(`Operation ${operation} not supported by BTreeIndex`);
+      }
+      this.trackLookup(startTime);
+      return result;
+    }
+    /**
+     * Gets the number of indexed keys
+     */
+    get keyCount() {
+      return this.indexedKeys.size;
+    }
+    // Public methods for backward compatibility (used by tests)
+    /**
+     * Performs an equality lookup
+     */
+    equalityLookup(value) {
+      const normalizedValue = normalizeForBTree(value);
+      return new Set(this.valueMap.get(normalizedValue) ?? []);
+    }
+    /**
+     * Performs a range query with options
+     * This is more efficient for compound queries like "WHERE a > 5 AND a < 10"
+     */
+    rangeQuery(options = {}) {
+      const { from, to, fromInclusive = true, toInclusive = true } = options;
+      const result = /* @__PURE__ */ new Set();
+      const hasFrom = `from` in options;
+      const hasTo = `to` in options;
+      const fromKey = hasFrom ? normalizeForBTree(from) : this.orderedEntries.minKey();
+      const toKey = hasTo ? normalizeForBTree(to) : this.orderedEntries.maxKey();
+      this.orderedEntries.forRange(
+        fromKey,
+        toKey,
+        toInclusive,
+        (indexedValue, _) => {
+          if (hasFrom && !fromInclusive && this.compareFn(indexedValue, fromKey) === 0) {
+            return;
+          }
+          const keys = this.valueMap.get(indexedValue);
+          if (keys) {
+            keys.forEach((key) => result.add(key));
+          }
+        }
+      );
+      return result;
+    }
+    /**
+     * Performs a reversed range query
+     */
+    rangeQueryReversed(options = {}) {
+      const { from, to, fromInclusive = true, toInclusive = true } = options;
+      const hasFrom = `from` in options;
+      const hasTo = `to` in options;
+      return this.rangeQuery({
+        from: hasTo ? to : this.orderedEntries.maxKey(),
+        to: hasFrom ? from : this.orderedEntries.minKey(),
+        fromInclusive: toInclusive,
+        toInclusive: fromInclusive
+      });
+    }
+    /**
+     * Internal method for taking items from the index.
+     * @param n - The number of items to return
+     * @param nextPair - Function to get the next pair from the BTree
+     * @param from - Already normalized! undefined means "start from beginning/end", sentinel means "start from the key undefined"
+     * @param filterFn - Optional filter function
+     * @param reversed - Whether to reverse the order of keys within each value
+     */
+    takeInternal(n, nextPair, from, filterFn, reversed = false) {
+      const keysInResult = /* @__PURE__ */ new Set();
+      const result = [];
+      let pair;
+      let key = from;
+      while ((pair = nextPair(key)) !== void 0 && result.length < n) {
+        key = pair[0];
+        const keys = this.valueMap.get(key);
+        if (keys && keys.size > 0) {
+          const sorted = Array.from(keys).sort(compareKeys);
+          if (reversed) sorted.reverse();
+          for (const ks of sorted) {
+            if (result.length >= n) break;
+            if (!keysInResult.has(ks) && (filterFn?.(ks) ?? true)) {
+              result.push(ks);
+              keysInResult.add(ks);
+            }
+          }
+        }
+      }
+      return result;
+    }
+    /**
+     * Returns the next n items after the provided item.
+     * @param n - The number of items to return
+     * @param from - The item to start from (exclusive).
+     * @returns The next n items after the provided key.
+     */
+    take(n, from, filterFn) {
+      const nextPair = (k) => this.orderedEntries.nextHigherPair(k);
+      const normalizedFrom = normalizeForBTree(from);
+      return this.takeInternal(n, nextPair, normalizedFrom, filterFn);
+    }
+    /**
+     * Returns the first n items from the beginning.
+     * @param n - The number of items to return
+     * @param filterFn - Optional filter function
+     * @returns The first n items
+     */
+    takeFromStart(n, filterFn) {
+      const nextPair = (k) => this.orderedEntries.nextHigherPair(k);
+      return this.takeInternal(n, nextPair, void 0, filterFn);
+    }
+    /**
+     * Returns the next n items **before** the provided item (in descending order).
+     * @param n - The number of items to return
+     * @param from - The item to start from (exclusive). Required.
+     * @returns The next n items **before** the provided key.
+     */
+    takeReversed(n, from, filterFn) {
+      const nextPair = (k) => this.orderedEntries.nextLowerPair(k);
+      const normalizedFrom = normalizeForBTree(from);
+      return this.takeInternal(n, nextPair, normalizedFrom, filterFn, true);
+    }
+    /**
+     * Returns the last n items from the end.
+     * @param n - The number of items to return
+     * @param filterFn - Optional filter function
+     * @returns The last n items
+     */
+    takeReversedFromEnd(n, filterFn) {
+      const nextPair = (k) => this.orderedEntries.nextLowerPair(k);
+      return this.takeInternal(n, nextPair, void 0, filterFn, true);
+    }
+    /**
+     * Performs an IN array lookup
+     */
+    inArrayLookup(values) {
+      const result = /* @__PURE__ */ new Set();
+      for (const value of values) {
+        const normalizedValue = normalizeForBTree(value);
+        const keys = this.valueMap.get(normalizedValue);
+        if (keys) {
+          keys.forEach((key) => result.add(key));
+        }
+      }
+      return result;
+    }
+    // Getter methods for testing compatibility
+    get indexedKeysSet() {
+      return this.indexedKeys;
+    }
+    get orderedEntriesArray() {
+      return this.orderedEntries.keysArray().map((key) => [
+        denormalizeUndefined(key),
+        this.valueMap.get(key) ?? /* @__PURE__ */ new Set()
+      ]);
+    }
+    get orderedEntriesArrayReversed() {
+      return this.takeReversedFromEnd(this.orderedEntries.size).map((key) => [
+        denormalizeUndefined(key),
+        this.valueMap.get(key) ?? /* @__PURE__ */ new Set()
+      ]);
+    }
+    get valueMapData() {
+      const result = /* @__PURE__ */ new Map();
+      for (const [key, value] of this.valueMap) {
+        result.set(denormalizeUndefined(key), value);
+      }
+      return result;
+    }
+  }
 
   const DEFAULT_SYNC_INTERVAL = 3e4;
   const DEFAULT_POLL_INTERVAL = 3e4;
-  const MAX_MUTATION_ATTEMPTS = 3;
-  const RETRY_BASE_DELAY = 1e3;
-  const RETRY_MAX_DELAY = 6e4;
-  class MutationPersistenceError extends Error {
-    constructor(message, mutationIds, cause) {
-      super(message);
-      this.mutationIds = mutationIds;
-      this.cause = cause;
-      this.name = "MutationPersistenceError";
+  function createDefaultIndexes(table, collection) {
+    const fields = Object.entries(table.fields);
+    const indexedKeys = /* @__PURE__ */ new Set([table.primaryKey.key]);
+    for (const [key, field] of fields) {
+      if (key === table.primaryKey.key) continue;
+      if (field.type === "lookupId") indexedKeys.add(key);
     }
+    for (const key of indexedKeys) {
+      try {
+        collection.createIndex((row) => row[key], { indexType: BTreeIndex });
+      } catch (err) {
+        console.warn(`[dataverse-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
+      }
+    }
+    [...collection.indexes.values()].map((i) => i.expression?.path);
   }
   function dataverseCollectionOptions(config) {
     const {
@@ -10613,6 +12563,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     };
     const syncConfig = {
       sync: ({ begin, write, commit, markReady, collection }) => {
+        createDefaultIndexes(table, collection);
         const handleTabMessage = (event) => {
           if (disposed) return;
           if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
@@ -10715,500 +12666,238 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       onUpdate: defaultOnUpdate,
       onDelete: defaultOnDelete,
       utils,
+      defaultIndexType: BTreeIndex,
       // Begin syncing immediately on creation rather than waiting for the
       // first subscriber to attach (the default for @tanstack/db collections).
       startSync: true
     };
   }
-  class SyncEngine {
-    name;
-    version;
-    tables;
-    MUTATION_QUEUE_NAME = "Mutations";
-    ERRORED_MUTATIONS_NAME = "Errored Mutations";
-    channel;
-    closed = false;
-    // Per-collection cache stores (keyed by collection id). Unlike the table
-    // stores derived from entitySetName, these exist so multiple filtered
-    // collections over the same entity don't overwrite each other's snapshots.
-    collectionStores = /* @__PURE__ */ new Set();
-    collectionStorePromises = /* @__PURE__ */ new Map();
-    // The version passed to openDB — grows when a late-registered collection
-    // needs its own object store and the DB must be reopened to create it.
-    dbVersion;
-    activeFetchControllers = /* @__PURE__ */ new Set();
-    collectionCleanups = /* @__PURE__ */ new Set();
-    // Last etag we successfully wrote for each record key. Lets a queued update
-    // that was built against a stale optimistic snapshot borrow the fresher etag
-    // produced by an earlier update in the same flush (or a prior flush), so
-    // consecutive conditional updates don't 412 each other. Seeded from the
-    // mutation's own ifMatch when empty.
-    keyEtags = /* @__PURE__ */ new Map();
-    // Schedules a wake-up for the soonest delayed retry so a failed mutation
-    // re-attempts even while the app is idle and online. Cleared on each
-    // queueMutations/flush and on close().
-    retryTimer;
-    channelMessageHandler;
-    constructor(name, tables, version) {
-      this.name = name;
-      this.channel = new BroadcastChannel(name);
-      this.version = version;
-      this.dbVersion = version;
-      this.tables = new Map(tables.map((v) => [v.entitySetName, v]));
-      this.channelMessageHandler = (event) => {
-        if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
-          this.abortActiveFetches();
-        }
-      };
-      this.channel.addEventListener("message", this.channelMessageHandler);
-    }
-    sequence = 0;
-    serializeMutation(mutation) {
-      return {
-        id: mutation.mutationId,
-        type: mutation.type,
-        value: mutation.modified,
-        changes: mutation.changes,
-        key: mutation.key,
-        entitySetName: mutation.collection.id,
-        timestamp: mutation.createdAt.valueOf(),
-        sequence: this.sequence++,
-        attempts: 0,
-        ifMatch: getEtag(mutation.modified)
-      };
-    }
-    db;
-    async getDB() {
-      if (!this.db) {
-        const self = this;
-        this.db = await openDB(this.name, this.dbVersion, {
-          upgrade(database, oldVersion, _newVersion, transaction) {
-            for (const storeName of Array.from(database.objectStoreNames)) {
-              if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) {
-                database.deleteObjectStore(storeName);
-              }
-            }
-            let store = database.objectStoreNames.contains(self.MUTATION_QUEUE_NAME) ? transaction.objectStore(self.MUTATION_QUEUE_NAME) : database.createObjectStore(self.MUTATION_QUEUE_NAME, { keyPath: "id" });
-            if (!store.indexNames.contains("by_timestamp")) {
-              store.createIndex("by_timestamp", ["timestamp", "sequence"]);
-            }
-            if (!database.objectStoreNames.contains(self.ERRORED_MUTATIONS_NAME)) {
-              database.createObjectStore(self.ERRORED_MUTATIONS_NAME, { keyPath: "id" });
-            }
-            for (const table of self.tables.values()) {
-              if (!database.objectStoreNames.contains(table.entitySetName)) {
-                database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
-              }
-            }
-          }
-        });
+  function serializeMutation(engine, mutation) {
+    return {
+      id: mutation.mutationId,
+      type: mutation.type,
+      value: plainClone(mutation.modified),
+      changes: plainClone(mutation.changes),
+      key: mutation.key,
+      entitySetName: mutation.collection.id,
+      timestamp: mutation.createdAt.valueOf(),
+      sequence: engine.nextSequence(),
+      attempts: 0,
+      ifMatch: getEtag(mutation.modified)
+    };
+  }
+  function dataverseOfflineCollectionOptions(engine, config) {
+    if (engine.isClosed) throw new Error("SyncEngine is closed");
+    const {
+      table,
+      id: explicitId,
+      query,
+      syncInterval = DEFAULT_POLL_INTERVAL,
+      readOnlyWhenOffline = false,
+      readonly = false,
+      requireVisible = true,
+      ...rest
+    } = config;
+    engine.tables.set(table.entitySetName, table);
+    const pk = table.primaryKey;
+    const getKey = (item) => item[pk.key];
+    const collectionId = explicitId ?? table.entitySetName;
+    const cacheReady = engine.ensureCollectionStore(collectionId);
+    let pollTimer;
+    let syncFromDataverse;
+    let syncController;
+    let activeSync;
+    let syncQueued = false;
+    let disposed = false;
+    const runSync = async () => {
+      if (disposed) return;
+      if (activeSync) {
+        syncQueued = true;
+        return activeSync;
       }
-      return this.db;
-    }
-    /**
-     * Registers a per-collection cache store (keyed by collection id). If the
-     * database is already open without this store, it is reopened with a
-     * bumped version so the upgrade callback can create it. The returned
-     * promise resolves once the store is safe to read/write.
-     */
-    ensureCollectionStore(name) {
-      let p = this.collectionStorePromises.get(name);
-      if (!p) {
-        p = (async () => {
-          this.collectionStores.add(name);
-          let db = await this.getDB();
-          if (!db.objectStoreNames.contains(name)) {
-            db.close();
-            this.db = void 0;
-            this.dbVersion = db.version + 1;
-            await this.getDB();
-          }
-        })();
-        this.collectionStorePromises.set(name, p);
-      }
-      return p;
-    }
-    /**
-     * Instantly aborts any in-flight remote server GET requests across all collections.
-     */
-    abortActiveFetches() {
-      for (const controller of this.activeFetchControllers) {
-        controller.abort("New mutation enqueued");
-      }
-      this.activeFetchControllers.clear();
-    }
-    close() {
-      if (this.closed) return;
-      this.closed = true;
-      this.abortActiveFetches();
-      if (this.retryTimer) {
-        clearTimeout(this.retryTimer);
-        this.retryTimer = void 0;
-      }
-      for (const cleanup of [...this.collectionCleanups]) cleanup();
-      this.collectionCleanups.clear();
-      this.channel.removeEventListener("message", this.channelMessageHandler);
-      this.channel.close();
-      this.db?.close();
-      this.db = void 0;
-    }
-    /**
-     * Flushes the mutation queue to Dataverse. After a successful flush the
-     * authoritative server records (carrying fresh etags) are broadcast via the
-     * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
-     * and IDB cache store — see {@link createCollectionOptions}'s
-     * handleTabMessage.
-     */
-    async flushQueue() {
-      await navigator.locks.request(this.name, async () => {
-        const db = await this.getDB();
-        const flushed = [];
-        while (true) {
-          const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
-          const index = tx.store.index("by_timestamp");
-          const cursor = await index.openCursor(null, "next");
-          if (!cursor) break;
-          const mutation = cursor.value;
-          if (mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) {
-            break;
-          }
-          const table = this.tables.get(mutation.entitySetName);
-          if (!table) {
-            console.error(`Table ${mutation.entitySetName} not registered in DB`);
-            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
-            continue;
-          }
-          if (mutation.type === "update" || mutation.type === "delete") {
-            const fresh = this.keyEtags.get(mutation.key);
-            if (fresh && fresh !== mutation.ifMatch) {
-              mutation.ifMatch = fresh;
-            }
-          }
-          try {
-            if (mutation.type === "insert") {
-              const record = await table.createRecord(mutation.value);
-              flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record), value: record, entitySetName: mutation.entitySetName });
-            } else if (mutation.type === "update") {
-              const record = await table.updateRecord(mutation.key, mutation.changes, { ifMatch: mutation.ifMatch });
-              const etag = getEtag(record);
-              if (etag) {
-                this.keyEtags.set(mutation.key, etag);
-                mutation.ifMatch = etag;
-                await db.put(this.MUTATION_QUEUE_NAME, mutation);
-              }
-              flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
-            } else if (mutation.type === "delete") {
-              await table.deleteRecord(mutation.key, { ifMatch: mutation.ifMatch });
-              this.keyEtags.delete(mutation.key);
-              flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: void 0, entitySetName: mutation.entitySetName });
-            }
-            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
-          } catch (e) {
-            if (!navigator.onLine) break;
-            console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
-            mutation.error = e;
-            mutation.attempts++;
-            mutation.lastAttemptAt = Date.now();
-            if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
-              mutation.nextAttemptAt = void 0;
-              await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
-              await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
-            } else {
-              const delay = Math.min(
-                RETRY_MAX_DELAY,
-                RETRY_BASE_DELAY * 2 ** (mutation.attempts - 1)
-              );
-              mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
-              await db.put(this.MUTATION_QUEUE_NAME, mutation);
-              if (navigator.onLine) {
-                if (this.retryTimer) clearTimeout(this.retryTimer);
-                this.retryTimer = setTimeout(() => {
-                  this.retryTimer = void 0;
-                  void this.flushQueue();
-                }, delay);
-              }
-              break;
-            }
-          }
-        }
-        if (flushed.length > 0) {
-          this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
-        }
+      syncController = new AbortController();
+      engine.trackActiveFetch(syncController);
+      activeSync = syncFromDataverse(syncController.signal).finally(() => {
+        engine.untrackActiveFetch(syncController);
+        syncController = void 0;
+        activeSync = void 0;
       });
-    }
-    async getQueueCount() {
-      const db = await this.getDB();
-      return db.count(this.MUTATION_QUEUE_NAME);
-    }
-    async getErroredMutations() {
-      const db = await this.getDB();
-      return db.getAll(this.ERRORED_MUTATIONS_NAME);
-    }
-    async retryErroredMutation(id) {
-      const db = await this.getDB();
-      const tx = db.transaction(
-        [this.MUTATION_QUEUE_NAME, this.ERRORED_MUTATIONS_NAME],
-        "readwrite"
-      );
-      const mutation = await tx.objectStore(this.ERRORED_MUTATIONS_NAME).get(id);
-      if (mutation) {
-        mutation.attempts = 0;
-        mutation.error = void 0;
-        mutation.lastAttemptAt = void 0;
-        mutation.nextAttemptAt = void 0;
-        await tx.objectStore(this.ERRORED_MUTATIONS_NAME).delete(id);
-        await tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
+      await activeSync;
+      if (syncQueued && !disposed) {
+        syncQueued = false;
+        await runSync();
       }
-      await tx.done;
-      if (mutation && navigator.onLine) await this.flushQueue();
-    }
-    async discardErroredMutation(id) {
-      const db = await this.getDB();
-      await db.delete(this.ERRORED_MUTATIONS_NAME, id);
-    }
-    async queueMutations(mutations) {
-      if (mutations.length === 0) return;
-      if (this.retryTimer) {
-        clearTimeout(this.retryTimer);
-        this.retryTimer = void 0;
-      }
-      try {
-        const db = await this.getDB();
-        const storeNames = [
-          this.MUTATION_QUEUE_NAME,
-          ...new Set(mutations.map((mutation) => mutation.entitySetName))
-        ];
-        const tx = db.transaction(storeNames, "readwrite");
-        for (const mutation of mutations) {
-          if (mutation.type === "insert" || mutation.type === "update") {
-            tx.objectStore(mutation.entitySetName).put(mutation.value);
-          } else if (mutation.type === "delete") {
-            tx.objectStore(mutation.entitySetName).delete(mutation.key);
+    };
+    const scheduleNextSync = (time) => {
+      return new Promise((resolve) => {
+        if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = setTimeout(async () => {
+          const visible = !requireVisible || document.visibilityState === "visible";
+          if (navigator.onLine && visible) {
+            await runSync();
+            scheduleNextSync(syncInterval);
           }
-          tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
-        }
-        await tx.done;
-      } catch (e) {
-        console.error("[dataverse-offline] Error writing mutation to IDB:", e);
-        throw new MutationPersistenceError(
-          "Failed to persist offline mutations",
-          mutations.map((mutation) => mutation.id),
-          e
-        );
+          resolve();
+        }, time);
+      });
+    };
+    const flushAndSync = async () => {
+      const visible = !requireVisible || document.visibilityState === "visible";
+      if (!disposed && visible && navigator.onLine) {
+        await engine.flushQueue();
+        await scheduleNextSync(50);
       }
-    }
-    createCollectionOptions(config) {
-      if (this.closed) throw new Error("SyncEngine is closed");
-      const {
-        table,
-        id: explicitId,
-        query,
-        syncInterval = DEFAULT_POLL_INTERVAL,
-        readOnlyWhenOffline = false,
-        readonly = false,
-        requireVisible = true,
-        ...rest
-      } = config;
-      this.tables.set(table.entitySetName, table);
-      const pk = table.primaryKey;
-      const getKey = (item) => item[pk.key];
-      const collectionId = explicitId ?? table.entitySetName;
-      const cacheReady = this.ensureCollectionStore(collectionId);
-      let pollTimer;
-      let syncFromDataverse;
-      let syncController;
-      let activeSync;
-      let syncQueued = false;
-      let disposed = false;
-      const runSync = async () => {
-        if (disposed) return;
-        if (activeSync) {
-          syncQueued = true;
-          return activeSync;
-        }
-        syncController = new AbortController();
-        this.activeFetchControllers.add(syncController);
-        activeSync = syncFromDataverse(syncController.signal).finally(() => {
-          this.activeFetchControllers.delete(syncController);
-          syncController = void 0;
-          activeSync = void 0;
-        });
-        await activeSync;
-        if (syncQueued && !disposed) {
-          syncQueued = false;
-          await runSync();
-        }
-      };
-      const scheduleNextSync = (time) => {
-        return new Promise((resolve) => {
-          if (pollTimer) clearTimeout(pollTimer);
-          pollTimer = setTimeout(async () => {
-            const visible = !requireVisible || document.visibilityState === "visible";
-            if (navigator.onLine && visible) {
-              await runSync();
-              scheduleNextSync(syncInterval);
-            }
-            resolve();
-          }, time);
-        });
-      };
-      const flushAndSync = async () => {
-        const visible = !requireVisible || document.visibilityState === "visible";
-        if (!disposed && visible && navigator.onLine) {
-          await this.flushQueue();
-          await scheduleNextSync(50);
-        }
-      };
-      const syncConfig = {
-        sync: ({ begin, write, commit, markReady, collection }) => {
-          let markedReady = false;
-          const markReadyOnce = () => {
-            if (!markedReady) {
-              markedReady = true;
-              markReady();
-            }
-          };
-          syncFromDataverse = async (signal) => {
-            try {
-              await cacheReady;
-              const records = await table.getRecords(query, { signal });
-              if (signal.aborted) return;
-              const keysToDelete = /* @__PURE__ */ new Set([
-                ...collection.keys()
-              ]);
-              begin();
-              for (const record of records) {
-                const key = table.getPrimaryId(record);
-                const existingRecord = collection.get(key);
-                if (existingRecord) {
-                  if (getEtag(record) !== getEtag(existingRecord)) {
-                    write({ type: "update", value: record, metadata: { source: "dv" } });
-                  }
-                  keysToDelete.delete(key);
-                } else {
-                  write({ type: "insert", value: record, metadata: { source: "dv" } });
-                }
-              }
-              for (const key of keysToDelete) {
-                write({ type: "delete", value: collection.get(key), metadata: { source: "dv" } });
-              }
-              commit();
-              const db = await this.getDB();
-              const tx = db.transaction(collectionId, "readwrite");
-              await tx.store.clear();
-              for (const record of records) {
-                tx.store.put(record);
-              }
-              await tx.done;
-            } catch (err) {
-              if (err?.name !== "AbortError" && !signal.aborted) {
-                console.warn(`[dataverse-offline] Remote sync failed for "${collectionId}":`, err);
-              }
-            } finally {
-              markReadyOnce();
-            }
-          };
-          const handleTabMessage = (event) => {
-            if (event.data?.type === "MUTATIONS_ADDED") {
-              begin();
-              const localWrites = [];
-              for (const mutation of event.data.mutations) {
-                if (table.entitySetName === mutation.entitySetName) {
-                  write({ type: mutation.type, value: mutation.value, metadata: { source: "tab" } });
-                  localWrites.push(async () => {
-                    await cacheReady;
-                    const db = await this.getDB();
-                    const tx = db.transaction(collectionId, "readwrite");
-                    if (mutation.type === "delete") {
-                      tx.store.delete(mutation.key);
-                    } else {
-                      tx.store.put(mutation.value);
-                    }
-                    await tx.done;
-                  });
-                }
-              }
-              commit();
-              scheduleNextSync(50);
-              for (const w of localWrites) void w().catch(() => void 0);
-            }
-          };
-          this.channel.addEventListener("message", handleTabMessage);
-          const syncFromIDB = async () => {
+    };
+    const syncConfig = {
+      sync: ({ begin, write, commit, markReady, collection }) => {
+        createDefaultIndexes(table, collection);
+        let markedReady = false;
+        const markReadyOnce = () => {
+          if (!markedReady) {
+            markedReady = true;
+            markReady();
+          }
+        };
+        syncFromDataverse = async (signal) => {
+          try {
             await cacheReady;
-            const db = await this.getDB();
-            const cached = await db.getAll(collectionId);
-            if (!disposed && cached.length > 0) {
-              begin();
-              for (const item of cached) {
-                write({ type: "insert", value: item, metadata: { source: "idb" } });
+            const records = await table.getRecords(query, { signal });
+            if (signal.aborted) return;
+            const keysToDelete = /* @__PURE__ */ new Set([
+              ...collection.keys()
+            ]);
+            begin();
+            for (const record of records) {
+              const key = table.getPrimaryId(record);
+              const existingRecord = collection.get(key);
+              if (existingRecord) {
+                if (getEtag(record) !== getEtag(existingRecord)) {
+                  write({ type: "update", value: record, metadata: { source: "dv" } });
+                }
+                keysToDelete.delete(key);
+              } else {
+                write({ type: "insert", value: record, metadata: { source: "dv" } });
               }
-              commit();
             }
-          };
-          syncFromIDB().then(flushAndSync).catch((err) => {
-            if (!disposed) {
-              console.warn(`[dataverse-offline] Cache sync failed for "${collectionId}":`, err);
+            for (const key of keysToDelete) {
+              write({ type: "delete", value: collection.get(key), metadata: { source: "dv" } });
             }
-          }).finally(() => {
+            commit();
+            const db = await engine.getDB();
+            const tx = db.transaction(collectionId, "readwrite");
+            await tx.store.clear();
+            for (const record of records) {
+              tx.store.put(record);
+            }
+            await tx.done;
+          } catch (err) {
+            if (err?.name !== "AbortError" && !signal.aborted) {
+              console.warn(`[dataverse-offline] Remote sync failed for "${collectionId}":`, err);
+            }
+          } finally {
             markReadyOnce();
-          });
-          window.addEventListener("online", flushAndSync);
-          document.addEventListener("visibilitychange", flushAndSync);
-          const cleanup = () => {
-            if (disposed) return;
-            disposed = true;
-            syncQueued = false;
-            syncController?.abort("Collection disposed");
-            this.channel.removeEventListener("message", handleTabMessage);
-            if (pollTimer) clearTimeout(pollTimer);
-            window.removeEventListener("online", flushAndSync);
-            document.removeEventListener("visibilitychange", flushAndSync);
-            this.collectionCleanups.delete(cleanup);
-          };
-          this.collectionCleanups.add(cleanup);
-          return cleanup;
-        },
-        rowUpdateMode: "full"
-      };
-      const defaultMutation = async ({ transaction }) => {
-        if (readonly) {
-          throw new Error("Collection is read-only");
-        }
-        if (readOnlyWhenOffline && !navigator.onLine) {
-          throw new Error("Collection is read-only while offline");
-        }
-        this.abortActiveFetches();
-        this.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
-        const serialized = transaction.mutations.map((v) => this.serializeMutation(v));
-        await this.queueMutations(serialized);
-        this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: serialized });
-        if (navigator.onLine) {
-          await this.flushQueue();
-          await scheduleNextSync(100);
-        }
-      };
-      const utils = {
-        forceSync: async () => {
-          await this.flushQueue();
-          await runSync();
-        },
-        table
-      };
-      return {
-        ...rest,
-        id: collectionId,
-        getKey,
-        sync: syncConfig,
-        onInsert: defaultMutation,
-        onUpdate: defaultMutation,
-        onDelete: defaultMutation,
-        utils,
-        // Begin syncing immediately on creation rather than waiting for the
-        // first subscriber to attach (the default for @tanstack/db collections).
-        startSync: true
-      };
-    }
+          }
+        };
+        const handleTabMessage = (event) => {
+          if (event.data?.type === "MUTATIONS_ADDED") {
+            begin();
+            const localWrites = [];
+            for (const mutation of event.data.mutations) {
+              if (table.entitySetName === mutation.entitySetName) {
+                write({ type: mutation.type, value: mutation.value, metadata: { source: "tab" } });
+                localWrites.push(async () => {
+                  await cacheReady;
+                  const db = await engine.getDB();
+                  const tx = db.transaction(collectionId, "readwrite");
+                  if (mutation.type === "delete") {
+                    tx.store.delete(mutation.key);
+                  } else {
+                    tx.store.put(mutation.value);
+                  }
+                  await tx.done;
+                });
+              }
+            }
+            commit();
+            scheduleNextSync(50);
+            for (const w of localWrites) void w().catch(() => void 0);
+          }
+        };
+        engine.channel.addEventListener("message", handleTabMessage);
+        const syncFromIDB = async () => {
+          await cacheReady;
+          const db = await engine.getDB();
+          const cached = await db.getAll(collectionId);
+          if (!disposed && cached.length > 0) {
+            begin();
+            for (const item of cached) {
+              write({ type: "insert", value: item, metadata: { source: "idb" } });
+            }
+            commit();
+          }
+        };
+        syncFromIDB().then(flushAndSync).catch((err) => {
+          if (!disposed) {
+            console.warn(`[dataverse-offline] Cache sync failed for "${collectionId}":`, err);
+          }
+        }).finally(() => {
+          markReadyOnce();
+        });
+        window.addEventListener("online", flushAndSync);
+        document.addEventListener("visibilitychange", flushAndSync);
+        const cleanup = () => {
+          if (disposed) return;
+          disposed = true;
+          syncQueued = false;
+          syncController?.abort("Collection disposed");
+          engine.channel.removeEventListener("message", handleTabMessage);
+          if (pollTimer) clearTimeout(pollTimer);
+          window.removeEventListener("online", flushAndSync);
+          document.removeEventListener("visibilitychange", flushAndSync);
+        };
+        engine.addCollectionCleanup(cleanup);
+        return cleanup;
+      },
+      rowUpdateMode: "full"
+    };
+    const defaultMutation = async ({ transaction }) => {
+      if (readonly) {
+        throw new Error("Collection is read-only");
+      }
+      if (readOnlyWhenOffline && !navigator.onLine) {
+        throw new Error("Collection is read-only while offline");
+      }
+      engine.abortActiveFetches();
+      engine.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
+      const serialized = transaction.mutations.map((v) => serializeMutation(engine, v));
+      await engine.queueMutations(serialized);
+      engine.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: serialized });
+      if (navigator.onLine) {
+        await engine.flushQueue();
+        await scheduleNextSync(100);
+      }
+    };
+    const utils = {
+      forceSync: async () => {
+        await engine.flushQueue();
+        await runSync();
+      },
+      table
+    };
+    return {
+      ...rest,
+      id: collectionId,
+      getKey,
+      sync: syncConfig,
+      onInsert: defaultMutation,
+      onUpdate: defaultMutation,
+      onDelete: defaultMutation,
+      utils,
+      defaultIndexType: BTreeIndex,
+      // Begin syncing immediately on creation rather than waiting for the
+      // first subscriber to attach (the default for @tanstack/db collections).
+      startSync: true
+    };
   }
 
   async function seedRow(ctx, overrides = {}) {
@@ -11627,7 +13316,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis1 = forceVisible();
           let collection1;
           try {
-            collection1 = createCollection(db1.createCollectionOptions({ table: ctx.tables.TestTable }));
+            collection1 = createCollection(dataverseOfflineCollectionOptions(db1, { table: ctx.tables.TestTable }));
             await waitFor(() => collection1.size >= 0, 3e3);
             const id = crypto.randomUUID();
             collection1.insert({ id, name, int: 55, text: "durable" });
@@ -11645,7 +13334,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const q2 = await readQueue(db2);
             assert(q2.length === 1, `mutation survived reload in IndexedDB (got ${q2.length})`);
             assertEquals(q2[0].entitySetName, ctx.tables.TestTable.entitySetName, "survived mutation targets right entity");
-            const collection2 = createCollection(db2.createCollectionOptions({ table: ctx.tables.TestTable }));
+            const collection2 = createCollection(dataverseOfflineCollectionOptions(db2, { table: ctx.tables.TestTable }));
             await waitFor(async () => {
               const queue = await readQueue(db2);
               const rows2 = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
