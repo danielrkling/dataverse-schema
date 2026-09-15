@@ -1,6 +1,6 @@
 import { BTreeIndex, type Collection, type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
-import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
-import { SyncEngine, plainClone, type QueuedMutation } from "./sync";
+import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions,SyncEngine, plainClone, type QueuedMutation } from "./index";
+
 
 const DEFAULT_SYNC_INTERVAL = 30000;
 const DEFAULT_POLL_INTERVAL = 30000;
@@ -72,10 +72,6 @@ export type DataverseOfflineCollectionConfig<T extends GenericProperties> = Data
     requireVisible?: boolean;
 };
 
-export type { QueuedMutation } from "./sync";
-// Backwards-compatible re-exports: these classifiers were defined here before
-// the sync engine was extracted, so the module's public surface is unchanged.
-export { SyncEngine, isConcurrencyError, isKeyViolation, plainClone } from "./sync";
 
 export function dataverseCollectionOptions<T extends GenericProperties>(
     config: DataverseCollectionConfig<T>,
