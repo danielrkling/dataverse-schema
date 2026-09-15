@@ -17,6 +17,9 @@
   function getEtag(v) {
     return v?.[ETAG];
   }
+  function toTimestampValue(value) {
+    return typeof value === "string" ? new Date(value).toISOString() : value.toISOString();
+  }
   function parseDateOnly(dateString) {
     const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
     return new Date(year ?? 0, (month ?? 0) - 1, day);
@@ -270,6 +273,9 @@
     }
     async postRecord(entitySetName, value, options = {}) {
       const returnRepresentation = options.returnRepresentation !== false;
+      if (options.overriddenCreatedOn !== void 0) {
+        value = { ...value, overriddencreatedon: toTimestampValue(options.overriddenCreatedOn) };
+      }
       const result = await this.fetch(this._resource(getName(entitySetName), options.query), {
         method: "POST",
         ...returnRepresentation ? { headers: { Prefer: "return=representation" } } : {},
@@ -1641,7 +1647,7 @@
         // Request the full representation so we can hand back the created record
         // (with server-computed fields and the fresh etag). Omitting the
         // $select keeps all columns in the response.
-        { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
+        { returnRepresentation: true, signal: options?.signal, query: tableQuery(this), overriddenCreatedOn: options?.overriddenCreatedOn }
       );
       const transformed = await this.transformValueFromDataverse(record);
       const guid = this.getPrimaryId(transformed);
@@ -2862,9 +2868,9 @@
     }
   }
 
-  const MAX_MUTATION_ATTEMPTS = 3;
-  const RETRY_BASE_DELAY = 1e3;
-  const RETRY_MAX_DELAY = 6e4;
+  const DEFAULT_MAX_MUTATION_ATTEMPTS = 3;
+  const DEFAULT_RETRY_BASE_DELAY = 1e3;
+  const DEFAULT_RETRY_MAX_DELAY = 6e4;
   class SyncEngine {
     name;
     version;
@@ -2900,19 +2906,45 @@
     // Listeners receive no payload — call getQueueCount()/getErroredMutations()
     // to read the current state (see the conflict-dashboard use case).
     mutationListeners = /* @__PURE__ */ new Set();
-    constructor(name, tables, version) {
-      this.name = name;
-      this.channel = new BroadcastChannel(name);
-      this.version = version;
-      this.dbVersion = version;
-      for (const table of tables) this.tables.set(table.entitySetName, table);
+    constructor(options) {
+      this.name = options.name;
+      this.channel = new BroadcastChannel(options.name);
+      this.version = options.version;
+      this.dbVersion = options.version;
+      this.overrideCreatedOn = options.overrideCreatedOn === true;
+      this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_MUTATION_ATTEMPTS;
+      this.retryBaseDelay = options.retryBaseDelay ?? DEFAULT_RETRY_BASE_DELAY;
+      this.retryMaxDelay = options.retryMaxDelay ?? DEFAULT_RETRY_MAX_DELAY;
+      this.flushOnOnline = options.flushOnOnline !== false;
+      for (const table of options.tables) this.tables.set(table.entitySetName, table);
       this.channelMessageHandler = (event) => {
         if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
           this.abortActiveFetches();
         }
       };
       this.channel.addEventListener("message", this.channelMessageHandler);
+      if (this.flushOnOnline && typeof globalThis.addEventListener === "function") {
+        this.onlineHandler = async () => {
+          if (navigator.onLine && !this.closed) void this.flushQueue();
+        };
+        globalThis.addEventListener("online", this.onlineHandler);
+      }
     }
+    // Captured from SyncEngineOptions: replay queued inserts with the offline
+    // transaction time as `overriddencreatedon` so `createdon` reflects when
+    // the record was created offline, not when the queue was flushed.
+    overrideCreatedOn = false;
+    // Retry budget per mutation before it moves to the errored store.
+    maxAttempts;
+    // Exponential backoff curve for delayed retries (base * 2^(attempt-1),
+    // capped at retryMaxDelay). A failed mutation re-attempts even while the
+    // app is idle, waking via retryTimer once its nextAttemptAt is due.
+    retryBaseDelay;
+    retryMaxDelay;
+    // Whether the engine auto-flushes when the tab regains connectivity.
+    flushOnOnline = true;
+    // "online" listener installed when flushOnOnline is enabled; removed in close().
+    onlineHandler;
     // Monotonic ordering counter for queued mutations — adapters assign it
     // when serializing their mutation format into {@link QueuedMutation}.
     sequence = 0;
@@ -3031,6 +3063,10 @@
       this.mutationListeners.clear();
       this.channel.removeEventListener("message", this.channelMessageHandler);
       this.channel.close();
+      if (this.onlineHandler && typeof globalThis.removeEventListener === "function") {
+        globalThis.removeEventListener("online", this.onlineHandler);
+        this.onlineHandler = void 0;
+      }
       this.db?.close();
       this.db = void 0;
     }
@@ -3068,7 +3104,10 @@
           }
           try {
             if (mutation.type === "insert") {
-              const record = await table.createRecord(mutation.value);
+              const record = await table.createRecord(
+                mutation.value,
+                this.overrideCreatedOn ? { overriddenCreatedOn: new Date(mutation.timestamp) } : void 0
+              );
               flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record), value: record, entitySetName: mutation.entitySetName });
             } else if (mutation.type === "update") {
               const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
@@ -3092,17 +3131,17 @@
             console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
             mutation.error = serializeError(e);
             mutation.lastAttemptAt = Date.now();
-            if (isDeterministicFailure(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+            if (isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
             else mutation.attempts++;
-            if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
+            if (mutation.attempts >= this.maxAttempts) {
               mutation.nextAttemptAt = void 0;
               await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
               await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
               changed = true;
             } else {
               const delay = Math.min(
-                RETRY_MAX_DELAY,
-                RETRY_BASE_DELAY * 2 ** (mutation.attempts - 1)
+                this.retryMaxDelay,
+                this.retryBaseDelay * 2 ** (mutation.attempts - 1)
               );
               mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
               await db.put(this.MUTATION_QUEUE_NAME, mutation);
@@ -3620,7 +3659,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:58:49.573Z"}
+      meta.textContent = `build ${"2026-09-15T16:42:41.133Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3713,7 +3752,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:58:49.573Z",
+          build: "2026-09-15T16:42:41.133Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3732,7 +3771,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:58:49.573Z"}\``,
+        `Build: \`${"2026-09-15T16:42:41.133Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -12997,7 +13036,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
   const createdEngines = /* @__PURE__ */ new Set();
   function makeSyncDB(tables, version = 1) {
     const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const db = new SyncEngine(name, tables, version);
+    const db = new SyncEngine({ name, tables, version });
     createdEngines.add(db);
     return db;
   }
@@ -13412,8 +13451,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const dbName = `dvt-xtab-${Date.now().toString(36)}`;
           const tables = [ctx.tables.TestTable, ctx.tables.TestTable0];
-          const dbA = new SyncEngine(dbName, tables, 1);
-          const dbB = new SyncEngine(dbName, tables, 1);
+          const dbA = new SyncEngine({ name: dbName, tables, version: 1 });
+          const dbB = new SyncEngine({ name: dbName, tables, version: 1 });
           const restoreVis = forceVisible();
           let a, b;
           try {
@@ -13439,8 +13478,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const dbName = `dvt-xtab-${Date.now().toString(36)}`;
           const tables = [ctx.tables.TestTable, ctx.tables.TestTable0];
-          const dbA = new SyncEngine(dbName, tables, 1);
-          const dbB = new SyncEngine(dbName, tables, 1);
+          const dbA = new SyncEngine({ name: dbName, tables, version: 1 });
+          const dbB = new SyncEngine({ name: dbName, tables, version: 1 });
           const restoreVis = forceVisible();
           let a, b;
           try {
@@ -13472,7 +13511,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const name = ctx.fx.name("durable");
           const dbName = `dvt-dur-${Date.now().toString(36)}`;
           const tables = [ctx.tables.TestTable, ctx.tables.TestTable0];
-          const db1 = new SyncEngine(dbName, tables, 1);
+          const db1 = new SyncEngine({ name: dbName, tables, version: 1 });
           const restore1 = simulateOffline();
           const restoreVis1 = forceVisible();
           let collection1;
@@ -13489,7 +13528,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             restoreVis1();
             db1.close();
           }
-          const db2 = new SyncEngine(dbName, tables, 1);
+          const db2 = new SyncEngine({ name: dbName, tables, version: 1 });
           const restoreVis2 = forceVisible();
           try {
             const q2 = await readQueue(db2);

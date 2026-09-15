@@ -9,7 +9,7 @@ import { SyncEngine, type QueuedMutation } from "../../../src/tanstack-db"
 const createdEngines = new Set<SyncEngine>()
 export function makeSyncDB(tables: any[], version = 1): SyncEngine {
   const name = `dvt-db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-  const db = new SyncEngine(name, tables, version)
+  const db = new SyncEngine({ name, tables, version })
   createdEngines.add(db)
   return db
 }

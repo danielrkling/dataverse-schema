@@ -14,6 +14,9 @@
     }
     return String(value);
   }
+  function toTimestampValue(value) {
+    return typeof value === "string" ? new Date(value).toISOString() : value.toISOString();
+  }
   function parseDateOnly(dateString) {
     const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
     return new Date(year ?? 0, (month ?? 0) - 1, day);
@@ -267,6 +270,9 @@
     }
     async postRecord(entitySetName, value, options = {}) {
       const returnRepresentation = options.returnRepresentation !== false;
+      if (options.overriddenCreatedOn !== void 0) {
+        value = { ...value, overriddencreatedon: toTimestampValue(options.overriddenCreatedOn) };
+      }
       const result = await this.fetch(this._resource(getName(entitySetName), options.query), {
         method: "POST",
         ...returnRepresentation ? { headers: { Prefer: "return=representation" } } : {},
@@ -1901,7 +1907,7 @@
         // Request the full representation so we can hand back the created record
         // (with server-computed fields and the fresh etag). Omitting the
         // $select keeps all columns in the response.
-        { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) }
+        { returnRepresentation: true, signal: options?.signal, query: tableQuery(this), overriddenCreatedOn: options?.overriddenCreatedOn }
       );
       const transformed = await this.transformValueFromDataverse(record);
       const guid = this.getPrimaryId(transformed);
@@ -4116,7 +4122,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-14T14:58:47.277Z"}
+      meta.textContent = `build ${"2026-09-15T16:42:39.193Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4209,7 +4215,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-14T14:58:47.277Z",
+          build: "2026-09-15T16:42:39.193Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4228,7 +4234,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-14T14:58:47.277Z"}\``,
+        `Build: \`${"2026-09-15T16:42:39.193Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

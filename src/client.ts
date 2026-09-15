@@ -1,5 +1,5 @@
 import { DataverseKey, GUID } from "./types";
-import { getName, Name } from "./util";
+import { getName, Name, toTimestampValue } from "./util";
 import { wrapString } from "./util";
 
 const parenthesesRegEx = /\(([^)]+)\)/;
@@ -34,6 +34,14 @@ export type PatchRecordOptions = QueryRequestOptions & { ifMatch?: string; ifNon
 export type DeleteRecordOptions = RequestOptions & { ifMatch?: string };
 export type PostRecordOptions = QueryRequestOptions & {
     returnRepresentation?: boolean;
+    /**
+     * Overrides the record's "Created On" (`createdon`) with the given
+     * date/time. On the wire this becomes the `overriddencreatedon` system
+     * attribute — accepted only on create, and only by principals (or their
+     * roles) granted the `prvOverrideCreatedOnCreatedBy` privilege.
+     * Accepts a `Date` or an ISO timestamp string.
+     */
+    overriddenCreatedOn?: Date | string;
 };
 
 export class DataverseHttpError extends Error {
@@ -379,6 +387,9 @@ export class DataverseClient {
     ): Promise<any>;
     async postRecord(entitySetName: Name, value: object, options: PostRecordOptions = {}) {
         const returnRepresentation = options.returnRepresentation !== false;
+        if (options.overriddenCreatedOn !== undefined) {
+            value = { ...value, overriddencreatedon: toTimestampValue(options.overriddenCreatedOn) };
+        }
         const result = await this.fetch(this._resource(getName(entitySetName), options.query), {
             method: "POST",
             ...(returnRepresentation ? { headers: { Prefer: "return=representation" } } : {}),

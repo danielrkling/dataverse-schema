@@ -7,9 +7,52 @@ import { isDeterministicFailure } from "./error-codes";
 import { isMetaKey, isMetaOnly, valuesEqual } from "./util";
 import { MutationPersistenceError, type QueuedMutation } from "./types";
 
-const MAX_MUTATION_ATTEMPTS = 3;
-const RETRY_BASE_DELAY = 1000;
-const RETRY_MAX_DELAY = 60000;
+/** Options for {@link SyncEngine} construction. */
+export type SyncEngineOptions = {
+    /** Name for the engine's IndexedDB database and BroadcastChannel. Unique per instance — two DBs with the same name share the flush lock. */
+    name: string;
+    /** Tables the engine can sync; keyed by `entitySetName`. */
+    tables: DataverseTable<GenericProperties>[];
+    /** Schema version for the IndexedDB database; grows when late-registered collections need new stores. */
+    version: number;
+    /**
+     * When true, queued inserts replay with the offline transaction time as
+     * `overriddencreatedon` (the "Record Created On" attribute), so the
+     * record's `createdon` shows when it was created offline rather than
+     * when the queue was flushed. Requires the flushing user's security
+     * role to include `prvOverrideCreatedOnCreatedBy`.
+     */
+    overrideCreatedOn?: boolean;
+    /**
+     * Retry budget per mutation: failed mutations are re-attempted with
+     * exponential backoff until they are sent this many times, then moved to
+     * the errored store for operator resolution. Deterministic failures
+     * (concurrency conflicts, key violations, validation) bypass the budget
+     * and error immediately. Default 3.
+     */
+    maxAttempts?: number;
+    /**
+     * Base delay in ms for the exponential retry backoff
+     * (`retryBaseDelay * 2^(attempt - 1)`, capped at `retryMaxDelay`).
+     * Default 1000.
+     */
+    retryBaseDelay?: number;
+    /**
+     * Upper cap in ms for the retry backoff delay. Default 60000.
+     */
+    retryMaxDelay?: number;
+    /**
+     * When true (the default), the engine auto-flushes the mutation queue
+     * whenever the tab comes back online. Turn off for test environments,
+     * web workers (no `navigator.onLine`/Web Locks), or apps that flush only
+     * on explicit user action.
+     */
+    flushOnOnline?: boolean;
+};
+
+const DEFAULT_MAX_MUTATION_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY = 1000;
+const DEFAULT_RETRY_MAX_DELAY = 60000;
 
 /**
  * Snapshot for presenting a conflicted mutation to a user: the server's
@@ -126,12 +169,17 @@ export class SyncEngine {
     // to read the current state (see the conflict-dashboard use case).
     private mutationListeners = new Set<() => void>()
 
-    constructor(name: string, tables: DataverseTable<GenericProperties>[], version: number) {
-        this.name = name;
-        this.channel = new BroadcastChannel(name)
-        this.version = version;
-        this.dbVersion = version;
-        for (const table of tables) this.tables.set(table.entitySetName, table);
+    constructor(options: SyncEngineOptions) {
+        this.name = options.name;
+        this.channel = new BroadcastChannel(options.name)
+        this.version = options.version;
+        this.dbVersion = options.version;
+        this.overrideCreatedOn = options.overrideCreatedOn === true;
+        this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_MUTATION_ATTEMPTS;
+        this.retryBaseDelay = options.retryBaseDelay ?? DEFAULT_RETRY_BASE_DELAY;
+        this.retryMaxDelay = options.retryMaxDelay ?? DEFAULT_RETRY_MAX_DELAY;
+        this.flushOnOnline = options.flushOnOnline !== false;
+        for (const table of options.tables) this.tables.set(table.entitySetName, table);
 
         // Listen for tab sync & cancellation signals across browser tabs
         this.channelMessageHandler = (event: MessageEvent) => {
@@ -140,7 +188,33 @@ export class SyncEngine {
             }
         };
         this.channel.addEventListener("message", this.channelMessageHandler);
+
+        // Auto-flush when the tab regains connectivity (opt out via
+        // `flushOnOnline`). The Web Lock serializes this with any other
+        // tab's flush, so concurrent wake-ups are safe.
+        if (this.flushOnOnline && typeof globalThis.addEventListener === "function") {
+            this.onlineHandler = async () => {
+                if (navigator.onLine && !this.closed) void this.flushQueue();
+            };
+            globalThis.addEventListener("online", this.onlineHandler);
+        }
     }
+
+    // Captured from SyncEngineOptions: replay queued inserts with the offline
+    // transaction time as `overriddencreatedon` so `createdon` reflects when
+    // the record was created offline, not when the queue was flushed.
+    overrideCreatedOn = false;
+    // Retry budget per mutation before it moves to the errored store.
+    maxAttempts: number
+    // Exponential backoff curve for delayed retries (base * 2^(attempt-1),
+    // capped at retryMaxDelay). A failed mutation re-attempts even while the
+    // app is idle, waking via retryTimer once its nextAttemptAt is due.
+    retryBaseDelay: number
+    retryMaxDelay: number
+    // Whether the engine auto-flushes when the tab regains connectivity.
+    flushOnOnline = true
+    // "online" listener installed when flushOnOnline is enabled; removed in close().
+    private onlineHandler: (() => void) | undefined
 
     // Monotonic ordering counter for queued mutations — adapters assign it
     // when serializing their mutation format into {@link QueuedMutation}.
@@ -280,6 +354,10 @@ export class SyncEngine {
         this.mutationListeners.clear();
         this.channel.removeEventListener("message", this.channelMessageHandler);
         this.channel.close();
+        if (this.onlineHandler && typeof globalThis.removeEventListener === "function") {
+            globalThis.removeEventListener("online", this.onlineHandler);
+            this.onlineHandler = undefined;
+        }
         this.db?.close();
         this.db = undefined;
     }
@@ -343,7 +421,13 @@ export class SyncEngine {
 
                 try {
                     if (mutation.type === "insert") {
-                        const record = await table.createRecord(mutation.value);
+                        // `overrideCreatedOn` replays the offline transaction
+                        // time as `overriddencreatedon`; without it the record
+                        // would show the flush time as its `createdon`.
+                        const record = await table.createRecord(
+                            mutation.value,
+                            this.overrideCreatedOn ? { overriddenCreatedOn: new Date(mutation.timestamp) } : undefined,
+                        );
                         flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record)!, value: record, entitySetName: mutation.entitySetName });
                     } else if (mutation.type === "update") {
                         // With `force`, send no If-Match at all: updateRecord
@@ -385,17 +469,17 @@ export class SyncEngine {
                     // errored store — interpretError explains why, and how the
                     // operator can get past it. Transient failures (throttle,
                     // 5xx, network) keep the retry/backoff cycle below.
-                    if (isDeterministicFailure(e)) mutation.attempts = MAX_MUTATION_ATTEMPTS;
+                    if (isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
                     else mutation.attempts++;
-                    if (mutation.attempts >= MAX_MUTATION_ATTEMPTS) {
+                    if (mutation.attempts >= this.maxAttempts) {
                         mutation.nextAttemptAt = undefined;
                         await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
                         await db.put(this.ERRORED_MUTATIONS_NAME, mutation)
                         changed = true;
                     } else {
                         const delay = Math.min(
-                            RETRY_MAX_DELAY,
-                            RETRY_BASE_DELAY * 2 ** (mutation.attempts - 1),
+                            this.retryMaxDelay,
+                            this.retryBaseDelay * 2 ** (mutation.attempts - 1),
                         );
                         mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
                         await db.put(this.MUTATION_QUEUE_NAME, mutation)

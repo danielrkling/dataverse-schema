@@ -25,8 +25,8 @@ export const crossTabSuite: Suite = {
       fn: async () => {
         const dbName = `dvt-xtab-${Date.now().toString(36)}`
         const tables = [ctx.tables.TestTable, ctx.tables.TestTable0]
-        const dbA = new SyncEngine(dbName, tables, 1)
-        const dbB = new SyncEngine(dbName, tables, 1)
+        const dbA = new SyncEngine({ name: dbName, tables, version: 1 })
+        const dbB = new SyncEngine({ name: dbName, tables, version: 1 })
         const restoreVis = forceVisible()
         let a: any, b: any
         try {
@@ -53,8 +53,8 @@ export const crossTabSuite: Suite = {
       fn: async () => {
         const dbName = `dvt-xtab-${Date.now().toString(36)}`
         const tables = [ctx.tables.TestTable, ctx.tables.TestTable0]
-        const dbA = new SyncEngine(dbName, tables, 1)
-        const dbB = new SyncEngine(dbName, tables, 1)
+        const dbA = new SyncEngine({ name: dbName, tables, version: 1 })
+        const dbB = new SyncEngine({ name: dbName, tables, version: 1 })
         const restoreVis = forceVisible()
         let a: any, b: any
         try {

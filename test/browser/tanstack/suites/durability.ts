@@ -22,7 +22,7 @@ export const durabilitySuite: Suite = {
         const tables = [ctx.tables.TestTable, ctx.tables.TestTable0]
 
         // --- Session 1: go offline, enqueue a mutation, then "reload". ---
-        const db1 = new SyncEngine(dbName, tables, 1)
+        const db1 = new SyncEngine({ name: dbName, tables, version: 1 })
         const restore1 = simulateOffline(true)
         const restoreVis1 = forceVisible()
         let collection1: any
@@ -41,7 +41,7 @@ export const durabilitySuite: Suite = {
         }
 
         // --- Session 2: simulate a reload by reopening the SAME database name. ---
-        const db2 = new SyncEngine(dbName, tables, 1)
+        const db2 = new SyncEngine({ name: dbName, tables, version: 1 })
         const restoreVis2 = forceVisible()
         try {
           const q2 = await readQueue(db2)

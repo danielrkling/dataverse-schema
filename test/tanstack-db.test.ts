@@ -18,7 +18,7 @@ test("serializeMutation strips proxies so the payload is structuredClone-safe", 
     logicalName: "contact",
     fields: { id: primaryKey("contactid"), name: string("fullname") },
   });
-  const db = new SyncEngine("test-db", [table], 1);
+  const db = new SyncEngine({ name: "test-db", tables: [table], version: 1 });
 
   // Simulate a row that passed through a live-query join: the record itself
   // and its nested values are wrapped in (structurally un-cloneable) proxies.
@@ -55,7 +55,7 @@ test("serializeMutation preserves binary payloads (file/image upload channels)",
     logicalName: "account",
     fields: { id: primaryKey("accountid"), photo: image("entityimage"), doc: file("myfile") },
   });
-  const db = new SyncEngine("test-db-bin", [table], 1);
+  const db = new SyncEngine({ name: "test-db-bin", tables: [table], version: 1 });
 
   const blob = new Blob(["binary"], { type: "image/png" });
   const queued = serializeMutation(db,{
@@ -152,7 +152,7 @@ test("onMutationsChanged fires when mutations are enqueued", async () => {
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject") },
   });
-  const db = new SyncEngine("test-db-notify", [table], 1);
+  const db = new SyncEngine({ name: "test-db-notify", tables: [table], version: 1 });
   const events: number[] = [];
   const unsub = db.onMutationsChanged(() => events.push(events.length));
   await db.queueMutations([{
@@ -178,7 +178,7 @@ test("retryErroredMutation un-forces a previously forced mutation on a plain ret
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject") },
   });
-  const db = new SyncEngine("test-db-force", [table], 1);
+  const db = new SyncEngine({ name: "test-db-force", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   try {
     const errored: QueuedMutation = {
@@ -245,7 +245,7 @@ test("getConflictDetails ignores $-prefixed metadata keys", async () => {
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject"), priority: string("prioritycode") },
   });
-  const db = new SyncEngine("test-db-meta", [table], 1);
+  const db = new SyncEngine({ name: "test-db-meta", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   // Stub the server snapshot: subject matches local, priority was
   // concurrently changed. Also carries metadata keys as real rows do.
@@ -282,7 +282,7 @@ test("getConflictDetails detects edits that live in `value` when `changes` is bo
     logicalName: "c220a_tankstructuralitem",
     fields: { id: primaryKey("tankStructuralItemId"), description: string("description") },
   });
-  const db = new SyncEngine("test-db-fullmode", [table], 1);
+  const db = new SyncEngine({ name: "test-db-fullmode", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   (db as any).tables.set("tankStructuralItems", {
     ...table,
@@ -317,7 +317,7 @@ test("getConflictDetails returns one diff row per table field with statuses", as
     logicalName: "task",
     fields: { id: primaryKey("activityid"), subject: string("subject"), priority: string("prioritycode"), description: string("description") },
   });
-  const db = new SyncEngine("test-db-rows", [table], 1);
+  const db = new SyncEngine({ name: "test-db-rows", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   (db as any).tables.set("tasks", {
     ...table,
@@ -357,7 +357,7 @@ test("flushQueue substitutes the full row when a queued update's changes are boo
     logicalName: "c220a_tankstructuralitem",
     fields: { id: primaryKey("tankStructuralItemId"), description: string("description") },
   });
-  const db = new SyncEngine("test-db-metaonly", [table], 1);
+  const db = new SyncEngine({ name: "test-db-metaonly", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   const sent: unknown[] = [];
   (db as any).tables.set("tankStructuralItems", {

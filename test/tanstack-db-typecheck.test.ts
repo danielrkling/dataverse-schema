@@ -34,7 +34,7 @@ test("online collection rows infer Infer<fields>", () => {
 test("offline collection rows infer Infer<fields>", () => {
   // Never invoked: SyncEngine needs BroadcastChannel (browser-only).
   const check = () => {
-    const engine = new SyncEngine("probe-db", [Account], 1)
+    const engine = new SyncEngine({ name: "probe-db", tables: [Account], version: 1 })
     const collection = createCollection(dataverseOfflineCollectionOptions(engine, { table: Account }))
     type ColRow = NonNullable<ReturnType<typeof collection.get>>
     expectTypeOf<ColRow["id"]>().toEqualTypeOf<GUID>()
@@ -77,7 +77,7 @@ test("collection accepts explicit id and query options", () => {
   void check
 
   const offlineCheck = () => {
-    const engine = new SyncEngine("probe-db-2", [Account], 1)
+    const engine = new SyncEngine({ name: "probe-db-2", tables: [Account], version: 1 })
     const collection = createCollection(dataverseOfflineCollectionOptions(engine, {
       table: Account,
       id: "accounts-active",

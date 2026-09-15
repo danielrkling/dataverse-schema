@@ -26,6 +26,14 @@ export type MutationOptions = {
   ifMatch?: string;
   ifNoneMatch?: string;
   signal?: AbortSignal;
+  /**
+   * Overrides the record's "Created On" (`createdon`) with the given
+   * date/time on create. Only meaningful for `createRecord` — Dataverse
+   * accepts the underlying `overriddencreatedon` attribute on create only,
+   * and requires the `prvOverrideCreatedOnCreatedBy` privilege.
+   * Accepts a `Date` or an ISO timestamp string.
+   */
+  overriddenCreatedOn?: Date | string;
 };
 
 export type DataverseTableOptions<TProperties extends GenericProperties> = {
@@ -405,7 +413,7 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
       // Request the full representation so we can hand back the created record
       // (with server-computed fields and the fresh etag). Omitting the
       // $select keeps all columns in the response.
-      { returnRepresentation: true, signal: options?.signal, query: tableQuery(this) },
+      { returnRepresentation: true, signal: options?.signal, query: tableQuery(this), overriddenCreatedOn: options?.overriddenCreatedOn },
     );
     const transformed = await this.transformValueFromDataverse(record);
     const guid = this.getPrimaryId(transformed)!

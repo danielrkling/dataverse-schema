@@ -24,6 +24,19 @@ function stubNavigatorOffline(): () => void {
   };
 }
 
+/** Same, but forcing a connected (onLine: true) navigator — Node's real navigator has no `onLine` at all. */
+function stubNavigatorOnline(): () => void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    value: { onLine: true, locks: { request: async (_n: string, fn: () => Promise<void>) => fn() } },
+    configurable: true,
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
+    else delete (globalThis as { navigator?: unknown }).navigator;
+  };
+}
+
 const errored: QueuedMutation = {
   id: "x", type: "update", key: "k", value: { id: "k", subject: "s" },
   changes: { subject: "s" }, entitySetName: "tasks", timestamp: 0,
@@ -35,7 +48,7 @@ const errored: QueuedMutation = {
 
 test("serializeMutation assigns monotonically increasing sequence numbers", () => {
   const table = makeTable();
-  const engine = new SyncEngine("sync-seq", [table], 1);
+  const engine = new SyncEngine({ name: "sync-seq", tables: [table], version: 1 });
   const mutation = {
     mutationId: "m", type: "update" as const, key: "k",
     modified: { id: "k", subject: "0" }, changes: { subject: "0" },
@@ -68,7 +81,7 @@ test("plainClone strips proxies and preserves binary/date values", () => {
 
 test("discardErroredMutation removes the mutation and notifies", async () => {
   const table = makeTable();
-  const engine = new SyncEngine("sync-discard", [table], 1);
+  const engine = new SyncEngine({ name: "sync-discard", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   try {
     const dbi = await (engine as any).getDB();
@@ -89,7 +102,7 @@ test("discardErroredMutation removes the mutation and notifies", async () => {
 
 test("abortActiveFetches aborts every tracked controller", () => {
   const table = makeTable();
-  const engine = new SyncEngine("sync-abort", [table], 1);
+  const engine = new SyncEngine({ name: "sync-abort", tables: [table], version: 1 });
   const controller = new AbortController();
   engine.trackActiveFetch(controller);
   engine.abortActiveFetches();
@@ -101,7 +114,7 @@ test("abortActiveFetches aborts every tracked controller", () => {
 
 test("retryErroredMutation with useFreshEtag adopts the server's current etag", async () => {
   const table = makeTable();
-  const engine = new SyncEngine("sync-rebase", [table], 1);
+  const engine = new SyncEngine({ name: "sync-rebase", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   try {
     // Server snapshot carries the freshest etag.
@@ -128,7 +141,7 @@ test("retryErroredMutation with useFreshEtag adopts the server's current etag", 
 
 test("rebase falls back to the freshest cached etag when the server is unreachable", async () => {
   const table = makeTable();
-  const engine = new SyncEngine("sync-rebase-fallback", [table], 1);
+  const engine = new SyncEngine({ name: "sync-rebase-fallback", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   try {
     // Server fetch throws (network fail / offline).
@@ -152,7 +165,7 @@ test("rebase falls back to the freshest cached etag when the server is unreachab
 
 test("getConflictDetails treats a deleted server record as conflicting on all proposed fields", async () => {
   const table = makeTable("leads", "lead");
-  const engine = new SyncEngine("sync-conflict-deleted", [table], 1);
+  const engine = new SyncEngine({ name: "sync-conflict-deleted", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   try {
     (engine.tables.get("leads") as any).getRecord = async () => null;
@@ -178,7 +191,7 @@ test("getConflictDetails treats a deleted server record as conflicting on all pr
 
 test("retryErroredMutation resolves nothing when no such errored mutation exists", async () => {
   const table = makeTable();
-  const engine = new SyncEngine("sync-retry-missing", [table], 1);
+  const engine = new SyncEngine({ name: "sync-retry-missing", tables: [table], version: 1 });
   const unlock = stubNavigatorOffline();
   try {
     await expect(engine.retryErroredMutation("nope")).resolves.toBeUndefined();
@@ -241,4 +254,83 @@ test("isDeterministicFailure agrees with the guidance categories", () => {
   expect(isDeterministicFailure({ status: 429 })).toBe(false);
   expect(isDeterministicFailure({ status: 500 })).toBe(false);
   expect(isDeterministicFailure({})).toBe(false);
+});
+
+// --- created-on override on flush ---
+
+test("flushed inserts replay the offline transaction time as overriddencreatedon when enabled", async () => {
+  const table = makeTable();
+  const bodies: any[] = [];
+  table.client.fetch = async (_url: any, init: any) => {
+    bodies.push(JSON.parse(init.body as string));
+    return { taskid: "generated", subject: "offline note", prioritycode: 1 };
+  };
+  const engine = new SyncEngine({ name: "sync-created-on-override", tables: [table], version: 1, overrideCreatedOn: true });
+  try {
+    const dbi = await (engine as any).getDB();
+    const timestamp = new Date("2026-09-13T14:22:00Z").getTime();
+    await dbi.put(engine.MUTATION_QUEUE_NAME, {
+      id: "m1", type: "insert", key: "generated", value: { subject: "offline note", prioritycode: 1 },
+      changes: { subject: "offline note" }, entitySetName: "tasks",
+      timestamp, sequence: 1, attempts: 0,
+    });
+    await engine.flushQueue();
+    expect(bodies[0].overriddencreatedon).toBe("2026-09-13T14:22:00.000Z");
+    expect((await dbi.getAll(engine.MUTATION_QUEUE_NAME)).length).toBe(0);
+  } finally {
+    engine.close();
+  }
+});
+
+test("flushed inserts omit overriddencreatedon when the engine option is off", async () => {
+  const table = makeTable();
+  const bodies: any[] = [];
+  table.client.fetch = async (_url: any, init: any) => {
+    bodies.push(JSON.parse(init.body as string));
+    return { taskid: "generated", subject: "offline note", prioritycode: 1 };
+  };
+  const engine = new SyncEngine({ name: "sync-no-created-on-override", tables: [table], version: 1 });
+  try {
+    const dbi = await (engine as any).getDB();
+    await dbi.put(engine.MUTATION_QUEUE_NAME, {
+      id: "m2", type: "insert", key: "generated", value: { subject: "offline note", prioritycode: 1 },
+      changes: { subject: "offline note" }, entitySetName: "tasks",
+      timestamp: new Date("2026-09-13T14:22:00Z").getTime(), sequence: 1, attempts: 0,
+    });
+    await engine.flushQueue();
+    expect(bodies[0].overriddencreatedon).toBeUndefined();
+  } finally {
+    engine.close();
+  }
+});
+
+// --- engine options ---
+
+test("maxAttempts moves a transient failure to the errored store after a single attempt", async () => {
+  const table = makeTable();
+  let calls = 0;
+  table.client.fetch = async () => {
+    calls++;
+    throw new DataverseHttpError("500 Internal Server Error", 500, "Internal Server Error", {});
+  };
+  const engine = new SyncEngine({ name: "sync-max-attempts", tables: [table], version: 1, maxAttempts: 1 });
+  let unlock = () => {};
+  try {
+    unlock = stubNavigatorOnline();
+    const dbi = await (engine as any).getDB();
+    await dbi.put(engine.MUTATION_QUEUE_NAME, {
+      id: "m3", type: "update", key: "k", value: { id: "k", subject: "s" },
+      changes: { subject: "s" }, entitySetName: "tasks",
+      timestamp: 0, sequence: 1, attempts: 0, ifMatch: 'W/"e"',
+    });
+    await engine.flushQueue();
+    expect(calls).toBe(1);
+    expect((await dbi.getAll(engine.MUTATION_QUEUE_NAME)).length).toBe(0);
+    const errored = await dbi.getAll(engine.ERRORED_MUTATIONS_NAME);
+    expect(errored).toHaveLength(1);
+    expect((errored[0] as any).attempts).toBe(1);
+  } finally {
+    unlock();
+    engine.close();
+  }
 });

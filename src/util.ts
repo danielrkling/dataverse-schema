@@ -224,8 +224,16 @@ export function getImageUrl(entity: string, name: string, id: string): string {
 }
 
 
-export function parseDateOnly(dateString: string): Date {
-  const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
+/**
+ * Converts a `Date` or ISO timestamp string into the ISO-8601 string
+ * Dataverse expects for system datetime attributes such as
+ * `overriddencreatedon`.
+ */
+export function toTimestampValue(value: Date | string): string {
+  return typeof value === "string" ? new Date(value).toISOString() : value.toISOString();
+}
+
+export function parseDateOnly(dateString: string): Date {  const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
   return new Date(year ?? 0, (month ?? 0) - 1, day);
 }
 

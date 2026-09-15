@@ -95,3 +95,35 @@ test("mapChoices maps raw option set metadata", () => {
 test("mapChoices returns empty array for no options", () => {
   expect(mapChoices({ Options: [] })).toEqual([])
 })
+
+// --- overriddencreatedon option ---
+
+test("postRecord injects overriddencreatedon into the request body", async () => {
+  const client = new DataverseClient({ url: "https://org.crm.dynamics.com/api/data/v9.2" })
+  let body: any
+  client.fetch = async (_url: any, init: any) => {
+    body = JSON.parse(init.body as string)
+    return "00000000-0000-0000-0000-000000000001"
+  }
+  await client.postRecord(
+    "accounts",
+    { name: "New Account" },
+    { returnRepresentation: false, overriddenCreatedOn: new Date("2026-09-13T14:22:00Z") },
+  )
+  expect(body.overriddencreatedon).toBe("2026-09-13T14:22:00.000Z")
+})
+
+test("postRecord accepts an ISO string for overriddenCreatedOn", async () => {
+  const client = new DataverseClient({ url: "https://org.crm.dynamics.com/api/data/v9.2" })
+  let body: any
+  client.fetch = async (_url: any, init: any) => {
+    body = JSON.parse(init.body as string)
+    return "00000000-0000-0000-0000-000000000001"
+  }
+  await client.postRecord(
+    "accounts",
+    { name: "New Account" },
+    { returnRepresentation: false, overriddenCreatedOn: "2026-09-13T14:22:00+02:00" },
+  )
+  expect(body.overriddencreatedon).toBe("2026-09-13T12:22:00.000Z")
+})
