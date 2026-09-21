@@ -82,6 +82,9 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
   get "~standard"(): ValidationSchema<T>["~standard"] {
     return this.schema["~standard"];
   }
+
+  /** No runtime value. Use with typeof field.T */
+  T: T
   /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
   schemaName: string
   /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
