@@ -4,7 +4,7 @@ export type QueryProperty = FieldBase<any> | LookupProperty<any> | CollectionPro
 export type FieldPath = readonly QueryProperty[]
 
 function propertyName(property: QueryProperty): string {
-  return property.fromDataverseName ?? property.logicalName
+  return  property.logicalName ?? property.fromDataverseName
 }
 
 export function fieldPathName(path: FieldPath): string {
