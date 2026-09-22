@@ -488,26 +488,8 @@ test("validation works with valibot pipe", async () => {
   expect(result3.success).toBe(true)
 })
 
-test("multiChoice reads CSV strings as number arrays", () => {
-  const f = multiChoice("nnsyc200_months", [1, 2, 3])
-  expect(f.type).toBe("multiChoice")
-  expect(f.kind).toBe("value")
-  expect(f.fromDataverseName).toBe("nnsyc200_months")
-  expect(f.transformValueFromDataverse("3,4,5")).toEqual([3, 4, 5])
-  expect(f.transformValueFromDataverse("3, 4")).toEqual([3, 4])
-  expect(f.transformValueFromDataverse(null)).toEqual([])
-  expect(f.transformValueFromDataverse(undefined)).toEqual([])
-  expect(f.transformValueFromDataverse("")).toEqual([])
-})
-
-test("multiChoice writes number arrays as CSV", () => {
-  const f = multiChoice("nnsyc200_months", [1, 2, 3])
-  expect(f.transformValueToDataverse([3, 4, 5])).toBe("3,4,5")
-  expect(f.transformValueToDataverse(7)).toBe("7")
-})
-
 test("multiChoice writes null/empty as null to clear the column", () => {
-  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
   expect(f.transformValueToDataverse(null)).toBeNull()
   expect(f.transformValueToDataverse(undefined)).toBeNull()
   expect(f.transformValueToDataverse([])).toBeNull()
@@ -515,12 +497,13 @@ test("multiChoice writes null/empty as null to clear the column", () => {
 
 test("multiChoice accepts Record value-to-label definitions", () => {
   const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
-  expect(f.choices).toEqual([1, 2])
+  expect(f.choices).toEqual({ 1: "Jan", 2: "Feb" })
+  expect(f.labels).toEqual(["Jan","Feb"])
 })
 
 test("multiChoice schema validates parsed arrays", async () => {
-  const f = multiChoice("nnsyc200_months", [1, 2, 3])
-  expect(await standardParse(f.schema, [1, 2])).toEqual([1, 2])
+  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
+  expect(await standardParse(f.schema, ["Jan"])).toEqual(["Jan"])
   await expect(standardParse(f.schema, ["nope"] as any)).rejects.toThrow()
 })
 
@@ -538,20 +521,52 @@ test("multiChoice getDefault returns independent empty arrays", () => {
   expect(a).not.toBe(b)
 })
 
-test("number field coerces stringly values from FetchXML responses", () => {
-  const f = number("age")
-  expect(f.transformValueFromDataverse("42")).toBe(42)
-  expect(f.transformValueFromDataverse("38.5")).toBe(38.5)
-  expect(f.transformValueFromDataverse("junk")).toBe(0)
-  expect(f.transformValueFromDataverse(null)).toBe(0)
-})
+test("number field coerces numeric FetchXML strings and falls back to its default for null", () => {
+  const f = number("age");
 
-test("nullable number coerces strings and preserves null", () => {
-  const f = nullableNumber("score")
-  expect(f.transformValueFromDataverse("7")).toBe(7)
-  expect(f.transformValueFromDataverse("junk")).toBeNull()
-  expect(f.transformValueFromDataverse(null)).toBeNull()
-})
+  expect(f.transformValueFromDataverse("42")).toBe(42);
+  expect(f.transformValueFromDataverse("38.5")).toBe(38.5);
+
+  expect(f.transformValueFromDataverse(null)).toBe(0);
+  expect(f.transformValueFromDataverse(undefined)).toBe(0);
+
+  expect(() => f.transformValueFromDataverse("junk")).toThrow(
+    "Invalid number value: junk",
+  );
+});
+
+test("number field uses a configured default when Dataverse omits a value", () => {
+  const f = number("score", { default: 100 });
+
+  expect(f.getDefault()).toBe(100);
+  expect(f.transformValueFromDataverse(null)).toBe(100);
+  expect(f.transformValueFromDataverse(undefined)).toBe(100);
+});
+
+test("nullable number coerces numeric strings and preserves missing Dataverse values", () => {
+  const f = nullableNumber("score");
+
+  expect(f.transformValueFromDataverse("7")).toBe(7);
+  expect(f.transformValueFromDataverse("38.5")).toBe(38.5);
+
+  expect(f.transformValueFromDataverse(null)).toBeNull();
+  expect(f.transformValueFromDataverse(undefined)).toBeNull();
+
+  expect(() => f.transformValueFromDataverse("junk")).toThrow(
+    "Invalid number value: junk",
+  );
+});
+
+test("nullable number preserves server null even when it has a local default", () => {
+  const f = nullableNumber("score", { default: 100 });
+
+  // Used for new local records.
+  expect(f.getDefault()).toBe(100);
+
+  // Server null remains distinguishable.
+  expect(f.transformValueFromDataverse(null)).toBeNull();
+  expect(f.transformValueFromDataverse(undefined)).toBeNull();
+});
 
 test("boolean field coerces stringly true/false", () => {
   expect(boolean("active").transformValueFromDataverse("true")).toBe(true)
@@ -564,13 +579,13 @@ test("boolean field coerces stringly true/false", () => {
 
 test("choice exposes frozen labels via choices", () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
-  expect(f.choices).toEqual(["Active", "Inactive"])
+  expect(f.labels).toEqual(["Active", "Inactive"])
   expect(Object.isFrozen(f.choices))
 })
 
 test("nullableChoice exposes frozen labels via choices", () => {
   const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
-  expect(f.choices).toEqual(["Low", "High"])
+  expect(f.labels).toEqual(["Low", "High"])
   expect(Object.isFrozen(f.choices))
 })
 

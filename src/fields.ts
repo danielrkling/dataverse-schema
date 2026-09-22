@@ -225,12 +225,18 @@ export class NumberField extends FieldBase<number> {
     super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
   }
 
-  transformValueFromDataverse(value: any): number {
-    if (typeof value === "string") {
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : this.getDefault();
+  transformValueFromDataverse(value: unknown): number {
+    if (value == null) return this.getDefault();
+  
+    const result = typeof value === "string"
+      ? Number(value)
+      : value;
+  
+    if (typeof result !== "number" || !Number.isFinite(result)) {
+      throw new Error(`Invalid number value: ${value}`);
     }
-    return value ?? this.getDefault();;
+  
+    return result;
   }
 }
 

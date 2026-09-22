@@ -172,7 +172,7 @@ test("transformValueFromDataverse defaults fields absent from the payload", asyn
 
 test("transformValueFromDataverse normalizes nulls for non-nullable fields", async () => {
   const result = await Account.transformValueFromDataverse({
-    accountid: null, name: null, revenue: null, statuscode: 1, createdon: null,
+    accountid: "some-guid", name: null, revenue: null, statuscode: 1, createdon: null,
   })
   expect(result.name).toBe("")
   expect(result.revenue).toBe(0)
