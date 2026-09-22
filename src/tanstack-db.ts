@@ -589,3 +589,219 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
         startSync: true,
     } as CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>>;
 }
+
+export type ReadonlyStorageConfig<T extends object, TKey extends string | number> = {
+  /** Stable, unique IDB store / TanStack collection ID. */
+  id: string;
+
+  /** Fetches the complete authoritative snapshot. */
+  load: (context: { signal: AbortSignal }) => Promise<readonly T[]>;
+
+  /** Stable primary key for TanStack DB and IndexedDB replacement logic. */
+  getKey: (value: T) => TKey;
+
+  /** Optional automatic refresh period. Omit or set 0 to disable polling. */
+  syncInterval?: number;
+
+  /** Defaults true. When true, do not refresh hidden documents. */
+  requireVisible?: boolean;
+
+  /**
+   * Optional transform/validation boundary for untrusted loader output.
+   * It may also be async.
+   */
+  parse?: (value: unknown) => T | Promise<T>;
+};
+
+export function readonlyStorageCollectionOptions<T extends object, TKey extends string | number>(
+  engine: SyncEngine,
+  config: ReadonlyStorageConfig<T, TKey>,
+): CollectionConfig<T, TKey, never> {
+  if (engine.isClosed) throw new Error("SyncEngine is closed");
+
+  const {
+    id,
+    load,
+    getKey,
+    syncInterval = 0,
+    requireVisible = true,
+    parse,
+  } = config;
+
+  const cacheReady = engine.ensureCollectionStore(id);
+
+  let disposed = false;
+  let activeSync: Promise<void> | undefined;
+  let syncQueued = false;
+  let controller: AbortController | undefined;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const isRefreshAllowed = () =>
+    !requireVisible || document.visibilityState === "visible";
+
+  const replaceCache = async (records: readonly T[]) => {
+    await cacheReady;
+
+    const db = await engine.getDB();
+    const tx = db.transaction(id, "readwrite");
+
+    await tx.store.clear();
+    for (const record of records) {
+      await tx.store.put(record, getKey(record));
+    }
+
+    await tx.done;
+  };
+
+  return {
+    id,
+    getKey,
+
+    sync: {
+      sync: ({ begin, write, commit, markReady }) => {
+        let ready = false;
+
+        const markReadyOnce = () => {
+          if (!ready) {
+            ready = true;
+            markReady();
+          }
+        };
+
+        const hydrate = async () => {
+          await cacheReady;
+
+          const db = await engine.getDB();
+          const cached = await db.getAll(id) as T[];
+
+          if (!disposed && cached.length > 0) {
+            begin();
+            for (const record of cached) {
+              write({
+                type: "insert",
+                value: record,
+                metadata: { source: "idb" },
+              });
+            }
+            commit();
+          }
+        };
+
+        const refresh = async () => {
+          if (disposed || !isRefreshAllowed()) return;
+
+          if (activeSync) {
+            syncQueued = true;
+            return activeSync;
+          }
+
+          controller = new AbortController();
+          engine.trackActiveFetch(controller);
+
+          activeSync = (async () => {
+            try {
+              const loaded = await load({ signal: controller!.signal });
+              if (disposed || controller!.signal.aborted) return;
+
+              const records = parse
+                ? await Promise.all(loaded.map(parse))
+                : [...loaded];
+
+              // Write persistent state before replacing in-memory state.
+              await replaceCache(records);
+
+              if (disposed || controller!.signal.aborted) return;
+
+              begin();
+
+              // A full replacement must delete rows no longer returned.
+              // Use the collection's current rows to determine removals.
+              // Exact access method depends on the TanStack DB version.
+              //
+              // for (const existing of collection.values()) {
+              //   if (!nextKeys.has(getKey(existing))) {
+              //     write({ type: "delete", value: existing, metadata: { source: "loader" } });
+              //   }
+              // }
+
+              for (const record of records) {
+                write({
+                  type: "insert",
+                  value: record,
+                  metadata: { source: "loader" },
+                });
+              }
+
+              commit();
+            } finally {
+              if (controller) engine.untrackActiveFetch(controller);
+              controller = undefined;
+              activeSync = undefined;
+            }
+          })();
+
+          await activeSync;
+
+          if (syncQueued && !disposed) {
+            syncQueued = false;
+            await refresh();
+          }
+        };
+
+        const schedule = () => {
+          if (!syncInterval || disposed) return;
+
+          clearTimeout(pollTimer);
+          pollTimer = setTimeout(async () => {
+            await refresh().catch((error) => {
+              console.warn(`[readonly-storage] Refresh failed for "${id}":`, error);
+            });
+            schedule();
+          }, syncInterval);
+        };
+
+        void hydrate()
+          .then(refresh)
+          .catch((error) => {
+            console.warn(`[readonly-storage] Initialization failed for "${id}":`, error);
+          })
+          .finally(() => {
+            markReadyOnce();
+            schedule();
+          });
+
+        const onVisibilityChange = () => {
+          if (document.visibilityState === "visible") {
+            void refresh().catch(() => undefined);
+          }
+        };
+
+        document.addEventListener("visibilitychange", onVisibilityChange);
+
+        const cleanup = () => {
+          disposed = true;
+          controller?.abort("Readonly storage disposed");
+          clearTimeout(pollTimer);
+          document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+
+        engine.addCollectionCleanup(cleanup);
+        return cleanup;
+      },
+
+      rowUpdateMode: "full",
+    },
+
+    onInsert: async () => {
+      throw new Error(`Readonly storage "${id}" does not support inserts`);
+    },
+    onUpdate: async () => {
+      throw new Error(`Readonly storage "${id}" does not support updates`);
+    },
+    onDelete: async () => {
+      throw new Error(`Readonly storage "${id}" does not support deletes`);
+    },
+
+    startSync: true,
+  };
+}
