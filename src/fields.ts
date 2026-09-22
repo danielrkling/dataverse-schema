@@ -31,17 +31,26 @@ function parseValidDateOnly(value: unknown): Date {
   return result;
 }
 
-export type FieldOptions<T> = {
-  default?: T
-  readonly?: boolean
-  /**
-   * Rejects `null`, `undefined`, and empty/whitespace-only strings at
-   * validation time. Most useful on nullable fields, whose schemas otherwise
-   * accept `null`.
-   */
-  required?: boolean
-  schema?: ValidationSchema<T>
+function asDefaultFactory<T>(value: DefaultValue<T>): () => T {
+  return typeof value === "function"
+    ? value as () => T
+    : () => value;
 }
+
+
+export type DefaultValue<T> = T | (() => T);
+
+export type FieldOptions<T> = {
+  default?: DefaultValue<T>;
+  readonly?: boolean;
+  required?: boolean;
+  schema?: ValidationSchema<T>;
+};
+
+type FieldDefinition<T> = {
+  defaultValue: DefaultValue<T>;
+  schema: ValidationSchema<T>;
+};
 
 export const SKIP = Symbol("skip")
 
@@ -95,22 +104,37 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
   type!: string
   schema: ValidationSchema<T>
 
-  #default: T
+  #getDefault: () => T;
   #readOnly: boolean
 
-  constructor(name: string, defaults: { defaultValue: T; schema: ValidationSchema<T> }, options?: FieldOptions<T>) {
-    this.schemaName = name
-    this.logicalName = name.toLowerCase()
-    this.fromDataverseName = this.logicalName
-    this.toDataverseName = this.logicalName
-    this.#default = options?.default ?? defaults.defaultValue
-    this.#readOnly = options?.readonly ?? false
-    const base = options?.schema ?? defaults.schema
-    this.schema = options?.required ? requiredOf(base) : base
+  constructor(
+    name: string,
+    definition: FieldDefinition<T>,
+    options?: FieldOptions<T>,
+  ) {
+    this.schemaName = name;
+    this.logicalName = name.toLowerCase();
+    this.fromDataverseName = this.logicalName;
+    this.toDataverseName = this.logicalName;
+
+    // Use an own-property check so `default: undefined` can still be
+    // intentional if a future field type supports it.
+    const defaultValue =
+      options && Object.hasOwn(options, "default")
+        ? options.default as DefaultValue<T>
+        : definition.defaultValue;
+
+    this.#getDefault = asDefaultFactory(defaultValue);
+    this.#readOnly = options?.readonly ?? false;
+
+    const baseSchema = options?.schema ?? definition.schema;
+    this.schema = options?.required
+      ? requiredOf(baseSchema)
+      : baseSchema;
   }
 
   getDefault(): T {
-    return this.#default as T
+    return this.#getDefault();
   }
 
   getReadOnly(): boolean {
@@ -128,6 +152,58 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
   afterSave?(ctx: TransformContext, value: any): Promise<void>
 }
 
+export class NullableField<
+  T,
+  F extends FieldBase<T> = FieldBase<T>,
+> extends FieldBase<T | null> {
+  readonly inner: F;
+
+  kind: F["kind"];
+  type: F["type"];
+
+  constructor(inner: F, options?: FieldOptions<T | null>) {
+    super(
+      inner.schemaName,
+      {
+        defaultValue: null,
+        schema: nullableOf(inner.schema),
+      },
+      {
+        ...options,
+        // A nullable wrapper cannot make an already-readonly field writable.
+        readonly: inner.getReadOnly() || options?.readonly,
+      },
+    );
+
+    this.inner = inner;
+
+    // Preserve the original field's Dataverse names and runtime metadata.
+    this.logicalName = inner.logicalName;
+    this.fromDataverseName = inner.fromDataverseName;
+    this.toDataverseName = inner.toDataverseName;
+    this.kind = inner.kind;
+    this.type = inner.type;
+  }
+
+  transformValueFromDataverse(
+    value: unknown,
+    ctx?: TransformContext,
+  ): T | null | Promise<T | null> {
+    return value == null
+      ? null
+      : this.inner.transformValueFromDataverse(value, ctx);
+  }
+
+  transformValueToDataverse(
+    value: unknown,
+    ctx?: TransformContext,
+  ): unknown {
+    return value == null
+      ? null
+      : this.inner.transformValueToDataverse(value, ctx);
+  }
+}
+
 export class BooleanField extends FieldBase<boolean> {
   kind = "value" as const;
   type = "boolean" as const;
@@ -137,25 +213,10 @@ export class BooleanField extends FieldBase<boolean> {
 
   transformValueFromDataverse(value: any): boolean {
     if (typeof value === "string") return value.toLowerCase() === "true";
-    return value ?? false;
+    return value ?? this.getDefault();
   }
 }
 
-export class NullableBooleanField extends FieldBase<boolean | null> {
-  kind = "value" as const;
-  type = "boolean" as const;
-  constructor(name: string, options?: FieldOptions<boolean | null>) {
-    super(name, {
-      defaultValue: null,
-      schema: nullableOf(BOOLEAN_SCHEMA),
-    }, options);
-  }
-
-  transformValueFromDataverse(value: any): boolean | null {
-    if (typeof value === "string") return value.toLowerCase() === "true";
-    return value ?? null;
-  }
-}
 
 export class NumberField extends FieldBase<number> {
   kind = "value" as const;
@@ -166,28 +227,13 @@ export class NumberField extends FieldBase<number> {
 
   transformValueFromDataverse(value: any): number {
     if (typeof value === "string") {
-      const n = Number(value);
-      return Number.isFinite(n) ? n : 0;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : this.getDefault();
     }
-    return value ?? 0;
+    return value ?? this.getDefault();;
   }
 }
 
-export class NullableNumberField extends FieldBase<number | null> {
-  kind = "value" as const;
-  type = "number" as const;
-  constructor(name: string, options?: FieldOptions<number | null>) {
-    super(name, { defaultValue: null, schema: nullableOf(NUMBER_SCHEMA) }, options);
-  }
-
-  transformValueFromDataverse(value: any): number | null {
-    if (typeof value === "string") {
-      const n = Number(value);
-      return Number.isFinite(n) ? n : null;
-    }
-    return value ?? null;
-  }
-}
 
 export class StringField extends FieldBase<string> {
   kind = "value" as const;
@@ -197,34 +243,29 @@ export class StringField extends FieldBase<string> {
   }
 
   transformValueFromDataverse(value: any): string {
-    return value ?? "";
+    return value ?? this.getDefault();;
   }
 }
 
-export class NullableStringField extends FieldBase<string | null> {
-  kind = "value" as const;
-  type = "string" as const;
-  constructor(name: string, options?: FieldOptions<string | null>) {
-    super(name, { defaultValue: null, schema: nullableOf(STRING_SCHEMA) }, options);
-  }
-
-  transformValueFromDataverse(value: any): string | null {
-    return value ?? null;
-  }
-}
 
 export class PrimaryKeyField extends FieldBase<GUID> {
   kind = "value" as const;
   type = "primaryKey" as const;
   constructor(name: string, options?: FieldOptions<GUID>) {
     super(name, {
-      defaultValue: "" as GUID,
+      defaultValue: () => crypto.randomUUID() as GUID,
       schema: GUID_SCHEMA,
     }, options);
   }
 
-  getDefault(): GUID {
-    return (super.getDefault() || crypto.randomUUID()) as GUID;
+  transformValueFromDataverse(value: unknown): GUID {
+    if (typeof value !== "string") {
+      throw new Error(
+        `Missing or invalid primary key value for "${this.logicalName}"`,
+      );
+    }
+  
+    return value as GUID;
   }
 }
 
@@ -246,134 +287,209 @@ export class ListField<T extends string | number> extends FieldBase<T | null> {
  * Field for Dataverse multi-select choice (MultiSelectPicklist) columns.
  *
  * The Web API stores these as a comma-delimited string of option values
- * (e.g. `"3,4,5"`). This field transforms that string to a `number[]` when
+ * (e.g. `"3,4,5"`). This field transforms that string to an array of configured string labels when
  * reading and back to a CSV string when writing. An empty selection reads as
  * `[]` and writes as `null` (which clears the column).
  *
  * @example
  * const table = new DataverseTable({
- *   months: multiChoice("nnsyc200_months", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
- * });
- * // Infer<typeof table>["months"] → number[]
+ *   months: multiChoice("nnsyc200_months", {
+ *     1: "January",
+ *     2: "February",
+ *     3: "March",
+ * }),
+ * // Infer<typeof table>["months"] → ("January" | "February" | "March")[]
  */
-export class MultiChoiceField extends FieldBase<number[]> {
+export class MultiChoiceField<T extends Record<number, string>>
+  extends FieldBase<T[keyof T][]> {
   kind = "value" as const;
   type = "multiChoice" as const;
-  readonly choices: readonly number[];
 
-  constructor(name: string, choices: Array<number> | Record<number, string>, options?: FieldOptions<number[]>) {
-    const values = (Array.isArray(choices) ? [...choices] : Object.keys(choices).map(Number)).sort((a, b) => a - b);
-    if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
+  /** Dataverse option value → application label. */
+  readonly choices: Readonly<T>;
+
+  /** Labels in option-value order. */
+  readonly labels: readonly T[keyof T][];
+
+  constructor(
+    name: string,
+    choices: T,
+    options?: FieldOptions<T[keyof T][]>,
+  ) {
+    const choiceMap = Object.freeze({ ...choices }) as Readonly<T>;
+    const labels = Object.values(choiceMap) as [string, ...string[]];
+
+    if (labels.length === 0) {
+      throw new Error("Multi-choice fields require at least one option");
+    }
+
     super(name, {
-      defaultValue: [] as number[],
-      schema: arrayOf(checkSchema<number>((value) => values.includes(value as number), `Value not in [${values}]`)),
+      defaultValue: () => [] as T[keyof T][],
+      schema: arrayOf(
+        checkSchema<T[keyof T]>(
+          (value) => (labels as readonly unknown[]).includes(value),
+          `Value not in [${labels}]`,
+        ),
+      ),
     }, options);
-    this.choices = Object.freeze(values) as readonly number[];
+
+    this.choices = choiceMap;
+    this.labels = Object.freeze([...labels]) as readonly T[keyof T][];
   }
 
-  getDefault(): number[] {
-    return [...super.getDefault()];
+
+  /** Converts one Dataverse numeric option value to its typed label. */
+  fromChoiceValue(value: number): T[keyof T] {
+    const label = this.choices[value as keyof T];
+
+    if (label === undefined) {
+      throw new Error(
+        `Unknown multi-choice value: ${value} (${this.logicalName})`,
+      );
+    }
+
+    return label;
   }
 
-  transformValueFromDataverse(value: any): number[] {
-    if (value == null || value === "") return [];
-    if (Array.isArray(value)) return value.map((v) => Number(v));
-    return String(value)
-      .split(",")
-      .map((part) => Number(part.trim()))
-      .filter((n) => !Number.isNaN(n));
+  /** Converts one typed label to its Dataverse numeric option value. */
+  toChoiceValue(value: T[keyof T]): number {
+    for (const [key, label] of Object.entries(this.choices)) {
+      if (label === value) return Number(key);
+    }
+
+    throw new Error(`Unknown multi-choice label: ${value}`);
   }
 
-  transformValueToDataverse(value: any): string | null {
+  transformValueFromDataverse(value: unknown): T[keyof T][] {
+    if (value == null || value === "") return this.getDefault();
+
+    const rawValues = Array.isArray(value)
+      ? value
+      : String(value).split(",");
+
+    return rawValues.map((raw) =>
+      this.fromChoiceValue(Number(String(raw).trim())),
+    );
+  }
+
+  transformValueToDataverse(value: unknown): string | null {
     if (value == null) return null;
-    const arr = Array.isArray(value) ? value : [value];
-    if (arr.length === 0) return null;
-    return arr.map((v) => Number(v)).join(",");
+
+    if (!Array.isArray(value)) {
+      throw new Error(
+        `Multi-choice field "${this.logicalName}" requires an array of labels`,
+      );
+    }
+
+    if (value.length === 0) return null;
+
+    return value
+      .map((label) => this.toChoiceValue(label as T[keyof T]))
+      .join(",");
   }
 }
 
 export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
   kind = "value" as const;
   type = "choice" as const;
-  /** Allowed labels (values of the choice map), frozen. */
-  readonly choices: readonly T[keyof T][];
-  #choices: T;
-  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T]>) {
-    const firstKey = Object.keys(choices)[0];
-    if (firstKey === undefined) throw new Error("Choice fields require at least one option");
-    const values = Object.values(choices) as [string, ...string[]];
+  readonly choices: Readonly<T>;
+  readonly labels: readonly T[keyof T][];
+
+  constructor(
+    name: string,
+    choices: T,
+    options?: FieldOptions<T[keyof T]>,
+  ) {
+    const choiceMap = Object.freeze({ ...choices }) as Readonly<T>;
+    const firstKey = Object.keys(choiceMap)[0];
+
+    if (firstKey === undefined) {
+      throw new Error("Choice fields require at least one option");
+    }
+
+    const labels = Object.values(choiceMap) as [string, ...string[]];
+
     super(name, {
-      defaultValue: choices[Number(firstKey) as keyof T],
+      defaultValue: choiceMap[Number(firstKey) as keyof T],
       schema: checkSchema<T[keyof T]>(
-        (value) => (values as readonly unknown[]).includes(value),
-        `Value not in [${values}]`,
+        (value) => (labels as readonly unknown[]).includes(value),
+        `Value not in [${labels}]`,
       ),
     }, options);
-    this.#choices = choices;
-    this.choices = Object.freeze([...values]) as readonly T[keyof T][];
+
+    this.choices = choiceMap;
+    this.labels = Object.freeze([...labels]) as readonly T[keyof T][];
+  }
+
+  /** Converts a Dataverse numeric option value to its typed label. */
+  fromChoiceValue(value: number): T[keyof T] {
+    const result = this.choices[value as keyof T];
+
+    if (result === undefined) {
+      throw new Error(
+        `Unknown choice value: ${value} (${this.logicalName})`,
+      );
+    }
+
+    return result;
+  }
+
+  /** Converts a typed label to its Dataverse numeric option value. */
+  toChoiceValue(value: T[keyof T]): number {
+    for (const [key, label] of Object.entries(this.choices)) {
+      if (label === value) return Number(key);
+    }
+
+    throw new Error(`Unknown choice label: ${value}`);
   }
 
   transformValueFromDataverse(value: any): T[keyof T] {
-    const result = this.#choices[value as keyof T];
-    if (result === undefined) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
-    return result;
+    if (value == null) return this.getDefault();
+    return this.fromChoiceValue(value);
   }
 
   transformValueToDataverse(value: any): number {
-    for (const [k, v] of Object.entries(this.#choices)) {
-      if (v === value) return Number(k);
-    }
-    throw new Error(`Unknown choice label: ${value}`);
+    return this.toChoiceValue(value);
   }
 }
 
-export class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
-  kind = "value" as const;
-  type = "choice" as const;
-  /** Allowed labels (values of the choice map), frozen. */
-  readonly choices: readonly T[keyof T][];
-  #choices: T;
-  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>) {
-    if (Object.keys(choices).length === 0) throw new Error("Choice fields require at least one option");
-    const values = Object.values(choices) as [string, ...string[]];
-    super(name, {
-      defaultValue: null,
-      schema: nullableOf(checkSchema<T[keyof T]>(
-        (value) => (values as readonly unknown[]).includes(value),
-        `Value not in [${values}]`,
-      )),
-    }, options);
-    this.#choices = choices;
-    this.choices = Object.freeze([...values]) as readonly T[keyof T][];
+export class NullableChoiceField<T extends Record<number, string>>
+  extends NullableField<T[keyof T], ChoiceField<T>> {
+  constructor(
+    name: string,
+    choices: T,
+    options?: FieldOptions<T[keyof T] | null>,
+  ) {
+    super(new ChoiceField(name, choices), options);
   }
 
-  transformValueFromDataverse(value: any): T[keyof T] | null {
-    if (value === null) return null;
-    const result = this.#choices[value as keyof T];
-    if (result === undefined) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
-    return result;
+  get choices(): Readonly<T> {
+    return this.inner.choices;
   }
 
-  transformValueToDataverse(value: any): number | null {
-    if (value === null) return null;
-    for (const [k, v] of Object.entries(this.#choices)) {
-      if (v === value) return Number(k);
-    }
-    throw new Error(`Unknown choice label: ${value}`);
+  get labels(): readonly T[keyof T][] {
+    return this.inner.labels;
+  }
+
+  fromChoiceValue(value: number): T[keyof T] {
+    return this.inner.fromChoiceValue(value);
+  }
+
+  toChoiceValue(value: T[keyof T]): number {
+    return this.inner.toChoiceValue(value);
   }
 }
+
+
 
 export class DateTimeField extends FieldBase<Date> {
   kind = "value" as const;
   type = "dateTime" as const;
   constructor(name: string, options?: FieldOptions<Date>) {
     super(name, {
-      defaultValue: new Date(),
+      defaultValue: () => new Date(),
       schema: DATE_SCHEMA,
     }, options);
-  }
-  getDefault(): Date {
-    return new Date();
   }
   transformValueFromDataverse(value: any): Date {
     if (value == null) return this.getDefault();
@@ -383,35 +499,15 @@ export class DateTimeField extends FieldBase<Date> {
   }
 }
 
-export class NullableDateTimeField extends FieldBase<Date | null> {
-  kind = "value" as const;
-  type = "dateTime" as const;
-  constructor(name: string, options?: FieldOptions<Date | null>) {
-    super(name, {
-      defaultValue: null,
-      schema: nullableOf(DATE_SCHEMA),
-    }, options);
-  }
-  transformValueFromDataverse(value: any): Date | null {
-    if (value === null) return null;
-    if (value === undefined) return null;
-    const result = new Date(value);
-    if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
-    return result;
-  }
-}
 
 export class DateField extends FieldBase<Date> {
   kind = "value" as const;
   type = "dateOnly" as const;
   constructor(name: string, options?: FieldOptions<Date>) {
     super(name, {
-      defaultValue: parseDateOnly(new Date().toISOString()),
+      defaultValue: () => parseDateOnly(new Date().toISOString()),
       schema: DATE_SCHEMA,
     }, options);
-  }
-  getDefault(): Date {
-    return parseDateOnly(new Date().toISOString());
   }
   transformValueFromDataverse(value: any): Date {
     if (value == null) return this.getDefault();
@@ -423,25 +519,6 @@ export class DateField extends FieldBase<Date> {
   }
 }
 
-export class NullableDateField extends FieldBase<Date | null> {
-  kind = "value" as const;
-  type = "dateOnly" as const;
-  constructor(name: string, options?: FieldOptions<Date | null>) {
-    super(name, {
-      defaultValue: null,
-      schema: nullableOf(DATE_SCHEMA),
-    }, options);
-  }
-  transformValueFromDataverse(value: any): Date | null {
-    if (value == null) return null;
-    return parseValidDateOnly(value);
-  }
-  transformValueToDataverse(value: any) {
-    if (value === null || value === undefined) return null;
-    if (!(value instanceof Date) || !isValidDate(value)) throw new Error("Invalid date value");
-    return toDateOnly(value);
-  }
-}
 
 /**
  * Field for retrieving user-localized display values
@@ -502,23 +579,14 @@ export class ImageField extends FieldBase<ImageRef | null> {
   }
 
   async afterSave(ctx: TransformContext, value: any): Promise<void> {
-    if (value?.data === null){
+    if (value?.data === null) {
       await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.logicalName)
-    }else if (value?.data instanceof Blob){
+    } else if (value?.data instanceof Blob) {
       await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.logicalName, "image.png", value.data)
     }
   }
 }
 
-async function blobToBase64(blob: Blob): Promise<string> {
-  const buffer = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
 
 export type FileRef = {
   name?: string;
@@ -577,7 +645,7 @@ export class FileField extends FieldBase<FileRef | null> {
       if (fileName) {
         await ctx.client.updateFileProperty(ctx.table.entitySetName, ctx.recordId, this.logicalName, fileName, value.data);
       }
-    } else if (value?.data === null){
+    } else if (value?.data === null) {
       await ctx.client.deletePropertyValue(ctx.table.entitySetName, ctx.recordId, this.logicalName)
     }
   }
@@ -600,6 +668,37 @@ export class JsonField<T> extends FieldBase<T> {
   transformValueToDataverse(value: any): string | null {
     if (value == null) return null;
     return JSON.stringify(value);
+  }
+}
+
+export class NullableBooleanField extends NullableField<boolean, BooleanField> {
+  constructor(name: string, options?: FieldOptions<boolean | null>) {
+    super(new BooleanField(name), options);
+  }
+}
+
+export class NullableNumberField extends NullableField<number, NumberField> {
+  constructor(name: string, options?: FieldOptions<number | null>) {
+    super(new NumberField(name), options);
+  }
+}
+
+export class NullableStringField extends NullableField<string, StringField> {
+  constructor(name: string, options?: FieldOptions<string | null>) {
+    super(new StringField(name), options);
+  }
+}
+
+export class NullableDateTimeField
+  extends NullableField<Date, DateTimeField> {
+  constructor(name: string, options?: FieldOptions<Date | null>) {
+    super(new DateTimeField(name), options);
+  }
+}
+
+export class NullableDateField extends NullableField<Date, DateField> {
+  constructor(name: string, options?: FieldOptions<Date | null>) {
+    super(new DateField(name), options);
   }
 }
 
@@ -727,8 +826,12 @@ export function list<const T extends string | number>(name: string, list: Readon
  * });
  * // Infer<typeof table>["months"] → number[]
  */
-export function multiChoice(name: string, choices: Array<number> | Record<number, string>, options?: FieldOptions<number[]>) {
-  return new MultiChoiceField(name, choices, options);
+export function multiChoice<const T extends Record<number, string>>(
+  name: string,
+  choices: T,
+  options?: FieldOptions<T[keyof T][]>,
+) {
+  return new MultiChoiceField<T>(name, choices, options);
 }
 
 /**
@@ -745,7 +848,7 @@ export function multiChoice(name: string, choices: Array<number> | Record<number
  * });
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
  */
-export function choice<T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>) {
+export function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>) {
   return new ChoiceField<T>(name, choices, options);
 }
 
@@ -762,7 +865,7 @@ export function choice<T extends Record<number, string>>(name: string, choices: 
  * });
  * // Infer<typeof table>["priority"] → "Low" | "High" | null
  */
-export function nullableChoice<T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>) {
+export function nullableChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>) {
   return new NullableChoiceField<T>(name, choices, options);
 }
 
@@ -911,7 +1014,7 @@ export class CollectionProperty<
 
   constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties>[]>) {
     super(name, {
-      defaultValue: [],
+      defaultValue: () => [],
       schema: arrayOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields)))),
     }, options);
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
@@ -992,7 +1095,7 @@ export class CollectionIdsProperty extends FieldBase<GUID[]> {
 
   constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID[]>) {
     super(name, {
-      defaultValue: [],
+      defaultValue: () => [],
       schema: arrayOf(GUID_SCHEMA),
     }, options);
     this.#getTable = getTable;
