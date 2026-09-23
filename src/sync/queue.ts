@@ -243,11 +243,11 @@ export class SyncEngine {
         }
     }
 
-    private db: IDBPDatabase | undefined;
-    async getDB() {
+    private db: IDBPDatabase | Promise<IDBPDatabase> | undefined;
+    async getDB(): Promise<IDBPDatabase> {
         if (!this.db) {
             const self = this
-            this.db = await openDB(this.name, this.dbVersion, {
+            const dbPromise = openDB(this.name, this.dbVersion, {
                 upgrade(database, _oldVersion, _newVersion, transaction) {
                     // Queue stores are durable application state. Table stores are
                     // disposable cache state and are rebuilt by the next sync.
@@ -283,7 +283,28 @@ export class SyncEngine {
                         }
                     }
                 },
+                blocked(currentVersion, blockedVersion) {
+                    // Another tab still holds an old-version connection; our
+                    // own "versionchange" close below is what unblocks it.
+                    console.warn(
+                        `[dataverse-offline] DB "${self.name}" upgrade to v${blockedVersion} ` +
+                            `blocked while another tab holds a v${currentVersion} connection`,
+                    );
+                },
             });
+            // When any tab upgrades the schema (e.g. a late-registered
+            // collection opened a store on the fly), close this connection
+            // promptly — otherwise the upgrading tab hangs in "blocked" until
+            // this connection is finally closed. Track the new version first
+            // so a subsequent open() here skips straight ahead to it.
+            void dbPromise.then((db) => {
+                db.addEventListener("versionchange", (event: IDBVersionChangeEvent) => {
+                    self.dbVersion = Math.max(self.dbVersion, event.newVersion ?? 0);
+                    db.close();
+                    if (self.db === dbPromise) self.db = undefined;
+                });
+            });
+            this.db = dbPromise;
         }
         return this.db;
     }
@@ -293,23 +314,55 @@ export class SyncEngine {
      * database is already open without this store, it is reopened with a
      * bumped version so the upgrade callback can create it. The returned
      * promise resolves once the store is safe to read/write.
+     *
+     * Reopens are serialized through {@link dbReopenPromise}: two collections
+     * registered back-to-back must not interleave openDB calls — the first
+     * bump creates a store the second bump would otherwise re-check against a
+     * stale connection. Before closing an open connection, in-flight fetches
+     * are aborted locally and cross-tab, because the new open transaction must
+     * wait for every other tab's connection to be closed on versionchange
+     * (each getDB registers that handler itself).
      */
     public ensureCollectionStore(name: string): Promise<void> {
         let p = this.collectionStorePromises.get(name);
         if (!p) {
             p = (async () => {
+                // Register before any DB work so a concurrent upgrade's
+                // migration callback preserves this store.
                 this.collectionStores.add(name);
-                let db = await this.getDB();
-                if (!db.objectStoreNames.contains(name)) {
-                    db.close();
-                    this.db = undefined;
-                    this.dbVersion = db.version + 1;
-                    await this.getDB();
-                }
+                const tail = this.dbReopenPromise ?? Promise.resolve();
+                this.dbReopenPromise = (async () => {
+                    await tail;
+                    if (this.closed) return;
+                    const db = await this.getDB();
+                    if (!db.objectStoreNames.contains(name)) {
+                        // Stop in-flight reads/writes so closing the connection
+                        // doesn't fail transactions created before the reopen.
+                        this.abortActiveFetches();
+                        this.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
+                        db.close();
+                        this.db = undefined;
+                        this.dbVersion = db.version + 1;
+                        await this.getDB();
+                    }
+                })();
+                await this.dbReopenPromise;
             })();
             this.collectionStorePromises.set(name, p);
         }
         return p;
+    }
+
+    private dbReopenPromise: Promise<void> | undefined;
+
+    /**
+     * Ensures the object store for a table's {@link entitySetName} exists. Same
+     * reopen machinery as {@link ensureCollectionStore}; use this when a table
+     * is registered after the DB has already been opened, because table stores
+     * are otherwise only created inside the upgrade callback.
+     */
+    public ensureTableStore(entitySetName: string): Promise<void> {
+        return this.ensureCollectionStore(entitySetName);
     }
 
     /**
@@ -358,8 +411,11 @@ export class SyncEngine {
             globalThis.removeEventListener("online", this.onlineHandler);
             this.onlineHandler = undefined;
         }
-        this.db?.close();
+        const pending = this.db;
         this.db = undefined;
+        if (pending) {
+            void Promise.resolve(pending).then((db) => db.close()).catch(() => undefined);
+        }
     }
 
     /**

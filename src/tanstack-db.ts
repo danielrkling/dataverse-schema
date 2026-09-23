@@ -1,5 +1,10 @@
 import { BTreeIndex, type Collection, type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
-import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions,SyncEngine, plainClone, type QueuedMutation } from "./index";
+import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
+import { SyncEngine, plainClone, type QueuedMutation, isConcurrencyError, isKeyViolation } from "./sync";
+
+// Convenience re-exports so consumers (tests, browser harness) can access the
+// offline engine's public API through this entry point.
+export { SyncEngine, plainClone, type QueuedMutation, isConcurrencyError, isKeyViolation, MutationPersistenceError } from "./sync";
 
 
 const DEFAULT_SYNC_INTERVAL = 30000;
@@ -344,7 +349,8 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
         ...rest
     } = config;
     // Widened deliberately: the sync DB stores heterogeneous tables.
-    engine.tables.set(table.entitySetName, table as DataverseTable<GenericProperties>);
+    const widenedTable = table as DataverseTable<GenericProperties>;
+    engine.tables.set(table.entitySetName, widenedTable);
     const pk = table.primaryKey;
     const getKey = (item: Infer<T>) => (item as any)[pk.key];
     // Multiple collections may target the same entitySet with different
@@ -352,7 +358,14 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
     // The IndexedDB cache store is also keyed by this id so two filtered
     // collections over one entity don't overwrite each other's snapshots.
     const collectionId = explicitId ?? table.entitySetName;
-    const cacheReady = engine.ensureCollectionStore(collectionId);
+    // Both the cache store for this collection and the entity's own table
+    // store (which may not exist yet if the table was registered after the
+    // DB was first opened) go through the engine's version-bump machinery.
+    const cacheReady = Promise.all([
+        engine.ensureCollectionStore(collectionId),
+        engine.ensureTableStore(table.entitySetName),
+    ]);
+    void cacheReady;
 
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let syncFromDataverse: ((signal: AbortSignal) => Promise<void>);
@@ -636,10 +649,7 @@ export function readonlyStorageCollectionOptions<T extends object, TKey extends 
   let controller: AbortController | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const isRefreshAllowed = () =>
-    !requireVisible || document.visibilityState === "visible";
-
-  const replaceCache = async (records: readonly T[]) => {
+      const replaceCache = async (records: readonly T[]) => {
     await cacheReady;
 
     const db = await engine.getDB();
@@ -658,7 +668,7 @@ export function readonlyStorageCollectionOptions<T extends object, TKey extends 
     getKey,
 
     sync: {
-      sync: ({ begin, write, commit, markReady }) => {
+      sync: ({ begin, write, commit, markReady, collection }) => {
         let ready = false;
 
         const markReadyOnce = () => {
@@ -687,8 +697,11 @@ export function readonlyStorageCollectionOptions<T extends object, TKey extends 
           }
         };
 
+        const isRefreshAllowed = () =>
+          !requireVisible || document.visibilityState === "visible";
+
         const refresh = async () => {
-          if (disposed || !isRefreshAllowed()) return;
+          if (disposed || !isRefreshAllowed() || !navigator.onLine) return;
 
           if (activeSync) {
             syncQueued = true;
@@ -712,18 +725,10 @@ export function readonlyStorageCollectionOptions<T extends object, TKey extends 
 
               if (disposed || controller!.signal.aborted) return;
 
+              // Full replacement — rows no longer returned are removed.
+              const nextKeys = new Set(records.map(getKey));
+
               begin();
-
-              // A full replacement must delete rows no longer returned.
-              // Use the collection's current rows to determine removals.
-              // Exact access method depends on the TanStack DB version.
-              //
-              // for (const existing of collection.values()) {
-              //   if (!nextKeys.has(getKey(existing))) {
-              //     write({ type: "delete", value: existing, metadata: { source: "loader" } });
-              //   }
-              // }
-
               for (const record of records) {
                 write({
                   type: "insert",
@@ -731,8 +736,20 @@ export function readonlyStorageCollectionOptions<T extends object, TKey extends 
                   metadata: { source: "loader" },
                 });
               }
-
+              for (const existing of collection.values()) {
+                if (!nextKeys.has(getKey(existing))) {
+                  write({
+                    type: "delete",
+                    value: existing,
+                    metadata: { source: "loader" },
+                  });
+                }
+              }
               commit();
+            } catch (err: any) {
+              if (err?.name !== "AbortError" && !controller?.signal.aborted) {
+                console.warn(`[readonly-storage] Load failed for "${id}":`, err);
+              }
             } finally {
               if (controller) engine.untrackActiveFetch(controller);
               controller = undefined;
@@ -770,18 +787,23 @@ export function readonlyStorageCollectionOptions<T extends object, TKey extends 
             schedule();
           });
 
+        const onOnline = () => { void refresh(); };
         const onVisibilityChange = () => {
           if (document.visibilityState === "visible") {
             void refresh().catch(() => undefined);
           }
         };
 
+        window.addEventListener("online", onOnline);
         document.addEventListener("visibilitychange", onVisibilityChange);
 
         const cleanup = () => {
+          if (disposed) return;
           disposed = true;
+          syncQueued = false;
           controller?.abort("Readonly storage disposed");
           clearTimeout(pollTimer);
+          window.removeEventListener("online", onOnline);
           document.removeEventListener("visibilitychange", onVisibilityChange);
         };
 
