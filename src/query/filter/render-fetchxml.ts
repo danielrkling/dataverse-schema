@@ -6,7 +6,7 @@ function escapeXml(value: string): string {
 }
 
 export function renderFilterFetchXml(node: FilterNode): string {
-  const fieldName = (path: readonly any[]) => fieldPathName(path)
+  const fieldName = (path: readonly any[]) => fieldPathName(path, "fetchXml")
   switch (node.type) {
     case "comparison": return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${escapeXml(node.operator)}" value="${node.value === null ? "" : escapeXml(String(node.value))}" />`
     case "null": return `<condition attribute="${escapeXml(fieldName(node.field))}" operator="${node.positive ? "null" : "not-null"}" />`

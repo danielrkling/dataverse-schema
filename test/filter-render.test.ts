@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import {
   eq, ne, gt, and, or, not, contains, startsWith, endsWith, isNull, isNotNull,
   Between, In, ContainsValues, EqualUserId, LastXDays, Today, FieldRef,
-  choice, nullableChoice, string, number, datetime,
+  choice, nullableChoice, string, number, datetime, lookupId, primaryKey,
 } from "../src"
 
 const ref = (name: string) => new FieldRef(name)
@@ -159,4 +159,14 @@ test("toFetchXml escapes special characters in values", () => {
 test("toFetchXml escapes special characters in attribute names", () => {
   const expr = eq(new FieldRef('weird<"x">&name'), "v")
   expect(expr.toFetchXml()).toContain(`attribute="weird&lt;&quot;x&quot;&gt;&amp;name"`)
+})
+
+test("lookupId renders dialect-specific names: `_value` in OData, logical name in FetchXML", () => {
+  const Dummy = {} as any
+  const parent = lookupId("parentid", () => Dummy)
+  const value = "11111111-1111-1111-1111-111111111111"
+  expect(eq(parent, value).toOdata()).toBe(`(_parentid_value eq ${value})`)
+  expect(eq(parent, value).toFetchXml()).toBe(`<condition attribute="parentid" operator="eq" value="${value}" />`)
+  expect(isNull(parent).toOdata()).toBe("_parentid_value eq null")
+  expect(isNull(parent).toFetchXml()).toBe(`<condition attribute="parentid" operator="null" />`)
 })

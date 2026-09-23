@@ -3,7 +3,7 @@ import type { FilterNode } from "./ast"
 import { fieldPathName } from "../path"
 
 export function renderFilterOdata(node: FilterNode, scope?: string): string {
-  const fieldName = (path: readonly any[]) => `${scope ? `${scope}/` : ""}${fieldPathName(path)}`
+  const fieldName = (path: readonly any[]) => `${scope ? `${scope}/` : ""}${fieldPathName(path, "odata")}`
   switch (node.type) {
     case "comparison": return `(${fieldName(node.field)} ${node.operator} ${wrapString(node.value)})`
     case "null": return `${fieldName(node.field)} ${node.positive ? "eq" : "ne"} null`
@@ -11,7 +11,7 @@ export function renderFilterOdata(node: FilterNode, scope?: string): string {
     case "startsWith": return `startswith(${fieldName(node.field)},${wrapString(node.value)})`
     case "endsWith": return `endswith(${fieldName(node.field)},${wrapString(node.value)})`
     case "compare": return `(${fieldName(node.field)} ${node.operator} ${fieldName(node.otherField)})`
-    case "lambda": return `${fieldPathName(node.field)}/${node.operator}(${node.alias}: ${renderFilterOdata(node.condition, node.alias)})`
+    case "lambda": return `${fieldPathName(node.field, "odata")}/${node.operator}(${node.alias}: ${renderFilterOdata(node.condition, node.alias)})`
     case "fn": {
       const field = wrapString(fieldName(node.field))
       const vals = node.values.map(wrapString)

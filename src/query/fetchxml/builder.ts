@@ -1,8 +1,9 @@
-import { DataverseTable, DataverseIntersectTable } from "../../table";
+﻿import { DataverseTable, DataverseIntersectTable } from "../../table";
 import { GenericProperties, Infer } from "../../types";
 import { FilterExpr, FieldRef } from "../filter/expr";
 import { Aggregation, GroupByExpr } from "../shared/aggregation";
 import { renderFilterInput } from "../filter/input";
+import { fieldPathName } from "../path";
 import { buildFlatFieldProxy } from "../shared/proxy";
 import type { FieldBase } from "../../fields";
 import { ETAG } from "../../util";
@@ -52,9 +53,174 @@ type AttrDef = {
 
 type OrderDef = {
     attribute: string;
+    /** The aggregate/column alias to order by (used instead of `attribute` in aggregate queries). */
+    alias?: string;
     entityname?: string;
     descending?: boolean;
 };
+
+type LinkDef = {
+    name: string;
+    alias: string;
+    from: string;
+    to: string;
+    linkType: FetchLinkType;
+    builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
+    intersect?: boolean;
+};
+
+function renderAttributeLines(attributes: readonly AttrDef[], indent: string): string[] {
+    const lines: string[] = [];
+    for (const attr of attributes) {
+        const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
+        if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
+        if (attr.groupby) attrParts.push(`groupby='true'`);
+        if (attr.dategrouping) attrParts.push(`dategrouping='${attr.dategrouping}'`);
+        if (attr.distinct) attrParts.push(`distinct='true'`);
+        if (attr.rowaggregate) attrParts.push(`rowaggregate='${attr.rowaggregate}'`);
+        lines.push(`${indent}<attribute ${attrParts.join(" ")} />`);
+    }
+    return lines;
+}
+
+/**
+ * Renders `<order>` elements. In aggregate queries, ordering by a group/aggregate
+ * column uses the alias (`alias='...'`), not the attribute name.
+ */
+function renderOrderLines(orders: readonly OrderDef[], indent: string, aliases?: readonly string[]): string[] {
+    const aliasSet = aliases ? new Set(aliases) : undefined;
+    const lines: string[] = [];
+    for (const order of orders) {
+        const parts = [];
+        if (order.entityname) parts.push(`entityname='${order.entityname}'`);
+        if (!order.entityname && aliasSet?.has(order.attribute)) {
+            parts.push(`alias='${order.attribute}'`);
+        } else {
+            parts.push(`attribute='${order.attribute}'`);
+        }
+        if (order.descending) parts.push(`descending='true'`);
+        lines.push(`${indent}<order ${parts.join(" ")} />`);
+    }
+    return lines;
+}
+
+function renderFilterLines(filters: readonly string[], indent: string): string[] {
+    if (filters.length === 0) return [];
+    const lines = [`${indent}<filter type="and">`];
+    for (const condition of filters) {
+        lines.push(`${indent}  ${condition}`);
+    }
+    lines.push(`${indent}</filter>`);
+    return lines;
+}
+
+/**
+ * Returns the alias lookup set for a builder â€” only aggregate-aware builders order
+ * by alias. Plain select queries reference attributes.
+ */
+function aggregateAliasesOf(builder: unknown): readonly string[] | undefined {
+    const attrs = getBuilderAttributes(builder);
+    if (!attrs || !attrs.some((attr) => attr.aggregate || attr.groupby)) return undefined;
+    return attrs.map((attr) => attr.alias);
+}
+
+function getBuilderAttributes(builder: unknown): readonly AttrDef[] | undefined {
+    return (builder as any)?._getEffectiveAttributes?.();
+}
+
+function renderLinkLines(link: LinkDef, indent: string): string[] {
+    const lines: string[] = [];
+    const linkAttrs: string[] = [
+        `name="${link.name}"`,
+        `from="${link.from}"`,
+        `to="${link.to}"`,
+        `alias="${link.alias}"`,
+        `link-type="${link.linkType}"`,
+    ];
+    if (link.intersect) linkAttrs.push(`intersect="true"`);
+
+    lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
+    const childIndent = `${indent}  `;
+    const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
+
+    lines.push(...renderFilterLines((link.builder as any)._filters ?? [], childIndent));
+
+    if (!filterOnly) {
+        const builder = link.builder as any;
+        lines.push(...renderAttributeLines(builder._getEffectiveAttributes(), childIndent));
+        lines.push(...renderOrderLines(builder._orders ?? [], childIndent, aggregateAliasesOf(builder)));
+    }
+
+    if (!(link.builder instanceof FilterCollector)) {
+        for (const nestedLink of (link.builder as any)._links ?? []) {
+            lines.push(...renderLinkLines(nestedLink, childIndent));
+        }
+    }
+
+    lines.push(`${indent}</link-entity>`);
+    return lines;
+}
+
+// --- Shared alias collection + row transformation (select + aggregate paths) ---
+
+function collectAliasesFromAttributes(
+    builder: EntityQueryBuilder<any, any> | FetchXmlAggregateQuery<any, any>,
+    map: Map<string, AliasInfo>,
+    attrs: readonly AttrDef[],
+): void {
+    const fields = (builder as any)._table.fields as Record<string, any>;
+    for (const attr of attrs) {
+        const entry = Object.entries(fields).find(([, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name);
+        if (entry) {
+            const fieldDef = entry[1];
+            const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
+            map.set(attr.alias, {
+                field: FieldRef.fromPath(fieldDef, dataverseName),
+                getDefault: () => fieldDef.getDefault?.(),
+                name: attr.alias,
+            });
+        } else {
+            map.set(attr.alias, {
+                field: undefined,
+                getDefault: () => undefined,
+                name: attr.name,
+            });
+        }
+    }
+}
+
+/** Resolves every attribute alias (root + non-filter-only joins) to its field definition. */
+function collectAliasesRecursive(builder: any, map: Map<string, AliasInfo>): void {
+    const attrs = (builder as any)._getEffectiveAttributes?.() ?? [];
+    collectAliasesFromAttributes(builder, map, attrs);
+    for (const link of ((builder as any)._links ?? []) as LinkDef[]) {
+        if (link.builder instanceof FilterCollector) continue;
+        if (EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) continue;
+        collectAliasesRecursive(link.builder, map);
+    }
+}
+
+async function transformRowWithAliases(
+    table: DataverseTable<any>,
+    aliasInfo: Map<string, AliasInfo>,
+    v: any,
+): Promise<any> {
+    if (aliasInfo.size > 0) {
+        const result: Record<string | symbol, any> = {};
+        const recordId = v[table.primaryKey.property.fromDataverseName] ?? v[table.primaryKey.property.logicalName] ?? "";
+        const ctx = { table, client: table.client, recordId };
+        for (const [alias, info] of aliasInfo) {
+            if (info.name in v) {
+                result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+            } else {
+                result[alias] = info.getDefault();
+            }
+        }
+        result[ETAG] = v["@odata.etag"];
+        return result;
+    }
+    return table.transformValueFromDataverse(v);
+}
 
 function fetchAttributeAst(attribute: AttrDef): FetchXmlAttributeAst {
     return { ...attribute };
@@ -182,6 +348,8 @@ type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends R
 // --- Post-select builder interface (no apply/select) ---
 
 export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
+    /** Result record type, for `typeof q.T` lookups. Mirrors `DataverseTable.T`. */
+    T: TResult;
     select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
     filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>
     join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(
@@ -235,7 +403,9 @@ export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult e
 // --- Initial entry point interface (forces select or apply first) ---
 
 export interface FetchXmlInitial<TProps extends GenericProperties> {
-    select(): FetchXmlSelectQuery<TProps, TProps>
+    /** Result record type, for `typeof q.T` lookups. Mirrors `DataverseTable.T`. */
+    T: Infer<TProps>;
+    select(): FetchXmlSelectQuery<TProps, Infer<TProps> & Record<string, any>>
     select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
     apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(
         expr: (f: FieldProxy<TProps>) => R,
@@ -313,6 +483,8 @@ export class FetchXmlAggregateQuery<
 > {
     private _linkAlias: { value: number };
     private _table: DataverseTable<TProps>;
+    /** Result record type, for `typeof q.T` lookups. */
+    T!: TResult;
     private _attributes: AttrDef[] = [];
     private _links: Array<{
         name: string;
@@ -531,34 +703,12 @@ export class FetchXmlAggregateQuery<
         lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
         lines.push(`  <entity name="${this._table.logicalName}">`);
 
-        for (const attr of this._getEffectiveAttributes()) {
-            const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
-            if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
-            if (attr.groupby) attrParts.push(`groupby='true'`);
-            if (attr.dategrouping) attrParts.push(`dategrouping='${attr.dategrouping}'`);
-            if (attr.distinct) attrParts.push(`distinct='true'`);
-            if (attr.rowaggregate) attrParts.push(`rowaggregate='${attr.rowaggregate}'`);
-            lines.push(`    <attribute ${attrParts.join(" ")} />`);
-        }
-
-        for (const order of this._orders) {
-            const parts = [];
-            if (order.entityname) parts.push(`entityname='${order.entityname}'`);
-            parts.push(`attribute='${order.attribute}'`);
-            if (order.descending) parts.push(`descending='true'`);
-            lines.push(`    <order ${parts.join(" ")} />`);
-        }
-
-        if (this._filters.length > 0) {
-            lines.push(`    <filter type="and">`);
-            for (const c of this._filters) {
-                lines.push(`      ${c}`);
-            }
-            lines.push(`    </filter>`);
-        }
+        lines.push(...renderAttributeLines(this._getEffectiveAttributes(), "    "));
+        lines.push(...renderOrderLines(this._orders, "    ", aggregateAliasesOf(this)));
+        lines.push(...renderFilterLines(this._filters, "    "));
 
         for (const link of this._links) {
-            lines.push(...this._renderLinkEntity(link, "    "));
+            lines.push(...renderLinkLines(link, "    "));
         }
 
         lines.push(`  </entity>`);
@@ -579,22 +729,7 @@ export class FetchXmlAggregateQuery<
     }
 
     private async _transformRow(v: any): Promise<TResult> {
-        const aliasInfo = this._buildAliasInfo();
-        if (aliasInfo.size > 0) {
-            const result: Record<string | symbol, any> = {};
-            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.logicalName] ?? "";
-            const ctx = { table: this._table, client: this._table.client, recordId };
-            for (const [alias, info] of aliasInfo) {
-                if (info.name in v) {
-                    result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
-                } else {
-                    result[alias] = info.getDefault();
-                }
-            }
-            result[ETAG] = v["@odata.etag"];
-            return result as TResult;
-        }
-        return (await this._table.transformValueFromDataverse(v)) as TResult;
+        return (await transformRowWithAliases(this._table, this._buildAliasInfo(), v)) as TResult;
     }
 
     public async execute(options?: ExecuteOptions): Promise<TResult[]> {
@@ -625,145 +760,12 @@ export class FetchXmlAggregateQuery<
 
     private _buildAliasInfo(): Map<string, AliasInfo> {
         const map = new Map<string, AliasInfo>();
-        this._collectAliases(this, map);
+        collectAliasesRecursive(this, map);
         return map;
-    }
-
-    private _collectAliases(
-        builder: FetchXmlAggregateQuery<any, any>,
-        map: Map<string, AliasInfo>,
-    ): void {
-        for (const attr of builder._getEffectiveAttributes()) {
-            const fields = builder._table.fields as Record<string, any>;
-            const entry = Object.entries(fields).find(
-                ([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name,
-            );
-            if (entry) {
-                const fieldDef = entry[1];
-                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
-                map.set(attr.alias, {
-                    field: FieldRef.fromPath(fieldDef, dataverseName),
-                    getDefault: () => fieldDef.getDefault?.(),
-                    name: attr.alias,
-                });
-            } else {
-                map.set(attr.alias, {
-                    field: undefined,
-                    getDefault: () => undefined,
-                    name: attr.name,
-                });
-            }
-        }
-        for (const link of builder._links) {
-            if (!(link.builder instanceof FilterCollector)) {
-                if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
-                    const eb = link.builder as EntityQueryBuilder<any, any>;
-                    this._collectAliasesFromBuilder(eb, map);
-                }
-            }
-        }
     }
 
     private static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean {
         return linkType === "any" || linkType === "not any" || linkType === "all" || linkType === "not all" || linkType === "exists" || linkType === "in";
-    }
-
-    private _renderLinkEntity(
-        link: {
-            name: string;
-            alias: string;
-            from: string;
-            to: string;
-            linkType: FetchLinkType;
-            builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
-            intersect?: boolean;
-        },
-        indent: string,
-    ): string[] {
-        const lines: string[] = [];
-        const linkAttrs: string[] = [
-            `name="${link.name}"`,
-            `from="${link.from}"`,
-            `to="${link.to}"`,
-            `alias="${link.alias}"`,
-            `link-type="${link.linkType}"`,
-        ];
-        if (link.intersect) linkAttrs.push(`intersect="true"`);
-
-        lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
-
-        const childIndent = `${indent}  `;
-        const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
-
-        const builderFilters: string[] = (link.builder as any)._filters ?? [];
-        if (builderFilters.length > 0) {
-            lines.push(`${childIndent}<filter type="and">`);
-            for (const c of builderFilters) {
-                lines.push(`${childIndent}  ${c}`);
-            }
-            lines.push(`${childIndent}</filter>`);
-        }
-
-        if (!filterOnly) {
-            const eb = link.builder as EntityQueryBuilder<any, any>;
-            for (const nestedAttr of (eb as any)._getEffectiveAttributes()) {
-                const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
-                if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
-                if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
-                if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
-                if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
-                if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
-                lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
-            }
-
-            for (const order of (eb as any)._orders) {
-                const parts = [`attribute='${order.attribute}'`];
-                if (order.descending) parts.push(`descending='true'`);
-                lines.push(`${childIndent}<order ${parts.join(" ")} />`);
-            }
-        }
-
-        if (!(link.builder instanceof FilterCollector)) {
-            const eb = link.builder as EntityQueryBuilder<any, any>;
-            for (const nestedLink of (eb as any)._links) {
-                lines.push(...this._renderLinkEntity(nestedLink, childIndent));
-            }
-        }
-
-        lines.push(`${indent}</link-entity>`);
-        return lines;
-    }
-
-    private _collectAliasesFromBuilder(
-        builder: EntityQueryBuilder<any, any>,
-        map: Map<string, AliasInfo>,
-    ): void {
-        for (const attr of (builder as any)._getEffectiveAttributes()) {
-            const fields = (builder as any)._table.fields as Record<string, any>;
-            const entry = Object.entries(fields).find(
-                ([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name,
-            );
-            if (entry) {
-                const fieldDef = entry[1];
-                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
-                map.set(attr.alias, {
-                    field: FieldRef.fromPath(fieldDef, dataverseName),
-                    getDefault: () => fieldDef.getDefault?.(),
-                    name: attr.alias,
-                });
-            } else {
-                map.set(attr.alias, {
-                    field: undefined,
-                    getDefault: () => undefined,
-                    name: attr.name,
-                });
-            }
-        }
-        for (const link of (builder as any)._links) {
-            if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
-                this._collectAliasesFromBuilder(link.builder as EntityQueryBuilder<any, any>, map);
-            }
-        }
     }
 }
 
@@ -773,6 +775,8 @@ export class EntityQueryBuilder<
 > {
     protected _linkAlias: { value: number };
     private _table: DataverseTable<TProps>;
+    /** Result record type, for `typeof q.T` lookups. */
+    T!: TResult;
     private _attributes: AttrDef[] = [];
     protected _links: Array<{
         name: string;
@@ -841,11 +845,13 @@ export class EntityQueryBuilder<
 
         for (const [alias, value] of Object.entries(result)) {
             if (value instanceof GroupByExpr) {
-                initialAttributes.push({ name: value.field, alias, groupby: true });
+                const name = value.fieldRef ? fieldPathName(value.fieldRef.path, "fetchXml") : value.field;
+                initialAttributes.push({ name, alias, groupby: true });
             } else if (value instanceof Aggregation) {
-                const fieldName = value.field ? value.field.toString() : this._table.primaryKey.property.logicalName;
+                const fieldName = value.fieldRef ? fieldPathName(value.fieldRef.path, "fetchXml") : value.field;
+                const resolved = fieldName ?? this._table.primaryKey.property.logicalName;
                 const operation = value.operation === "average" ? "avg" : value.operation;
-                initialAttributes.push({ name: fieldName, alias, aggregate: operation });
+                initialAttributes.push({ name: resolved, alias, aggregate: operation });
             }
         }
 
@@ -1077,34 +1083,12 @@ export class EntityQueryBuilder<
         lines.push(`<fetch ${fetchAttrs.join(" ")}>`);
         lines.push(`  <entity name="${this._table.logicalName}">`);
 
-        for (const attr of this._getEffectiveAttributes()) {
-            const attrParts = [`name="${attr.name}"`, `alias="${attr.alias}"`];
-            if (attr.aggregate) attrParts.push(`aggregate='${attr.aggregate}'`);
-            if (attr.groupby) attrParts.push(`groupby='true'`);
-            if (attr.dategrouping) attrParts.push(`dategrouping='${attr.dategrouping}'`);
-            if (attr.distinct) attrParts.push(`distinct='true'`);
-            if (attr.rowaggregate) attrParts.push(`rowaggregate='${attr.rowaggregate}'`);
-            lines.push(`    <attribute ${attrParts.join(" ")} />`);
-        }
-
-        for (const order of this._orders) {
-            const parts = [];
-            if (order.entityname) parts.push(`entityname='${order.entityname}'`);
-            parts.push(`attribute='${order.attribute}'`);
-            if (order.descending) parts.push(`descending='true'`);
-            lines.push(`    <order ${parts.join(" ")} />`);
-        }
-
-        if (this._filters.length > 0) {
-            lines.push(`    <filter type="and">`);
-            for (const c of this._filters) {
-                lines.push(`      ${c}`);
-            }
-            lines.push(`    </filter>`);
-        }
+        lines.push(...renderAttributeLines(this._getEffectiveAttributes(), "    "));
+        lines.push(...renderOrderLines(this._orders, "    ", aggregateAliasesOf(this)));
+        lines.push(...renderFilterLines(this._filters, "    "));
 
         for (const link of this._links) {
-            lines.push(...this._renderLinkEntity(link, "    "));
+            lines.push(...renderLinkLines(link, "    "));
         }
 
         lines.push(`  </entity>`);
@@ -1114,74 +1098,6 @@ export class EntityQueryBuilder<
 
     static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean {
         return linkType === "any" || linkType === "not any" || linkType === "all" || linkType === "not all" || linkType === "exists" || linkType === "in";
-    }
-
-    private _renderLinkEntity(
-        link: {
-            name: string;
-            alias: string;
-            from: string;
-            to: string;
-            linkType: FetchLinkType;
-            builder: EntityQueryBuilder<any, any> | FilterCollector<any>;
-            intersect?: boolean;
-        },
-        indent: string,
-    ): string[] {
-        const lines: string[] = [];
-        const linkAttrs: string[] = [
-            `name="${link.name}"`,
-            `from="${link.from}"`,
-            `to="${link.to}"`,
-            `alias="${link.alias}"`,
-            `link-type="${link.linkType}"`,
-        ];
-        if (link.intersect) linkAttrs.push(`intersect="true"`);
-
-        lines.push(`${indent}<link-entity ${linkAttrs.join(" ")}>`);
-
-        const childIndent = `${indent}  `;
-        const filterOnly = link.builder instanceof FilterCollector || EntityQueryBuilder._isFilterOnlyLinkType(link.linkType);
-
-        const builderFilters: string[] = (link.builder as any)._filters ?? [];
-        if (builderFilters.length > 0) {
-            lines.push(`${childIndent}<filter type="and">`);
-            for (const c of builderFilters) {
-                lines.push(`${childIndent}  ${c}`);
-            }
-            lines.push(`${childIndent}</filter>`);
-        }
-
-        if (!filterOnly) {
-            const eb = link.builder as EntityQueryBuilder<any, any>;
-            for (const nestedAttr of eb._getEffectiveAttributes()) {
-                const attrParts = [`name="${nestedAttr.name}"`, `alias="${nestedAttr.alias}"`];
-                if (nestedAttr.aggregate) attrParts.push(`aggregate='${nestedAttr.aggregate}'`);
-                if (nestedAttr.groupby) attrParts.push(`groupby='true'`);
-                if (nestedAttr.dategrouping) attrParts.push(`dategrouping='${nestedAttr.dategrouping}'`);
-                if (nestedAttr.distinct) attrParts.push(`distinct='true'`);
-                if (nestedAttr.rowaggregate) attrParts.push(`rowaggregate='${nestedAttr.rowaggregate}'`);
-                lines.push(`${childIndent}<attribute ${attrParts.join(" ")} />`);
-            }
-
-            const ebOrders: OrderDef[] = (eb as any)._orders ?? [];
-            for (const order of ebOrders) {
-                const parts = [`attribute='${order.attribute}'`];
-                if (order.descending) parts.push(`descending='true'`);
-                lines.push(`${childIndent}<order ${parts.join(" ")} />`);
-            }
-        }
-
-        if (!(link.builder instanceof FilterCollector)) {
-            const eb = link.builder as EntityQueryBuilder<any, any>;
-            const ebLinks: any[] = (eb as any)._links ?? [];
-            for (const nestedLink of ebLinks) {
-                lines.push(...this._renderLinkEntity(nestedLink, childIndent));
-            }
-        }
-
-        lines.push(`${indent}</link-entity>`);
-        return lines;
     }
 
     toString(): string {
@@ -1197,22 +1113,7 @@ export class EntityQueryBuilder<
     }
 
     private async _transformRow(v: any): Promise<TResult> {
-        const aliasInfo = this._buildAliasInfo();
-        if (aliasInfo.size > 0) {
-            const result: Record<string | symbol, any> = {};
-            const recordId = v[this._table.primaryKey.property.fromDataverseName] ?? v[this._table.primaryKey.property.logicalName] ?? "";
-            const ctx = { table: this._table, client: this._table.client, recordId };
-            for (const [alias, info] of aliasInfo) {
-                if (info.name in v) {
-                    result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
-                } else {
-                    result[alias] = info.getDefault();
-                }
-            }
-            result[ETAG] = v["@odata.etag"];
-            return result as TResult;
-        }
-        return (await this._table.transformValueFromDataverse(v)) as TResult;
+        return (await transformRowWithAliases(this._table, this._buildAliasInfo(), v)) as TResult;
     }
 
     public async execute(options?: ExecuteOptions): Promise<TResult[]> {
@@ -1243,40 +1144,8 @@ export class EntityQueryBuilder<
 
     private _buildAliasInfo(): Map<string, AliasInfo> {
         const map = new Map<string, AliasInfo>();
-        this._collectAliases(this, map);
+        collectAliasesRecursive(this, map);
         return map;
-    }
-
-    private _collectAliases(
-        builder: EntityQueryBuilder<any, any>,
-        map: Map<string, AliasInfo>,
-    ): void {
-        for (const attr of builder._getEffectiveAttributes()) {
-            const fields = builder._table.fields as Record<string, any>;
-            const entry = Object.entries(fields).find(
-                ([_, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name,
-            );
-            if (entry) {
-                const fieldDef = entry[1];
-                const dataverseName = fieldDef.fromDataverseName ?? fieldDef.logicalName;
-                map.set(attr.alias, {
-                    field: FieldRef.fromPath(fieldDef, dataverseName),
-                    getDefault: () => fieldDef.getDefault?.(),
-                    name: attr.alias,
-                });
-            } else {
-                map.set(attr.alias, {
-                    field: undefined,
-                    getDefault: () => undefined,
-                    name: attr.name,
-                });
-            }
-        }
-        for (const link of builder._links) {
-            if (!EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) {
-                this._collectAliases(link.builder as EntityQueryBuilder<any, any>, map);
-            }
-        }
     }
 }
 
@@ -1287,13 +1156,15 @@ export function fetchXml<TProps extends GenericProperties>(table: DataverseTable
 // --- Initial query implementation ---
 
 class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlInitial<TProps> {
-    #builder: EntityQueryBuilder<TProps, Infer<TProps>>
+    #builder: EntityQueryBuilder<TProps, Infer<TProps> & Record<string, any>>
+    /** Result record type, for `typeof q.T` lookups. */
+    T!: Infer<TProps>
 
     constructor(table: DataverseTable<TProps>) {
         this.#builder = new EntityQueryBuilder(table)
     }
 
-    select(): FetchXmlSelectQuery<TProps, TProps>
+    select(): FetchXmlSelectQuery<TProps, Infer<TProps> & Record<string, any>>
     select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]> }>
     select(selector?: any): any {
         if (selector) {
@@ -1352,15 +1223,15 @@ class FetchXmlInitialImpl<TProps extends GenericProperties> implements FetchXmlI
         return this.#builder.toString()
     }
 
-    async execute(options?: ExecuteOptions): Promise<Infer<TProps>[]> {
+    async execute(options?: ExecuteOptions): Promise<(Infer<TProps> & Record<string, any>)[]> {
         return this.#builder.execute(options)
     }
 
-    async *iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>> {
+    async *iterate(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps> & Record<string, any>> {
         yield* this.#builder.iterate(options)
     }
 
-    async *iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<Infer<TProps>[]> {
+    async *iteratePages(options?: ExecuteOptions & { pageSize?: number }): AsyncGenerator<(Infer<TProps> & Record<string, any>)[]> {
         yield* this.#builder.iteratePages(options)
     }
 }

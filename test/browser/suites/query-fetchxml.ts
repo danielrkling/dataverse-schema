@@ -1,6 +1,6 @@
 import { FieldProxy, fetchXml, eq, gt, lt, and, startsWith, groupby, sum, count, min, max, average } from "../../../src"
 import { Suite } from "../harness/runner"
-import { assert, assertEquals } from "../harness/assert"
+import { assert, assertEquals, skip } from "../harness/assert"
 import { seedParent, seedRow } from "../harness/seed"
 import { MainFields, ParentFields } from "../harness/tables"
 
@@ -158,6 +158,40 @@ export const fetchxmlSuite: Suite = {
             .execute()
           const ints = rows.map((r) => r.int)
           assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
+        },
+      },
+      {
+        name: "aggregate orderby uses the group alias",
+        fn: async () => {
+          // Per the aggregate docs, ordering grouped results uses <order alias=...>.
+          const rows = await fetchXml(ctx.tables.TestTable)
+            .apply((f) => ({ byChoice: groupby(f.choice), n: count() }))
+            .filter(scoped)
+            .orderby((a) => a.byChoice, "asc")
+            .execute()
+          const choices = rows.map((r) => r.byChoice)
+          assertEquals(choices.length, 3, "three groups")
+          assertEquals(choices, [...choices].sort(), "groups ordered by alias asc")
+        },
+      },
+      {
+        name: "aggregate entityname orderby + top",
+        fn: async () => {
+          const rows = await fetchXml(ctx.tables.TestTable)
+            .apply((f) => ({ byChoice: groupby(f.choice), n: count() }))
+            .filter(scoped)
+            .top(2)
+            .execute()
+          assertEquals(rows.length, 2, "top limited grouped result to 2")
+        },
+      },
+      {
+        name: "fetchXml paging reaches rows beyond the first page",
+        fn: async () => {
+          // TODO: fetchXml queries need page/count/paging-cookie attributes to page
+          // past 5000 rows; currently only the first page is returned via
+          // @odata.nextLink (no page attributes are sent). Skip until implemented.
+          skip("FetchXML paging (page/count/paging-cookie) not implemented yet")
         },
       },
     ]

@@ -189,11 +189,11 @@ declare class Aggregation<V = any> {
   constructor(operation: string, field?: string, fieldRef?: FieldRef<V>);
 }
 type NumericRef = FieldRef<number> | FieldRef<number | null>;
-type MinMaxRef = NumericRef | FieldRef<Date> | FieldRef<Date | null>;
-declare function sum(field: NumericRef): Aggregation<number>;
-declare function min(field: MinMaxRef): Aggregation<number | Date>;
-declare function max(field: MinMaxRef): Aggregation<number | Date>;
-declare function average(field: NumericRef): Aggregation<number>;
+declare function sum<V extends number>(field: NumericRef): Aggregation<number>;
+/** min/max keep the field's value type: a date column yields `Date`, a numeric one `number`. */
+declare function min<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V>;
+declare function max<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V>;
+declare function average<V extends number>(field: NumericRef): Aggregation<number>;
 declare function count(field?: FieldRef<any>): Aggregation<number>;
 declare function groupby<V>(field: FieldRef<V>): GroupByExpr<V>;
 //#endregion
@@ -906,16 +906,16 @@ declare class DataverseIntersectTable<T1 extends GenericProperties, T2 extends G
 }
 //#endregion
 //#region src/fields.d.ts
+type DefaultValue<T> = T | (() => T);
 type FieldOptions<T> = {
-  default?: T;
+  default?: DefaultValue<T>;
   readonly?: boolean;
-  /**
-   * Rejects `null`, `undefined`, and empty/whitespace-only strings at
-   * validation time. Most useful on nullable fields, whose schemas otherwise
-   * accept `null`.
-   */
   required?: boolean;
   schema?: ValidationSchema<T>;
+};
+type FieldDefinition<T> = {
+  defaultValue: DefaultValue<T>;
+  schema: ValidationSchema<T>;
 };
 declare const SKIP: unique symbol;
 type TransformContext = {
@@ -953,6 +953,8 @@ declare abstract class FieldBase<T> implements ValidationSchema<T> {
    * Lets any Standard Schema–aware consumer validate the field directly.
    */
   get "~standard"(): ValidationSchema<T>["~standard"];
+  /** No runtime value. Use with typeof field.T */
+  T: T;
   /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
   schemaName: string;
   /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
@@ -962,15 +964,20 @@ declare abstract class FieldBase<T> implements ValidationSchema<T> {
   kind: string;
   type: string;
   schema: ValidationSchema<T>;
-  constructor(name: string, defaults: {
-    defaultValue: T;
-    schema: ValidationSchema<T>;
-  }, options?: FieldOptions<T>);
+  constructor(name: string, definition: FieldDefinition<T>, options?: FieldOptions<T>);
   getDefault(): T;
   getReadOnly(): boolean;
   transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T>;
   transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown;
   afterSave?(ctx: TransformContext, value: any): Promise<void>;
+}
+declare class NullableField<T, F extends FieldBase<T> = FieldBase<T>> extends FieldBase<T | null> {
+  readonly inner: F;
+  kind: F["kind"];
+  type: F["type"];
+  constructor(inner: F, options?: FieldOptions<T | null>);
+  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | null | Promise<T | null>;
+  transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown;
 }
 declare class BooleanField extends FieldBase<boolean> {
   kind: "value";
@@ -978,23 +985,11 @@ declare class BooleanField extends FieldBase<boolean> {
   constructor(name: string, options?: FieldOptions<boolean>);
   transformValueFromDataverse(value: any): boolean;
 }
-declare class NullableBooleanField extends FieldBase<boolean | null> {
-  kind: "value";
-  type: "boolean";
-  constructor(name: string, options?: FieldOptions<boolean | null>);
-  transformValueFromDataverse(value: any): boolean | null;
-}
 declare class NumberField extends FieldBase<number> {
   kind: "value";
   type: "number";
   constructor(name: string, options?: FieldOptions<number>);
-  transformValueFromDataverse(value: any): number;
-}
-declare class NullableNumberField extends FieldBase<number | null> {
-  kind: "value";
-  type: "number";
-  constructor(name: string, options?: FieldOptions<number | null>);
-  transformValueFromDataverse(value: any): number | null;
+  transformValueFromDataverse(value: unknown): number;
 }
 declare class StringField extends FieldBase<string> {
   kind: "value";
@@ -1002,17 +997,11 @@ declare class StringField extends FieldBase<string> {
   constructor(name: string, options?: FieldOptions<string>);
   transformValueFromDataverse(value: any): string;
 }
-declare class NullableStringField extends FieldBase<string | null> {
-  kind: "value";
-  type: "string";
-  constructor(name: string, options?: FieldOptions<string | null>);
-  transformValueFromDataverse(value: any): string | null;
-}
 declare class PrimaryKeyField extends FieldBase<GUID> {
   kind: "value";
   type: "primaryKey";
   constructor(name: string, options?: FieldOptions<GUID>);
-  getDefault(): GUID;
+  transformValueFromDataverse(value: unknown): GUID;
 }
 declare class ListField<T extends string | number> extends FieldBase<T | null> {
   kind: "value";
@@ -1024,71 +1013,65 @@ declare class ListField<T extends string | number> extends FieldBase<T | null> {
  * Field for Dataverse multi-select choice (MultiSelectPicklist) columns.
  *
  * The Web API stores these as a comma-delimited string of option values
- * (e.g. `"3,4,5"`). This field transforms that string to a `number[]` when
+ * (e.g. `"3,4,5"`). This field transforms that string to an array of configured string labels when
  * reading and back to a CSV string when writing. An empty selection reads as
  * `[]` and writes as `null` (which clears the column).
  *
  * @example
  * const table = new DataverseTable({
- *   months: multiChoice("nnsyc200_months", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
- * });
- * // Infer<typeof table>["months"] → number[]
+ *   months: multiChoice("nnsyc200_months", {
+ *     1: "January",
+ *     2: "February",
+ *     3: "March",
+ * }),
+ * // Infer<typeof table>["months"] → ("January" | "February" | "March")[]
  */
-declare class MultiChoiceField extends FieldBase<number[]> {
+declare class MultiChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T][]> {
   kind: "value";
   type: "multiChoice";
-  readonly choices: readonly number[];
-  constructor(name: string, choices: Array<number> | Record<number, string>, options?: FieldOptions<number[]>);
-  getDefault(): number[];
-  transformValueFromDataverse(value: any): number[];
-  transformValueToDataverse(value: any): string | null;
+  /** Dataverse option value → application label. */
+  readonly choices: Readonly<T>;
+  /** Labels in option-value order. */
+  readonly labels: readonly T[keyof T][];
+  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T][]>);
+  /** Converts one Dataverse numeric option value to its typed label. */
+  fromChoiceValue(value: number): T[keyof T];
+  /** Converts one typed label to its Dataverse numeric option value. */
+  toChoiceValue(value: T[keyof T]): number;
+  transformValueFromDataverse(value: unknown): T[keyof T][];
+  transformValueToDataverse(value: unknown): string | null;
 }
 declare class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
-  #private;
   kind: "value";
   type: "choice";
-  /** Allowed labels (values of the choice map), frozen. */
-  readonly choices: readonly T[keyof T][];
+  readonly choices: Readonly<T>;
+  readonly labels: readonly T[keyof T][];
   constructor(name: string, choices: T, options?: FieldOptions<T[keyof T]>);
+  /** Converts a Dataverse numeric option value to its typed label. */
+  fromChoiceValue(value: number): T[keyof T];
+  /** Converts a typed label to its Dataverse numeric option value. */
+  toChoiceValue(value: T[keyof T]): number;
   transformValueFromDataverse(value: any): T[keyof T];
   transformValueToDataverse(value: any): number;
 }
-declare class NullableChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T] | null> {
-  #private;
-  kind: "value";
-  type: "choice";
-  /** Allowed labels (values of the choice map), frozen. */
-  readonly choices: readonly T[keyof T][];
+declare class NullableChoiceField<T extends Record<number, string>> extends NullableField<T[keyof T], ChoiceField<T>> {
   constructor(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>);
-  transformValueFromDataverse(value: any): T[keyof T] | null;
-  transformValueToDataverse(value: any): number | null;
+  get choices(): Readonly<T>;
+  get labels(): readonly T[keyof T][];
+  fromChoiceValue(value: number): T[keyof T];
+  toChoiceValue(value: T[keyof T]): number;
 }
 declare class DateTimeField extends FieldBase<Date> {
   kind: "value";
   type: "dateTime";
   constructor(name: string, options?: FieldOptions<Date>);
-  getDefault(): Date;
   transformValueFromDataverse(value: any): Date;
-}
-declare class NullableDateTimeField extends FieldBase<Date | null> {
-  kind: "value";
-  type: "dateTime";
-  constructor(name: string, options?: FieldOptions<Date | null>);
-  transformValueFromDataverse(value: any): Date | null;
 }
 declare class DateField extends FieldBase<Date> {
   kind: "value";
   type: "dateOnly";
   constructor(name: string, options?: FieldOptions<Date>);
-  getDefault(): Date;
   transformValueFromDataverse(value: any): Date;
-  transformValueToDataverse(value: any): string | null;
-}
-declare class NullableDateField extends FieldBase<Date | null> {
-  kind: "value";
-  type: "dateOnly";
-  constructor(name: string, options?: FieldOptions<Date | null>);
-  transformValueFromDataverse(value: any): Date | null;
   transformValueToDataverse(value: any): string | null;
 }
 /**
@@ -1153,6 +1136,21 @@ declare class JsonField<T> extends FieldBase<T> {
   });
   transformValueFromDataverse(value: any): Promise<T>;
   transformValueToDataverse(value: any): string | null;
+}
+declare class NullableBooleanField extends NullableField<boolean, BooleanField> {
+  constructor(name: string, options?: FieldOptions<boolean | null>);
+}
+declare class NullableNumberField extends NullableField<number, NumberField> {
+  constructor(name: string, options?: FieldOptions<number | null>);
+}
+declare class NullableStringField extends NullableField<string, StringField> {
+  constructor(name: string, options?: FieldOptions<string | null>);
+}
+declare class NullableDateTimeField extends NullableField<Date, DateTimeField> {
+  constructor(name: string, options?: FieldOptions<Date | null>);
+}
+declare class NullableDateField extends NullableField<Date, DateField> {
+  constructor(name: string, options?: FieldOptions<Date | null>);
 }
 /**
  * Creates a boolean-typed Dataverse column definition.
@@ -1254,7 +1252,7 @@ declare function list<const T extends string | number>(name: string, list: Reado
  * });
  * // Infer<typeof table>["months"] → number[]
  */
-declare function multiChoice(name: string, choices: Array<number> | Record<number, string>, options?: FieldOptions<number[]>): MultiChoiceField;
+declare function multiChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T][]>): MultiChoiceField<T>;
 /**
  * Creates a choice/option-set column definition. Maps Dataverse numeric option values
  * to human-readable string labels.
@@ -1269,7 +1267,7 @@ declare function multiChoice(name: string, choices: Array<number> | Record<numbe
  * });
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
  */
-declare function choice<T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>): ChoiceField<T>;
+declare function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>): ChoiceField<T>;
 /**
  * Creates a nullable choice/option-set column definition (allows `null`).
  *
@@ -1283,7 +1281,7 @@ declare function choice<T extends Record<number, string>>(name: string, choices:
  * });
  * // Infer<typeof table>["priority"] → "Low" | "High" | null
  */
-declare function nullableChoice<T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
+declare function nullableChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
 /**
  * Creates a date-time column definition (maps to JavaScript `Date`).
  *
@@ -2140,6 +2138,7 @@ declare class DataverseClient {
    * })
    */
   batch(fn: () => Promise<void>): Promise<any>;
+  private _batchRequestLine;
   _processBatch(resource: string, options: RequestInit): boolean;
   _changeSetTxs: NestedStringArray | null;
   /**
@@ -2271,6 +2270,8 @@ type AttrDef = {
 };
 type OrderDef = {
   attribute: string;
+  /** The aggregate/column alias to order by (used instead of `attribute` in aggregate queries). */
+  alias?: string;
   entityname?: string;
   descending?: boolean;
 };
@@ -2308,6 +2309,8 @@ type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends R
   toString(): string;
 };
 interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends Record<string, any>> {
+  /** Result record type, for `typeof q.T` lookups. Mirrors `DataverseTable.T`. */
+  T: TResult;
   select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]>; }>;
   filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlSelectQuery<TProps, TResult>;
   join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps>(linkType: FilterOnlyLinkType, table: TDataverseTable, from: TFrom, to: TTo, subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void, intersect?: boolean): FetchXmlSelectQuery<TProps, TResult>;
@@ -2332,7 +2335,9 @@ interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult extends 
   }): AsyncGenerator<TResult[]>;
 }
 interface FetchXmlInitial<TProps extends GenericProperties> {
-  select(): FetchXmlSelectQuery<TProps, TProps>;
+  /** Result record type, for `typeof q.T` lookups. Mirrors `DataverseTable.T`. */
+  T: Infer<TProps>;
+  select(): FetchXmlSelectQuery<TProps, Infer<TProps> & Record<string, any>>;
   select<R extends Record<string, keyof TProps>>(selector: (fields: FieldSelector<TProps>) => R): FetchXmlSelectQuery<TProps, { [K in keyof R]: Infer<TProps[R[K]]>; }>;
   apply<R extends Record<string, GroupByExpr<any> | Aggregation<any>>>(expr: (f: FieldProxy<TProps>) => R): FetchXmlAggregateQuery<TProps, ApplyResultType<R>>;
   filter(filter: string | FilterExpr | ((f: FieldProxy<TProps>) => string | FilterExpr)): FetchXmlInitial<TProps>;
@@ -2367,6 +2372,8 @@ declare class FilterCollector<TProps extends GenericProperties = any> {
 declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
   private _linkAlias;
   private _table;
+  /** Result record type, for `typeof q.T` lookups. */
+  T: TResult;
   private _attributes;
   private _links;
   protected _filters: string[];
@@ -2404,16 +2411,15 @@ declare class FetchXmlAggregateQuery<TProps extends GenericProperties, TResult e
     pageSize?: number;
   }): AsyncGenerator<TResult[]>;
   private _buildAliasInfo;
-  private _collectAliases;
   private static _isFilterOnlyLinkType;
-  private _renderLinkEntity;
-  private _collectAliasesFromBuilder;
 }
 declare class EntityQueryBuilder<TProps extends GenericProperties, TResult extends Record<string, any> = {}> {
   protected _linkAlias: {
     value: number;
   };
   private _table;
+  /** Result record type, for `typeof q.T` lookups. */
+  T: TResult;
   private _attributes;
   protected _links: Array<{
     name: string;
@@ -2457,7 +2463,6 @@ declare class EntityQueryBuilder<TProps extends GenericProperties, TResult exten
   toAst(): FetchXmlSelectAst;
   toXml(): string;
   static _isFilterOnlyLinkType(linkType: FetchLinkType): boolean;
-  private _renderLinkEntity;
   toString(): string;
   protected _applyExecuteOptions(options?: ExecuteOptions): void;
   private _transformRow;
@@ -2469,7 +2474,6 @@ declare class EntityQueryBuilder<TProps extends GenericProperties, TResult exten
     pageSize?: number;
   }): AsyncGenerator<TResult[]>;
   private _buildAliasInfo;
-  private _collectAliases;
 }
 declare function fetchXml<TProps extends GenericProperties>(table: DataverseTable<TProps>): FetchXmlInitial<TProps>;
 //#endregion
@@ -2656,14 +2660,30 @@ declare class SyncEngine {
   onMutationsChanged(listener: () => void): () => void;
   private notifyMutationsChanged;
   private db;
-  getDB(): Promise<IDBPDatabase<unknown>>;
+  getDB(): Promise<IDBPDatabase>;
   /**
    * Registers a per-collection cache store (keyed by collection id). If the
    * database is already open without this store, it is reopened with a
    * bumped version so the upgrade callback can create it. The returned
    * promise resolves once the store is safe to read/write.
+   *
+   * Reopens are serialized through {@link dbReopenPromise}: two collections
+   * registered back-to-back must not interleave openDB calls — the first
+   * bump creates a store the second bump would otherwise re-check against a
+   * stale connection. Before closing an open connection, in-flight fetches
+   * are aborted locally and cross-tab, because the new open transaction must
+   * wait for every other tab's connection to be closed on versionchange
+   * (each getDB registers that handler itself).
    */
   ensureCollectionStore(name: string): Promise<void>;
+  private dbReopenPromise;
+  /**
+   * Ensures the object store for a table's {@link entitySetName} exists. Same
+   * reopen machinery as {@link ensureCollectionStore}; use this when a table
+   * is registered after the DB has already been opened, because table stores
+   * are otherwise only created inside the upgrade callback.
+   */
+  ensureTableStore(entitySetName: string): Promise<void>;
   /**
    * Instantly aborts any in-flight remote server GET requests across all collections.
    */
@@ -2872,4 +2892,4 @@ declare function isMetaOnly(delta: unknown): boolean;
  */
 declare function valuesEqual(a: unknown, b: unknown): boolean;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, type ErrorCategory, type ErrorGuidance, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, type SyncEngineOptions, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, toTimestampValue, valuesEqual, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DefaultValue, DeleteRecordOptions, DoesNotContainValues, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, type ErrorCategory, type ErrorGuidance, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, type SyncEngineOptions, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, toTimestampValue, valuesEqual, wrapString, xml };

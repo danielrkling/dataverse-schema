@@ -16,6 +16,7 @@ export function isNonEmptyString(value: unknown): value is string {
 
 export function wrapString(value: unknown): string {
   if (value === null) return "null";
+  if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") {
     if (rxGUID.test(value) || rxDateOnly.test(value)) {
       return value;

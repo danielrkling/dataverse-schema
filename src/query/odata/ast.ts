@@ -55,7 +55,7 @@ export type ODataAggregateAst = {
 };
 
 export function toODataPath(path: FieldPath): ODataPath {
-  return fieldPathName(path);
+  return fieldPathName(path, "odata");
 }
 
 export function toODataFilterNode(node: FilterNode): ODataFilterNode {

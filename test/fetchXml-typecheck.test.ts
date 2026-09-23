@@ -1,8 +1,8 @@
 import { expectTypeOf, test } from "vitest"
 import { fetchXml, Infer, FieldRef, eq, FetchXmlInitial, FetchXmlSelectQuery } from "../src"
-import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, lookup, lookupId, collection } from "../src"
+import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection } from "../src"
 import { DataverseClient } from "../src/client"
-import { sum, count, groupby, average } from "../src"
+import { sum, count, groupby, average, min, max } from "../src"
 
 const client = new DataverseClient({ url: "http://localhost" })
 
@@ -415,4 +415,33 @@ test("aggregate intersect join merges result types", () => {
       }))
     )
   expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ totalAge: number; locationCount: number }[]>()
+})
+
+// --- Aggregate value-type inference + T property ---
+
+const Audit = new DataverseTable({
+  client, entitySetName: "audits", logicalName: "audit",
+  fields: {
+    id: primaryKey("auditid"),
+    createdOn: datetime("createdon_audit"),
+    score: number("score"),
+  },
+})
+
+test("aggregate min/max infer number vs date from field type", () => {
+  const q = fetchXml(Audit).apply(f => ({ first: min(f.createdOn), best: max(f.score), avgScore: average(f.score) }))
+  expectTypeOf<(typeof q)["T"]["first"]>().toEqualTypeOf<Date>()
+  expectTypeOf<(typeof q)["T"]["best"]>().toEqualTypeOf<number>()
+  expectTypeOf<(typeof q)["T"]["avgScore"]>().toEqualTypeOf<number>()
+})
+
+test("queries expose their result type as T", () => {
+  const s = fetchXml(Person).select(f => ({ x: f.name }))
+  expectTypeOf<(typeof s)["T"]>().toEqualTypeOf<{ x: string }>()
+
+  const all = fetchXml(Person).select()
+  expectTypeOf<(typeof all)["T"]>().toExtend<Infer<typeof Person>>()
+
+  const agg = fetchXml(Person).apply(f => ({ totalAge: sum(f.age), people: count() }))
+  expectTypeOf<(typeof agg)["T"]>().toEqualTypeOf<{ totalAge: number; people: number }>()
 })

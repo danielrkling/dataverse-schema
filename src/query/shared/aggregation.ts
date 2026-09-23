@@ -26,11 +26,23 @@ export class Aggregation<V = any> {
 }
 
 type NumericRef = FieldRef<number> | FieldRef<number | null>
-type MinMaxRef = NumericRef | FieldRef<Date> | FieldRef<Date | null>
 
-export function sum(field: NumericRef): Aggregation<number> { return new Aggregation("sum", fieldName(field), field as FieldRef<number>) }
-export function min(field: MinMaxRef): Aggregation<number | Date> { return new Aggregation("min", fieldName(field), field as FieldRef<number | Date>) }
-export function max(field: MinMaxRef): Aggregation<number | Date> { return new Aggregation("max", fieldName(field), field as FieldRef<number | Date>) }
-export function average(field: NumericRef): Aggregation<number> { return new Aggregation("average", fieldName(field), field as FieldRef<number>) }
+export function sum<V extends number>(field: NumericRef): Aggregation<number> {
+  return new Aggregation("sum", fieldName(field), field as FieldRef<number>)
+}
+
+/** min/max keep the field's value type: a date column yields `Date`, a numeric one `number`. */
+export function min<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V> {
+  return new Aggregation<V>("min", fieldName(field), field as FieldRef<V>)
+}
+
+export function max<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V> {
+  return new Aggregation<V>("max", fieldName(field), field as FieldRef<V>)
+}
+
+export function average<V extends number>(field: NumericRef): Aggregation<number> {
+  return new Aggregation("average", fieldName(field), field as FieldRef<number>)
+}
+
 export function count(field?: FieldRef<any>): Aggregation<number> { return new Aggregation<number>("count", field ? fieldName(field) : undefined, field as FieldRef<number> | undefined) }
 export function groupby<V>(field: FieldRef<V>): GroupByExpr<V> { return new GroupByExpr(fieldName(field), field) }

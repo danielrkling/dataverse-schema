@@ -200,6 +200,34 @@ export const odataSuite: Suite = {
           assertEquals(rows[0].n, 5, "total count")
         },
       },
+      {
+        name: "apply groupby + $orderby on group alias",
+        fn: async () => {
+          // Dataverse support for $orderby after $apply (by alias) varies by org —
+          // failure here means the org rejects it; use FetchXML aggregates instead.
+          const rows = await fetchOdata(ctx.tables.TestTable)
+            .apply((f) => ({ byChoice: groupby(f.choice), n: count() }))
+            .filter(scope)
+            .orderby((a: any) => a.byChoice, "asc")
+            .execute()
+          const choices = rows.map((r) => r.byChoice)
+          assertEquals(choices.length, 3, "three groups")
+          assertEquals(choices, [...choices].sort(), "groups ordered by alias asc")
+        },
+      },
+      {
+        name: "apply aggregate with $top after $apply",
+        fn: async () => {
+          // $top following $apply is not universally supported — if the org rejects
+          // it, this test reports the server error (see TODO.md audit note).
+          const rows = await fetchOdata(ctx.tables.TestTable)
+            .apply((f) => ({ byChoice: groupby(f.choice), n: count() }))
+            .filter(scope)
+            .top(2)
+            .execute()
+          assertEquals(rows.length, 2, "top restricted apply to 2 groups")
+        },
+      },
     ]
   },
 }

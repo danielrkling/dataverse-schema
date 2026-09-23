@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
   primaryKey, string, number, choice, fetchXml, eq, gt, and, FieldRef,
-  groupby, sum, count, average,
+  groupby, sum, count, average, lookupId,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -167,7 +167,7 @@ test("aggregate query supports filter, top and orderby on aliases", () => {
   const xml = q.toXml()
   expect(xml).toContain(`top='4'`)
   expect(xml).toContain(`<condition attribute="statuscode" operator="eq" value="1" />`)
-  expect(xml).toContain(`<order attribute='total' descending='true' />`)
+  expect(xml).toContain(`<order alias='total' descending='true' />`)
 })
 
 test("aggregate query orderby supports entityname overload", () => {
@@ -202,6 +202,20 @@ test("average aggregates serialize as FetchXML avg", () => {
   const q = fetchXml(Account)
     .apply(f => ({ mean: average(f.revenue), byStatus: groupby(f.status) }))
   expect(q.toXml()).toContain(`<attribute name="revenue" alias="mean" aggregate='avg' />`)
+})
+
+test("lookupId aggregates/groups render the logical name in FetchXML", () => {
+  const Parent = new DataverseTable({
+    client, entitySetName: "parents", logicalName: "parent",
+    fields: { id: primaryKey("parentid"), name: string("name") },
+  })
+  const Child = new DataverseTable({
+    client, entitySetName: "children", logicalName: "child",
+    fields: { id: primaryKey("childid"), parent: lookupId("parentid", () => Parent) },
+  })
+  const xml = fetchXml(Child).apply(f => ({ byParent: groupby(f.parent), n: count() })).toXml()
+  expect(xml).toContain(`<attribute name="parentid" alias="byParent" groupby='true' />`)
+  expect(xml).not.toContain("_parentid_value")
 })
 
 test("chained filters render as siblings inside one filter element", () => {

@@ -902,15 +902,18 @@ export class DataverseClient {
         return result
     }
 
+    private _batchRequestLine(resource: string, method: string | undefined, options: RequestInit): NestedStringArray {
+        const lines: NestedStringArray = [`${method} /api/data/v9.2/${resource} HTTP/1.1`];
+        const contentType = (options.headers as Record<string, string>)?.["Content-Type"];
+        if (contentType) lines.push(`Content-Type: ${contentType}`);
+        lines.push("", options.body?.toString() ?? "");
+        return lines;
+    }
+
     _processBatch(resource: string, options: RequestInit): boolean {
         if (!this._batchTxs) return false;
 
-        this._batchTxs.push([
-            `${options.method} /api/data/v9.2/${resource} HTTP/1.1`,
-            `Content-Type: ${(options.headers as Record<string, string>)?.["Content-Type"]}`,
-            "",
-            options.body?.toString() ?? "",
-        ]);
+        this._batchTxs.push(this._batchRequestLine(resource, options.method, options));
 
         return true;
     }

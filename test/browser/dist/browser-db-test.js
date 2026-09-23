@@ -6,6 +6,7 @@
   const rxDateOnly = /^\d{4}-\d{2}-\d{2}$/;
   function wrapString(value) {
     if (value === null) return "null";
+    if (value instanceof Date) return value.toISOString();
     if (typeof value === "string") {
       if (rxGUID.test(value) || rxDateOnly.test(value)) {
         return value;
@@ -696,14 +697,16 @@
       });
       return result;
     }
+    _batchRequestLine(resource, method, options) {
+      const lines = [`${method} /api/data/v9.2/${resource} HTTP/1.1`];
+      const contentType = options.headers?.["Content-Type"];
+      if (contentType) lines.push(`Content-Type: ${contentType}`);
+      lines.push("", options.body?.toString() ?? "");
+      return lines;
+    }
     _processBatch(resource, options) {
       if (!this._batchTxs) return false;
-      this._batchTxs.push([
-        `${options.method} /api/data/v9.2/${resource} HTTP/1.1`,
-        `Content-Type: ${options.headers?.["Content-Type"]}`,
-        "",
-        options.body?.toString() ?? ""
-      ]);
+      this._batchTxs.push(this._batchRequestLine(resource, options.method, options));
       return true;
     }
     _changeSetTxs = null;
@@ -882,11 +885,11 @@
     }
   }
 
-  function propertyName(property) {
-    return property.fromDataverseName ?? property.logicalName;
+  function propertyName(property, dialect) {
+    return dialect === "odata" ? property.fromDataverseName ?? property.logicalName : property.logicalName ?? property.fromDataverseName;
   }
-  function fieldPathName(path) {
-    return path.map(propertyName).join("/");
+  function fieldPathName(path, dialect = "fetchXml") {
+    return path.map((p) => propertyName(p, dialect)).join("/");
   }
 
   class GroupByExpr {
@@ -918,7 +921,7 @@
   }
 
   function toODataPath(path) {
-    return fieldPathName(path);
+    return fieldPathName(path, "odata");
   }
   function toODataFilterNode(node) {
     switch (node.type) {
@@ -2012,6 +2015,9 @@
     }
     return result;
   }
+  function asDefaultFactory(value) {
+    return typeof value === "function" ? value : () => value;
+  }
   const SKIP = Symbol("skip");
   class FieldBase {
     /**
@@ -2021,6 +2027,8 @@
     get "~standard"() {
       return this.schema["~standard"];
     }
+    /** No runtime value. Use with typeof field.T */
+    T;
     /** Canonical Dataverse schema name (e.g. `nnsyc200_Test_Lookup`). */
     schemaName;
     /** Lowercased logical name (e.g. `nnsyc200_test_lookup`), used for `$select`, `$filter`, FetchXML attributes. */
@@ -2030,20 +2038,21 @@
     kind;
     type;
     schema;
-    #default;
+    #getDefault;
     #readOnly;
-    constructor(name, defaults, options) {
+    constructor(name, definition, options) {
       this.schemaName = name;
       this.logicalName = name.toLowerCase();
       this.fromDataverseName = this.logicalName;
       this.toDataverseName = this.logicalName;
-      this.#default = options?.default ?? defaults.defaultValue;
+      const defaultValue = options && Object.hasOwn(options, "default") ? options.default : definition.defaultValue;
+      this.#getDefault = asDefaultFactory(defaultValue);
       this.#readOnly = options?.readonly ?? false;
-      const base = options?.schema ?? defaults.schema;
-      this.schema = options?.required ? requiredOf(base) : base;
+      const baseSchema = options?.schema ?? definition.schema;
+      this.schema = options?.required ? requiredOf(baseSchema) : baseSchema;
     }
     getDefault() {
-      return this.#default;
+      return this.#getDefault();
     }
     getReadOnly() {
       return this.#readOnly;
@@ -2063,7 +2072,7 @@
     }
     transformValueFromDataverse(value) {
       if (typeof value === "string") return value.toLowerCase() === "true";
-      return value ?? false;
+      return value ?? this.getDefault();
     }
   }
   class NumberField extends FieldBase {
@@ -2073,11 +2082,12 @@
       super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
-      if (typeof value === "string") {
-        const n = Number(value);
-        return Number.isFinite(n) ? n : 0;
+      if (value == null) return this.getDefault();
+      const result = typeof value === "string" ? Number(value) : value;
+      if (typeof result !== "number" || !Number.isFinite(result)) {
+        throw new Error(`Invalid number value: ${value}`);
       }
-      return value ?? 0;
+      return result;
     }
   }
   class StringField extends FieldBase {
@@ -2087,7 +2097,7 @@
       super(name, { defaultValue: "", schema: STRING_SCHEMA }, options);
     }
     transformValueFromDataverse(value) {
-      return value ?? "";
+      return value ?? this.getDefault();
     }
   }
   class PrimaryKeyField extends FieldBase {
@@ -2095,72 +2105,124 @@
     type = "primaryKey";
     constructor(name, options) {
       super(name, {
-        defaultValue: "",
+        defaultValue: () => crypto.randomUUID(),
         schema: GUID_SCHEMA
       }, options);
     }
-    getDefault() {
-      return super.getDefault() || crypto.randomUUID();
+    transformValueFromDataverse(value) {
+      if (typeof value !== "string") {
+        throw new Error(
+          `Missing or invalid primary key value for "${this.logicalName}"`
+        );
+      }
+      return value;
     }
   }
   class MultiChoiceField extends FieldBase {
     kind = "value";
     type = "multiChoice";
+    /** Dataverse option value → application label. */
     choices;
+    /** Labels in option-value order. */
+    labels;
     constructor(name, choices, options) {
-      const values = (Array.isArray(choices) ? [...choices] : Object.keys(choices).map(Number)).sort((a, b) => a - b);
-      if (values.length === 0) throw new Error("Multi-choice fields require at least one value");
+      const choiceMap = Object.freeze({ ...choices });
+      const labels = Object.values(choiceMap);
+      if (labels.length === 0) {
+        throw new Error("Multi-choice fields require at least one option");
+      }
       super(name, {
-        defaultValue: [],
-        schema: arrayOf(checkSchema((value) => values.includes(value), `Value not in [${values}]`))
+        defaultValue: () => [],
+        schema: arrayOf(
+          checkSchema(
+            (value) => labels.includes(value),
+            `Value not in [${labels}]`
+          )
+        )
       }, options);
-      this.choices = Object.freeze(values);
+      this.choices = choiceMap;
+      this.labels = Object.freeze([...labels]);
     }
-    getDefault() {
-      return [...super.getDefault()];
+    /** Converts one Dataverse numeric option value to its typed label. */
+    fromChoiceValue(value) {
+      const label = this.choices[value];
+      if (label === void 0) {
+        throw new Error(
+          `Unknown multi-choice value: ${value} (${this.logicalName})`
+        );
+      }
+      return label;
+    }
+    /** Converts one typed label to its Dataverse numeric option value. */
+    toChoiceValue(value) {
+      for (const [key, label] of Object.entries(this.choices)) {
+        if (label === value) return Number(key);
+      }
+      throw new Error(`Unknown multi-choice label: ${value}`);
     }
     transformValueFromDataverse(value) {
-      if (value == null || value === "") return [];
-      if (Array.isArray(value)) return value.map((v) => Number(v));
-      return String(value).split(",").map((part) => Number(part.trim())).filter((n) => !Number.isNaN(n));
+      if (value == null || value === "") return this.getDefault();
+      const rawValues = Array.isArray(value) ? value : String(value).split(",");
+      return rawValues.map(
+        (raw) => this.fromChoiceValue(Number(String(raw).trim()))
+      );
     }
     transformValueToDataverse(value) {
       if (value == null) return null;
-      const arr = Array.isArray(value) ? value : [value];
-      if (arr.length === 0) return null;
-      return arr.map((v) => Number(v)).join(",");
+      if (!Array.isArray(value)) {
+        throw new Error(
+          `Multi-choice field "${this.logicalName}" requires an array of labels`
+        );
+      }
+      if (value.length === 0) return null;
+      return value.map((label) => this.toChoiceValue(label)).join(",");
     }
   }
   class ChoiceField extends FieldBase {
     kind = "value";
     type = "choice";
-    /** Allowed labels (values of the choice map), frozen. */
     choices;
-    #choices;
+    labels;
     constructor(name, choices, options) {
-      const firstKey = Object.keys(choices)[0];
-      if (firstKey === void 0) throw new Error("Choice fields require at least one option");
-      const values = Object.values(choices);
+      const choiceMap = Object.freeze({ ...choices });
+      const firstKey = Object.keys(choiceMap)[0];
+      if (firstKey === void 0) {
+        throw new Error("Choice fields require at least one option");
+      }
+      const labels = Object.values(choiceMap);
       super(name, {
-        defaultValue: choices[Number(firstKey)],
+        defaultValue: choiceMap[Number(firstKey)],
         schema: checkSchema(
-          (value) => values.includes(value),
-          `Value not in [${values}]`
+          (value) => labels.includes(value),
+          `Value not in [${labels}]`
         )
       }, options);
-      this.#choices = choices;
-      this.choices = Object.freeze([...values]);
+      this.choices = choiceMap;
+      this.labels = Object.freeze([...labels]);
     }
-    transformValueFromDataverse(value) {
-      const result = this.#choices[value];
-      if (result === void 0) throw new Error(`Unknown choice value: ${value} (${this.logicalName})`);
+    /** Converts a Dataverse numeric option value to its typed label. */
+    fromChoiceValue(value) {
+      const result = this.choices[value];
+      if (result === void 0) {
+        throw new Error(
+          `Unknown choice value: ${value} (${this.logicalName})`
+        );
+      }
       return result;
     }
-    transformValueToDataverse(value) {
-      for (const [k, v] of Object.entries(this.#choices)) {
-        if (v === value) return Number(k);
+    /** Converts a typed label to its Dataverse numeric option value. */
+    toChoiceValue(value) {
+      for (const [key, label] of Object.entries(this.choices)) {
+        if (label === value) return Number(key);
       }
       throw new Error(`Unknown choice label: ${value}`);
+    }
+    transformValueFromDataverse(value) {
+      if (value == null) return this.getDefault();
+      return this.fromChoiceValue(value);
+    }
+    transformValueToDataverse(value) {
+      return this.toChoiceValue(value);
     }
   }
   class DateTimeField extends FieldBase {
@@ -2168,12 +2230,9 @@
     type = "dateTime";
     constructor(name, options) {
       super(name, {
-        defaultValue: /* @__PURE__ */ new Date(),
+        defaultValue: () => /* @__PURE__ */ new Date(),
         schema: DATE_SCHEMA
       }, options);
-    }
-    getDefault() {
-      return /* @__PURE__ */ new Date();
     }
     transformValueFromDataverse(value) {
       if (value == null) return this.getDefault();
@@ -2187,12 +2246,9 @@
     type = "dateOnly";
     constructor(name, options) {
       super(name, {
-        defaultValue: parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
+        defaultValue: () => parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
         schema: DATE_SCHEMA
       }, options);
-    }
-    getDefault() {
-      return parseDateOnly((/* @__PURE__ */ new Date()).toISOString());
     }
     transformValueFromDataverse(value) {
       if (value == null) return this.getDefault();
@@ -2339,7 +2395,7 @@
     #getTable;
     constructor(name, getTable, options) {
       super(name, {
-        defaultValue: [],
+        defaultValue: () => [],
         schema: arrayOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields))))
       }, options);
       this.#getTable = getTable;
@@ -2979,7 +3035,7 @@
     async getDB() {
       if (!this.db) {
         const self = this;
-        this.db = await openDB(this.name, this.dbVersion, {
+        const dbPromise = openDB(this.name, this.dbVersion, {
           upgrade(database, _oldVersion, _newVersion, transaction) {
             for (const storeName of Array.from(database.objectStoreNames)) {
               if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) {
@@ -2998,8 +3054,21 @@
                 database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
               }
             }
+          },
+          blocked(currentVersion, blockedVersion) {
+            console.warn(
+              `[dataverse-offline] DB "${self.name}" upgrade to v${blockedVersion} blocked while another tab holds a v${currentVersion} connection`
+            );
           }
         });
+        void dbPromise.then((db) => {
+          db.addEventListener("versionchange", (event) => {
+            self.dbVersion = Math.max(self.dbVersion, event.newVersion ?? 0);
+            db.close();
+            if (self.db === dbPromise) self.db = void 0;
+          });
+        });
+        this.db = dbPromise;
       }
       return this.db;
     }
@@ -3008,23 +3077,49 @@
      * database is already open without this store, it is reopened with a
      * bumped version so the upgrade callback can create it. The returned
      * promise resolves once the store is safe to read/write.
+     *
+     * Reopens are serialized through {@link dbReopenPromise}: two collections
+     * registered back-to-back must not interleave openDB calls — the first
+     * bump creates a store the second bump would otherwise re-check against a
+     * stale connection. Before closing an open connection, in-flight fetches
+     * are aborted locally and cross-tab, because the new open transaction must
+     * wait for every other tab's connection to be closed on versionchange
+     * (each getDB registers that handler itself).
      */
     ensureCollectionStore(name) {
       let p = this.collectionStorePromises.get(name);
       if (!p) {
         p = (async () => {
           this.collectionStores.add(name);
-          let db = await this.getDB();
-          if (!db.objectStoreNames.contains(name)) {
-            db.close();
-            this.db = void 0;
-            this.dbVersion = db.version + 1;
-            await this.getDB();
-          }
+          const tail = this.dbReopenPromise ?? Promise.resolve();
+          this.dbReopenPromise = (async () => {
+            await tail;
+            if (this.closed) return;
+            const db = await this.getDB();
+            if (!db.objectStoreNames.contains(name)) {
+              this.abortActiveFetches();
+              this.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
+              db.close();
+              this.db = void 0;
+              this.dbVersion = db.version + 1;
+              await this.getDB();
+            }
+          })();
+          await this.dbReopenPromise;
         })();
         this.collectionStorePromises.set(name, p);
       }
       return p;
+    }
+    dbReopenPromise;
+    /**
+     * Ensures the object store for a table's {@link entitySetName} exists. Same
+     * reopen machinery as {@link ensureCollectionStore}; use this when a table
+     * is registered after the DB has already been opened, because table stores
+     * are otherwise only created inside the upgrade callback.
+     */
+    ensureTableStore(entitySetName) {
+      return this.ensureCollectionStore(entitySetName);
     }
     /**
      * Instantly aborts any in-flight remote server GET requests across all collections.
@@ -3067,8 +3162,11 @@
         globalThis.removeEventListener("online", this.onlineHandler);
         this.onlineHandler = void 0;
       }
-      this.db?.close();
+      const pending = this.db;
       this.db = void 0;
+      if (pending) {
+        void Promise.resolve(pending).then((db) => db.close()).catch(() => void 0);
+      }
     }
     /**
      * Flushes the mutation queue to Dataverse. After a successful flush the
@@ -3659,7 +3757,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-15T16:42:41.133Z"}
+      meta.textContent = `build ${"2026-09-23T01:10:32.313Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3752,7 +3850,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-15T16:42:41.133Z",
+          build: "2026-09-23T01:10:32.313Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3771,7 +3869,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-15T16:42:41.133Z"}\``,
+        `Build: \`${"2026-09-23T01:10:32.313Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -12823,11 +12921,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       requireVisible = true,
       ...rest
     } = config;
-    engine.tables.set(table.entitySetName, table);
+    const widenedTable = table;
+    engine.tables.set(table.entitySetName, widenedTable);
     const pk = table.primaryKey;
     const getKey = (item) => item[pk.key];
     const collectionId = explicitId ?? table.entitySetName;
-    const cacheReady = engine.ensureCollectionStore(collectionId);
+    const cacheReady = Promise.all([
+      engine.ensureCollectionStore(collectionId),
+      engine.ensureTableStore(table.entitySetName)
+    ]);
     let pollTimer;
     let syncFromDataverse;
     let syncController;
