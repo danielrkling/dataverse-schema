@@ -59,7 +59,7 @@ export const errorsSuite: Suite = {
           async () => {
             await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, ["Not a Choice"])
           },
-          "Unknown choice label",
+          "Unknown multi-choice label: Not a Choice",
         )
       },
     },
