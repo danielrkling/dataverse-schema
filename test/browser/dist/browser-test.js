@@ -2391,11 +2391,6 @@
       }, options);
     }
     transformValueFromDataverse(value) {
-      if (typeof value !== "string") {
-        throw new Error(
-          `Missing or invalid primary key value for "${this.logicalName}"`
-        );
-      }
       return value;
     }
   }
@@ -3760,7 +3755,7 @@
       text: string("nnsyc200_text"),
       statusCode: choice("statuscode", { 1: "Active", 2: "Inactive" }),
       choice: choice("nnsyc200_choice", { 1: "A", 2: "B", 3: "C" }, { default: "B" }),
-      multiChoice: multiChoice("nnsyc200_choice_month", Array.from({ length: 12 }, (_, i) => i + 1)),
+      multiChoice: multiChoice("nnsyc200_choice_month", { 1: "A", 2: "B", 3: "C" }),
       image: image("nnsyc200_image"),
       altKey: string("nnsyc200_Alt_Key"),
       name: string("nnsyc200_name")
@@ -4056,7 +4051,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-23T01:10:29.627Z"}
+      meta.textContent = `build ${"2026-09-23T11:07:42.780Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4149,7 +4144,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-23T01:10:29.627Z",
+          build: "2026-09-23T11:07:42.780Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4168,7 +4163,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-23T01:10:29.627Z"}\``,
+        `Build: \`${"2026-09-23T11:07:42.780Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4422,13 +4417,13 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "multiChoice round-trips CSV through property APIs",
         fn: async () => {
-          await ctx.tables.TestTable.updatePropertyValue("multiChoice", ctx.state.child, [3, 4, 5]);
+          await ctx.tables.TestTable.updatePropertyValue("multiChoice", ctx.state.child, ["A", "B", "C"]);
           const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, {
             query: `$select=nnsyc200_choice_month&$filter=nnsyc200_test_tableid eq ${ctx.state.child}`
           });
-          assertEquals(raw[0]?.nnsyc200_choice_month, "3,4,5", "raw multi-choice payload is CSV");
+          assertEquals(raw[0]?.nnsyc200_choice_month, "1,2,3", "raw multi-choice payload is CSV");
           const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", ctx.state.child);
-          assertEquals(v, [3, 4, 5], "multiChoice transforms to number[]");
+          assertEquals(v, ["A", "B", "C"], "multiChoice transforms to string[]");
         }
       }
     ]
@@ -5148,16 +5143,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         }
       },
       {
-        name: "multiChoice write of an unknown value still round-trips numerically",
+        name: "multiChoice write of an unknown value errors",
         fn: async () => {
           const row = await seedRow(ctx, {});
-          try {
-            await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, [1, 12]);
-            const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", row);
-            assertEquals(v, [1, 12], "boundary month values");
-          } finally {
-            await ctx.tables.TestTable.deleteRecord(row).catch(() => void 0);
-          }
+          await assertRejects(
+            async () => {
+              await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, ["Not a Choice"]);
+            },
+            "Unknown choice label"
+          );
         }
       }
     ]

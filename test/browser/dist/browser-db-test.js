@@ -2110,11 +2110,6 @@
       }, options);
     }
     transformValueFromDataverse(value) {
-      if (typeof value !== "string") {
-        throw new Error(
-          `Missing or invalid primary key value for "${this.logicalName}"`
-        );
-      }
       return value;
     }
   }
@@ -3469,7 +3464,7 @@
       text: string("nnsyc200_text"),
       statusCode: choice("statuscode", { 1: "Active", 2: "Inactive" }),
       choice: choice("nnsyc200_choice", { 1: "A", 2: "B", 3: "C" }, { default: "B" }),
-      multiChoice: multiChoice("nnsyc200_choice_month", Array.from({ length: 12 }, (_, i) => i + 1)),
+      multiChoice: multiChoice("nnsyc200_choice_month", { 1: "A", 2: "B", 3: "C" }),
       image: image("nnsyc200_image"),
       altKey: string("nnsyc200_Alt_Key"),
       name: string("nnsyc200_name")
@@ -3757,7 +3752,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-23T01:10:32.313Z"}
+      meta.textContent = `build ${"2026-09-23T11:07:50.155Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3850,7 +3845,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-23T01:10:32.313Z",
+          build: "2026-09-23T11:07:50.155Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3869,7 +3864,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-23T01:10:32.313Z"}\``,
+        `Build: \`${"2026-09-23T11:07:50.155Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
