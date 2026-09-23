@@ -132,7 +132,7 @@ export type GenericValueProperty =
   | NullableDateField
   |   ImageField // Represents an image value.
   | ListField<any> // Represents a list of strings or numbers
-  | MultiChoiceField // Represents a multi-select choice column
+  | MultiChoiceField<any> // Represents a multi-select choice column
   | FileField
   | FormattedField
   | ChoiceField<any>

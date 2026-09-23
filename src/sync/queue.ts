@@ -1,7 +1,7 @@
 import { IDBPDatabase, openDB } from "idb";
-import { type DataverseTable } from "../table";
-import { type GenericProperties } from "../types";
-import { getEtag } from "../util";
+import { type DataverseTable } from "dataverse-schema";
+import { type GenericProperties } from "dataverse-schema";
+import { getEtag } from "dataverse-schema";
 import { isConcurrencyError, isKeyViolation, serializeError } from "./classifiers";
 import { isDeterministicFailure } from "./error-codes";
 import { isMetaKey, isMetaOnly, valuesEqual } from "./util";

@@ -57,6 +57,7 @@ export const errorsSuite: Suite = {
         const row = await seedRow(ctx, {})
         await assertRejects(
           async () => {
+            //@ts-expect-error
             await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, ["Not a Choice"])
           },
           "Unknown multi-choice label: Not a Choice",

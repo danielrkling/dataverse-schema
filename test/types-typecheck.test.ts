@@ -46,7 +46,7 @@ const Account = new DataverseTable({
     priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" } as const),
     label: formatted("statuscode"),
     doc: file("document"),
-    months: multiChoice("nnsyc200_choice_month", Array.from({ length: 12 }, (_, i) => i + 1)),
+    months: multiChoice("nnsyc200_choice_month", { 1: "Jan", 2: "Feb" }),
     pic: image("entityimage"),
     primaryContact: lookup("primarycontactid", () => Contact),
     contacts: collection("account_contacts", () => Contact),
@@ -117,9 +117,9 @@ test("Infer resolves the full record type", () => {
 
 test("multiChoice infers number[]", () => {
   type R = Infer<typeof Account>
-  expectTypeOf<R["months"]>().toEqualTypeOf<number[]>()
-  const f = multiChoice("m", [1, 2])
-  expectTypeOf(f.getDefault()).toEqualTypeOf<number[]>()
+  expectTypeOf<R["months"]>().toEqualTypeOf<string[]>()
+  const f = multiChoice("m", { 1: "Jan", 2: "Feb" })
+  expectTypeOf(f.getDefault()).toEqualTypeOf<string[]>()
 })
 
 test("navigation properties infer as related record or null / arrays", () => {

@@ -811,7 +811,7 @@ function composeFieldSchemas<TProperties extends GenericProperties>(
 }
 
 function tableQuery(
-  table: DataverseTable<GenericProperties>,
+  table: DataverseTable<any>,
   options?: ODataTableQueryOptions<any>,
 ): string {
   return serializeODataSelect(buildTableQueryAst(table, options));

@@ -20,7 +20,7 @@ export const crudSuite: Suite = {
         assertEquals(r.choice, "B", "choice label")
         assertEquals(r.statusCode, "Active", "statusCode label")
         assert(r.createdOn instanceof Date, "createdOn is Date")
-        assertEquals<number[]>(r.multiChoice, [], "multiChoice reads as empty array")
+        assertEquals(r.multiChoice, [], "multiChoice reads as empty array")
       },
     },
     {

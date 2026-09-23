@@ -1,4 +1,4 @@
-import { DataverseHttpError } from "../client";
+import { DataverseHttpError } from "dataverse-schema";
 import { isKeyViolation } from "./classifiers";
 
 /**

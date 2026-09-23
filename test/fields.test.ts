@@ -508,13 +508,13 @@ test("multiChoice schema validates parsed arrays", async () => {
 })
 
 test("multiChoice schema rejects values outside the choice set", async () => {
-  const f = multiChoice("nnsyc200_months", [1, 2, 3])
-  const result = await standardSafeParse(f.schema, [1, 9])
+  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
+  const result = await standardSafeParse(f.schema, ["Jan", "Oct"])
   expect(result.success).toBe(false)
 })
 
 test("multiChoice getDefault returns independent empty arrays", () => {
-  const f = multiChoice("nnsyc200_months", [1, 2, 3])
+  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
   const a = f.getDefault()
   const b = f.getDefault()
   expect(a).toEqual([])
