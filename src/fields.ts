@@ -266,9 +266,9 @@ export class PrimaryKeyField extends FieldBase<GUID> {
 
   transformValueFromDataverse(value: unknown): GUID {
     if (typeof value !== "string") {
-      throw new Error(
-        `Missing or invalid primary key value for "${this.logicalName}"`,
-      );
+      // throw new Error(
+      //   `Missing or invalid primary key value for "${this.logicalName}"`,
+      // );
     }
   
     return value as GUID;

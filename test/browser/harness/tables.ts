@@ -37,7 +37,7 @@ export function buildTables(client: DataverseClient, cfg: BrowserTestConfig) {
     text: string("nnsyc200_text"),
     statusCode: choice("statuscode", { 1: "Active", 2: "Inactive" }),
     choice: choice("nnsyc200_choice", { 1: "A", 2: "B", 3: "C" }, { default: "B" }),
-    multiChoice: multiChoice("nnsyc200_choice_month", Array.from({ length: 12 }, (_, i) => i + 1)),
+    multiChoice: multiChoice("nnsyc200_choice_month", { 1: "A", 2: "B", 3: "C" }),
     image: image("nnsyc200_image"),
     altKey: string("nnsyc200_Alt_Key"),
     name: string("nnsyc200_name"),

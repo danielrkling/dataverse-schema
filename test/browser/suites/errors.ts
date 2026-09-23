@@ -52,16 +52,15 @@ export const errorsSuite: Suite = {
       },
     },
     {
-      name: "multiChoice write of an unknown value still round-trips numerically",
+      name: "multiChoice write of an unknown value errors",
       fn: async () => {
         const row = await seedRow(ctx, {})
-        try {
-          await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, [1, 12])
-          const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", row)
-          assertEquals(v, [1, 12], "boundary month values")
-        } finally {
-          await ctx.tables.TestTable.deleteRecord(row).catch(() => undefined)
-        }
+        await assertRejects(
+          async () => {
+            await ctx.tables.TestTable.updatePropertyValue("multiChoice", row, ["Not a Choice"])
+          },
+          "Unknown choice label",
+        )
       },
     },
   ],

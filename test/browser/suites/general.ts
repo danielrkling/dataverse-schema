@@ -208,13 +208,13 @@ export const generalSuite: Suite = {
     {
       name: "multiChoice round-trips CSV through property APIs",
       fn: async () => {
-        await ctx.tables.TestTable.updatePropertyValue("multiChoice", ctx.state.child, [3, 4, 5])
+        await ctx.tables.TestTable.updatePropertyValue("multiChoice", ctx.state.child, ["A","B","C"])
         const raw = await ctx.client.getRecords(ctx.tables.TestTable.entitySetName, {
           query: `$select=nnsyc200_choice_month&$filter=nnsyc200_test_tableid eq ${ctx.state.child}`,
         })
-        assertEquals(raw[0]?.nnsyc200_choice_month, "3,4,5", "raw multi-choice payload is CSV")
+        assertEquals(raw[0]?.nnsyc200_choice_month, "1,2,3", "raw multi-choice payload is CSV")
         const v = await ctx.tables.TestTable.getPropertyValue("multiChoice", ctx.state.child)
-        assertEquals(v, [3, 4, 5], "multiChoice transforms to number[]")
+        assertEquals(v, ["A","B","C"], "multiChoice transforms to string[]")
       },
     },
   ],

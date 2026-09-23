@@ -25,3 +25,5 @@
 - `client.fetch` sets `If-None-Match: null` on every request; harmless today but
   worth confirming no interplay with `Prefer: return=representation` on PATCH
 
+# Fields
+- Choice and Multichoice should have an option or a maybe different field that fetches its choices from the server
