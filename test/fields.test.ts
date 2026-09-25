@@ -4,7 +4,7 @@ import {
   string, nullableString, number, nullableNumber, boolean, nullableBoolean, primaryKey,
   datetime, nullableDateTime, date, nullableDate, list, image, file, formatted, multiChoice,
   collection, collectionIds, lookupId, lookup, DataverseTable,
-  choice, nullableChoice, SKIP, json, standardParse, standardSafeParse,
+  choice, nullableChoice, nullableMultiChoice, SKIP, json, standardParse, standardSafeParse,
 } from "../src"
 import { DataverseClient } from "../src/client"
 
@@ -189,6 +189,55 @@ test("nullableChoice transformValueFromDataverse handles null", () => {
   expect(f.transformValueFromDataverse(null)).toBeNull()
 })
 
+// --- Dynamic choice (no choices provided) ---
+
+test("dynamic choice behaves like a number field", () => {
+  const f = choice("statuscode")
+  expect(f.type).toBe("dynamicChoice")
+  expect(f.kind).toBe("value")
+  expect(f.getDefault()).toBe(0)
+  expect(f.transformValueFromDataverse(900004)).toBe(900004)
+  expect(f.transformValueToDataverse(900004)).toBe(900004)
+})
+
+test("dynamic choice rejects non-numeric payloads", () => {
+  const f = choice("statuscode")
+  expect(() => f.transformValueFromDataverse("Active")).toThrow("Invalid choice value: Active (statuscode)")
+  expect(() => f.transformValueToDataverse("Active" as any)).toThrow("Invalid choice value")
+})
+
+test("dynamic choice validates numbers only", async () => {
+  const f = choice("statuscode")
+  expect(await standardParse(f.schema, 1)).toBe(1)
+  await expect(standardParse(f.schema, 1)).resolves.toBe(1)
+  const result = await standardSafeParse(f.schema, "Bogus")
+  expect(result.success).toBe(false)
+})
+
+test("nullable dynamic choice passes raw values through", () => {
+  const f = nullableChoice("statuscode")
+  expect(f.getDefault()).toBeNull()
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+  expect(f.transformValueFromDataverse(900004)).toBe(900004)
+  expect(f.transformValueToDataverse(900004)).toBe(900004)
+})
+
+test("dynamic multiChoice reads CSV as numbers and writes CSV", () => {
+  const f = multiChoice("nnsyc200_months")
+  expect(f.type).toBe("dynamicMultiChoice")
+  expect(f.transformValueFromDataverse("3,4,5")).toEqual([3, 4, 5])
+  expect(f.transformValueFromDataverse(null)).toEqual([])
+  expect(f.transformValueToDataverse([3, 4, 5])).toBe("3,4,5")
+  expect(f.transformValueToDataverse([])).toBeNull()
+  expect(() => f.transformValueFromDataverse("3,west")).toThrow("Invalid multi-choice value")
+  expect(() => f.transformValueToDataverse("nope" as any)).toThrow("requires an array")
+})
+
+test("nullable dynamic multiChoice handles null", () => {
+  const f = nullableMultiChoice("nnsyc200_months")
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+  expect(f.transformValueFromDataverse("3,4")).toEqual([3, 4])
+})
 test("nullableChoice transformValueFromDataverse maps number to string", () => {
   const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
   expect(f.transformValueFromDataverse(1)).toBe("Low")

@@ -488,6 +488,144 @@ export class NullableChoiceField<T extends Record<number, string>>
 
 
 
+/**
+ * Option-set column that works with raw Dataverse numeric option values.
+ *
+ * Use when the option set is not known at compile time (e.g. supplied by a
+ * server call or global choice set). Unlike {@link ChoiceField}, there is no
+ * value→label map: transforms are pass-through, the schema only checks that the
+ * value is a number, and the newly-read (label-typed) behaviour never changes
+ * mid-session.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   status: choice("statuscode"),
+ * });
+ * // Infer<typeof table>["status"] → number
+ */
+export class DynamicChoiceField extends FieldBase<number> {
+  kind = "value" as const;
+  type = "dynamicChoice" as const;
+
+  constructor(name: string, options?: FieldOptions<number>) {
+    super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
+  }
+
+  transformValueFromDataverse(value: unknown): number {
+    if (value == null) return this.getDefault();
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
+    }
+    return value;
+  }
+
+  transformValueToDataverse(value: unknown): number {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
+    }
+    return value;
+  }
+}
+
+/**
+ * Multi-select choice column that works with raw Dataverse numeric option
+ * values (MultiSelectPicklist). See {@link DynamicChoiceField}.
+ *
+ * The Web API stores these as a comma-delimited string of option values
+ * (e.g. `"3,4,5"`); reads produce `number[]` and writes produce CSV strings.
+ * An empty selection reads as `[]` and writes as `null` (which clears the
+ * column).
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   months: multiChoice("nnsyc200_months"),
+ * });
+ * // Infer<typeof table>["months"] → number[]
+ */
+export class DynamicMultiChoiceField extends FieldBase<number[]> {
+  kind = "value" as const;
+  type = "dynamicMultiChoice" as const;
+
+  constructor(name: string, options?: FieldOptions<number[]>) {
+    super(name, {
+      defaultValue: () => [],
+      schema: arrayOf(NUMBER_SCHEMA),
+    }, options);
+  }
+
+  transformValueFromDataverse(value: unknown): number[] {
+    if (value == null || value === "") return this.getDefault();
+
+    const rawValues = Array.isArray(value)
+      ? value
+      : String(value).split(",");
+
+    return rawValues.map((raw) => {
+      const result = Number(String(raw).trim());
+      if (!Number.isFinite(result)) {
+        throw new Error(`Invalid multi-choice value: ${raw} (${this.logicalName})`);
+      }
+      return result;
+    });
+  }
+
+  transformValueToDataverse(value: unknown): string | null {
+    if (value == null) return null;
+
+    if (!Array.isArray(value)) {
+      throw new Error(
+        `Multi-choice field "${this.logicalName}" requires an array of values`,
+      );
+    }
+
+    if (value.length === 0) return null;
+
+    return value.join(",");
+  }
+}
+
+/** Nullable wrapper over {@link MultiChoiceField}. */
+export class NullableMultiChoiceField<T extends Record<number, string>>
+  extends NullableField<T[keyof T][], MultiChoiceField<T>> {
+  constructor(
+    name: string,
+    choices: T,
+    options?: FieldOptions<T[keyof T][] | null>,
+  ) {
+    super(new MultiChoiceField(name, choices), options);
+  }
+
+  get choices(): Readonly<T> {
+    return this.inner.choices;
+  }
+
+  get labels(): readonly T[keyof T][] {
+    return this.inner.labels;
+  }
+
+  fromChoiceValue(value: number): T[keyof T] {
+    return this.inner.fromChoiceValue(value);
+  }
+
+  toChoiceValue(value: T[keyof T]): number {
+    return this.inner.toChoiceValue(value);
+  }
+}
+
+/** Nullable wrapper over {@link DynamicChoiceField}. */
+export class NullableDynamicChoiceField extends NullableField<number, DynamicChoiceField> {
+  constructor(name: string, options?: FieldOptions<number | null>) {
+    super(new DynamicChoiceField(name), options);
+  }
+}
+
+/** Nullable wrapper over {@link DynamicMultiChoiceField}. */
+export class NullableDynamicMultiChoiceField extends NullableField<number[], DynamicMultiChoiceField> {
+  constructor(name: string, options?: FieldOptions<number[] | null>) {
+    super(new DynamicMultiChoiceField(name), options);
+  }
+}
+
 export class DateTimeField extends FieldBase<Date> {
   kind = "value" as const;
   type = "dateTime" as const;
@@ -832,13 +970,62 @@ export function list<const T extends string | number>(name: string, list: Readon
  * });
  * // Infer<typeof table>["months"] → number[]
  */
-export function multiChoice<const T extends Record<number, string>>(
+function multiChoice<const T extends Record<number, string>>(
   name: string,
   choices: T,
   options?: FieldOptions<T[keyof T][]>,
-) {
-  return new MultiChoiceField<T>(name, choices, options);
+): MultiChoiceField<T>;
+/**
+ * Overload of {@link multiChoice} for multi-select option sets not known at
+ * compile time. Returns a number-array-typed field.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   months: multiChoice("nnsyc200_months"),
+ * });
+ * // Infer<typeof table>["months"] → number[]
+ */
+function multiChoice(name: string): DynamicMultiChoiceField;
+function multiChoice(...args: any[]) {
+  if (args.length === 1) {
+    return new DynamicMultiChoiceField(args[0]);
+  }
+  return new MultiChoiceField(args[0], args[1], args[2]);
 }
+export { multiChoice };
+
+/**
+ * Creates a nullable multi-select choice column definition (allows `null`).
+ *
+ * @param name The Dataverse logical name of the column.
+ * @param choices An object mapping numeric option values to string labels.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   months: nullableMultiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" }),
+ * });
+ * // Infer<typeof table>["months"] → ("Jan" | "Feb")[] | null
+ */
+function nullableMultiChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T][] | null>): NullableChoiceField<T>;
+/**
+ * Overload of {@link nullableMultiChoice} for multi-select option sets not
+ * known at compile time (allows `null`). Returns a number-array-typed field.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   months: nullableMultiChoice("nnsyc200_months"),
+ * });
+ * // Infer<typeof table>["months"] → number[] | null
+ */
+function nullableMultiChoice(name: string): NullableDynamicMultiChoiceField;
+function nullableMultiChoice(...args: any[]): any {
+  if (args.length === 1) {
+    return new NullableDynamicMultiChoiceField(args[0]);
+  }
+  return new NullableMultiChoiceField(args[0], args[1], args[2]);
+}
+export { nullableMultiChoice };
+
 
 /**
  * Creates a choice/option-set column definition. Maps Dataverse numeric option values
@@ -854,9 +1041,25 @@ export function multiChoice<const T extends Record<number, string>>(
  * });
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
  */
-export function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>) {
-  return new ChoiceField<T>(name, choices, options);
+function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>): ChoiceField<T>;
+/**
+ * Overload of {@link choice} for option sets not known at compile time.
+ * Returns a number-typed field that passes raw Dataverse option values through.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   status: choice("statuscode"),
+ * });
+ * // Infer<typeof table>["status"] → number
+ */
+function choice(name: string): DynamicChoiceField;
+function choice(...args: any[]) {
+  if (args.length === 1) {
+    return new DynamicChoiceField(args[0] as string);
+  }
+  return new ChoiceField(args[0] as string, args[1], args[2]);
 }
+export { choice };
 
 /**
  * Creates a nullable choice/option-set column definition (allows `null`).
@@ -871,9 +1074,25 @@ export function choice<const T extends Record<number, string>>(name: string, cho
  * });
  * // Infer<typeof table>["priority"] → "Low" | "High" | null
  */
-export function nullableChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>) {
-  return new NullableChoiceField<T>(name, choices, options);
+function nullableChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
+/**
+ * Overload of {@link nullableChoice} for option sets not known at compile time
+ * (allows `null`). Returns a number-typed field.
+ *
+ * @example
+ * const table = new DataverseTable({
+ *   priority: nullableChoice("prioritycode"),
+ * });
+ * // Infer<typeof table>["priority"] → number | null
+ */
+function nullableChoice(name: string): NullableDynamicChoiceField;
+function nullableChoice(...args: any[]) {
+  if (args.length === 1) {
+    return new NullableDynamicChoiceField(args[0] as string);
+  }
+  return new NullableChoiceField(args[0] as string, args[1], args[2]);
 }
+export { nullableChoice };
 
 /**
  * Creates a date-time column definition (maps to JavaScript `Date`).

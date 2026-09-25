@@ -5,7 +5,7 @@ import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
   primaryKey, PrimaryKeyField, string, nullableString, number, nullableNumber, boolean, nullableBoolean,
   datetime, nullableDateTime, date, nullableDate, list, choice, nullableChoice,
-  json, formatted, file, image, multiChoice, lookup, collection, lookupId, collectionIds,
+  json, formatted, file, image, multiChoice, nullableMultiChoice, lookup, collection, lookupId, collectionIds,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -115,11 +115,24 @@ test("Infer resolves the full record type", () => {
   expectTypeOf<R["contactIds"]>().toEqualTypeOf<GUID[]>()
 })
 
-test("multiChoice infers number[]", () => {
+test("multiChoice infers label arrays", () => {
   type R = Infer<typeof Account>
-  expectTypeOf<R["months"]>().toEqualTypeOf<string[]>()
+  expectTypeOf<R["months"]>().toEqualTypeOf<("Jan" | "Feb")[]>()
   const f = multiChoice("m", { 1: "Jan", 2: "Feb" })
-  expectTypeOf(f.getDefault()).toEqualTypeOf<string[]>()
+  expectTypeOf(f.getDefault()).toEqualTypeOf<("Jan" | "Feb")[]>()
+})
+
+test("dynamic choice overloads infer raw numeric values", () => {
+  const d = choice("statuscode")
+  expectTypeOf(d.getDefault()).toEqualTypeOf<number>()
+  const dn = nullableChoice("statuscode")
+  expectTypeOf(dn.getDefault()).toEqualTypeOf<number | null>()
+  const dm = multiChoice("months")
+  expectTypeOf(dm.getDefault()).toEqualTypeOf<number[]>()
+  const dmn = nullableMultiChoice("months")
+  expectTypeOf(dmn.getDefault()).toEqualTypeOf<number[] | null>()
+  expectTypeOf(d.transformValueFromDataverse(900004)).toEqualTypeOf<number>()
+  expectTypeOf(dm.transformValueFromDataverse("1,2")).toEqualTypeOf<number[]>()
 })
 
 test("navigation properties infer as related record or null / arrays", () => {

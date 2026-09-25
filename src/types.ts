@@ -21,6 +21,11 @@ import {
   ChoiceField,
   NullableChoiceField,
   JsonField,
+  DynamicChoiceField,
+  NullableDynamicChoiceField,
+  DynamicMultiChoiceField,
+  NullableDynamicMultiChoiceField,
+  NullableMultiChoiceField,
 } from "./fields";
 import { DateField } from "./fields";
 import { FieldBase } from "./fields";
@@ -133,6 +138,11 @@ export type GenericValueProperty =
   |   ImageField // Represents an image value.
   | ListField<any> // Represents a list of strings or numbers
   | MultiChoiceField<any> // Represents a multi-select choice column
+  | NullableMultiChoiceField<any> // Nullable wrapper over MultiChoiceField
+  | DynamicChoiceField // Untyped option-set column (raw numeric values)
+  | NullableDynamicChoiceField
+  | DynamicMultiChoiceField // Untyped multi-select column (raw numeric values)
+  | NullableDynamicMultiChoiceField
   | FileField
   | FormattedField
   | ChoiceField<any>
