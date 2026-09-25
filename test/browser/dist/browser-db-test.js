@@ -2220,6 +2220,57 @@
       return this.toChoiceValue(value);
     }
   }
+  class DynamicChoiceField extends FieldBase {
+    kind = "value";
+    type = "dynamicChoice";
+    constructor(name, options) {
+      super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
+    }
+    transformValueFromDataverse(value) {
+      if (value == null) return this.getDefault();
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
+      }
+      return value;
+    }
+    transformValueToDataverse(value) {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
+      }
+      return value;
+    }
+  }
+  class DynamicMultiChoiceField extends FieldBase {
+    kind = "value";
+    type = "dynamicMultiChoice";
+    constructor(name, options) {
+      super(name, {
+        defaultValue: () => [],
+        schema: arrayOf(NUMBER_SCHEMA)
+      }, options);
+    }
+    transformValueFromDataverse(value) {
+      if (value == null || value === "") return this.getDefault();
+      const rawValues = Array.isArray(value) ? value : String(value).split(",");
+      return rawValues.map((raw) => {
+        const result = Number(String(raw).trim());
+        if (!Number.isFinite(result)) {
+          throw new Error(`Invalid multi-choice value: ${raw} (${this.logicalName})`);
+        }
+        return result;
+      });
+    }
+    transformValueToDataverse(value) {
+      if (value == null) return null;
+      if (!Array.isArray(value)) {
+        throw new Error(
+          `Multi-choice field "${this.logicalName}" requires an array of values`
+        );
+      }
+      if (value.length === 0) return null;
+      return value.join(",");
+    }
+  }
   class DateTimeField extends FieldBase {
     kind = "value";
     type = "dateTime";
@@ -2336,11 +2387,17 @@
   function primaryKey(name, options) {
     return new PrimaryKeyField(name, options);
   }
-  function multiChoice(name, choices, options) {
-    return new MultiChoiceField(name, choices, options);
+  function multiChoice(...args) {
+    if (args.length === 1) {
+      return new DynamicMultiChoiceField(args[0]);
+    }
+    return new MultiChoiceField(args[0], args[1], args[2]);
   }
-  function choice(name, choices, options) {
-    return new ChoiceField(name, choices, options);
+  function choice(...args) {
+    if (args.length === 1) {
+      return new DynamicChoiceField(args[0]);
+    }
+    return new ChoiceField(args[0], args[1], args[2]);
   }
   function datetime(name, options) {
     return new DateTimeField(name, options);
@@ -3752,7 +3809,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-23T11:07:50.155Z"}
+      meta.textContent = `build ${"2026-09-25T20:27:20.035Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3845,7 +3902,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-23T11:07:50.155Z",
+          build: "2026-09-25T20:27:20.035Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3864,7 +3921,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-23T11:07:50.155Z"}\``,
+        `Build: \`${"2026-09-25T20:27:20.035Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
