@@ -1,4 +1,4 @@
-import { DataverseHttpError } from "dataverse-schema";
+import { DataverseHttpError } from "../client";
 
 /**
  * Reduces a thrown error to a structured-clone-safe plain object before it is

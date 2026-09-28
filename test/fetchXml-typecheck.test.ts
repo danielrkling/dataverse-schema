@@ -108,7 +108,7 @@ test("outer join merges result type", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["addrStreet"]>().toBeString()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string | undefined>()
 })
 
 test("filter-only join preserves result type", () => {

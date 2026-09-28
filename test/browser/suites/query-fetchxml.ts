@@ -77,13 +77,13 @@ export const fetchxmlSuite: Suite = {
       {
         name: "outer join keeps parents without children; inner drops them",
         fn: async () => {
-          const base = (linkType: "inner" | "outer") =>
+          const base = (linkType: "inner" | "outer"): Promise<Array<{ parentName?: string; kid?: string }>> =>
             fetchXml(ctx.tables.TestTable0)
               .select((f) => ({ parentName: f.name }))
               .join(linkType, ctx.tables.TestTable, "testLookup", "id", (sub) => sub.select((f) => ({ kid: f.name })))
               .filter(scoped)
               .filter((f) => eq(f.text, "fx-parent"))
-              .execute()
+              .execute() as any
           const outer = await base("outer")
           assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)")
           const outerNames = new Set(outer.map((r) => r.parentName))

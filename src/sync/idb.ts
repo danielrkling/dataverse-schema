@@ -1,129 +1,162 @@
 /**
- * Minimal promise wrapper over the raw IndexedDB API — covers exactly what
- * SyncEngine needs. Drop-in replacement for the `idb` dependency's surface
- * (openDB, implicit single-store requests, explicit transactions, cursors).
+ * Minimal promise wrapper over the raw IndexedDB API — a drop-in replacement
+ * for the parts of the `idb` package that SyncEngine uses. Zero dependencies.
  *
- * Design notes:
- * - `open()` mirrors idb's openDB: upgrade + blocked callbacks, promise
- *   resolves on success, rejects on error, and resolves with the version
- *   number when the connection is superseded by another tab (versionchange).
- * - `req()` wraps a single IDB request into a promise.
- * - `withStore(s)` wraps one or more stores in a transaction and gives the
- *   callback the object stores — requests must be created synchronously
- *   inside the callback before the first await (same constraint as raw IDB).
+ * What is implemented (and deliberately not more):
+ * - `openDB(name, version, { upgrade, blocked })` with idb-compatible callbacks
+ * - implicit per-call requests on the database (`db.get/put/delete/getAll/count`)
+ * - explicit transactions with promisified object stores and `tx.done`
+ * - promisified `openCursor` (first cursor entry — the flush loop re-opens a
+ *   fresh transaction per iteration, so `continue()` is not needed here)
+ *
+ * Note: `openDB` does NOT auto-close on `versionchange` — SyncEngine attaches
+ * its own handler to track the new version before closing.
  */
 
-// --- Request helper ---------------------------------------------------------
-
 /** Wraps a single IDB request into a promise of its result. */
-export function req<T = any>(r: IDBRequest<T>): Promise<T> {
+function req<T>(request: IDBRequest<T>): Promise<T> {
     return new Promise((resolve, reject) => {
-        r.addEventListener("success", () => resolve(r.result));
-        r.addEventListener("error", () => reject(r.error));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
     });
 }
 
-// --- open -------------------------------------------------------------------
+/** Resolves when the transaction commits; rejects on abort/error. */
+function txDone(tx: IDBTransaction): Promise<void> {
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error ?? new Error("Transaction aborted"));
+        tx.onerror = () => reject(tx.error ?? new Error("Transaction error"));
+    });
+}
+
+/** A promisified view of an IDBObjectStore (or of an index via .index()). */
+export class Store {
+    // IDBObjectStore or IDBIndex — both share get/getAll/openCursor; the
+    // store-only methods (put/add/delete/clear/index) throw at runtime when
+    // called on an index, so a typed union would demand dead narrowings here.
+    private readonly bare: any;
+    constructor(bare: IDBObjectStore | IDBIndex) {
+        this.bare = bare;
+    }
+
+    get<T = any>(key: IDBValidKey): Promise<T | undefined> {
+        return req(this.bare.get(key));
+    }
+    getAll<T = any>(range?: IDBKeyRange | null): Promise<T[]> {
+        return req(this.bare.getAll(range as IDBValidKey | undefined));
+    }
+    put(value: any, key?: IDBValidKey): Promise<IDBValidKey> {
+        return req(this.bare.put(value, key));
+    }
+    add(value: any, key?: IDBValidKey): Promise<IDBValidKey> {
+        return req(this.bare.add(value, key));
+    }
+    delete(key: IDBValidKey): Promise<undefined> {
+        return req(this.bare.delete(key));
+    }
+    count(range?: IDBKeyRange | null): Promise<number> {
+        return req(this.bare.count(range as IDBValidKey | undefined));
+    }
+    clear(): Promise<undefined> {
+        return req(this.bare.clear());
+    }
+    index(name: string): Store {
+        return new Store(this.bare.index(name));
+    }
+    /**
+     * Opens a cursor and resolves with the first entry's cursor (or undefined
+     * when the source is empty). Callers that need to keep iterating can call
+     * cursor.continue() themselves.
+     */
+    openCursor(range?: IDBKeyRange | null, direction?: IDBCursorDirection): Promise<any> {
+        return req(this.bare.openCursor(range ?? undefined, direction));
+    }
+}
+
+/** A promisified transaction: promisified stores plus a `done` promise. */
+export class Tx {
+    /** Promisified store when the transaction covers exactly one store. */
+    readonly store: Store
+    readonly done: Promise<void>
+
+    constructor(private readonly bare: IDBTransaction, readonly names: string[]) {
+        this.store = this.objectStore(names[0]);
+        this.done = txDone(bare);
+    }
+
+    objectStore(name: string): Store {
+        return new Store(this.bare.objectStore(name));
+    }
+}
+
+/** A promisified IDBDatabase: convenience single-request methods plus transactions. */
+export class Database {
+    constructor(private readonly bare: IDBDatabase) {}
+
+    get version(): number {
+        return this.bare.version;
+    }
+    get objectStoreNames(): DOMStringList {
+        return this.bare.objectStoreNames;
+    }
+    close(): void {
+        this.bare.close();
+    }
+    addEventListener(type: string, listener: (event: any) => void): void {
+        this.bare.addEventListener(type, listener as EventListener);
+    }
+    transaction(names: string | string[], mode: IDBTransactionMode): Tx {
+        return new Tx(this.bare.transaction(names, mode), Array.isArray(names) ? names : [names]);
+    }
+
+    // Convenience single-request methods (each opens its own transaction,
+    // same as idb's db.get/put/delete/getAll/count).
+
+    get<T = any>(storeName: string, key: IDBValidKey): Promise<T | undefined> {
+        return this.transaction(storeName, "readonly").objectStore(storeName).get(key);
+    }
+    getAll<T = any>(storeName: string): Promise<T[]> {
+        return this.transaction(storeName, "readonly").objectStore(storeName).getAll();
+    }
+    put(storeName: string, value: any): Promise<IDBValidKey> {
+        return this.transaction(storeName, "readwrite").objectStore(storeName).put(value);
+    }
+    delete(storeName: string, key: IDBValidKey): Promise<undefined> {
+        return this.transaction(storeName, "readwrite").objectStore(storeName).delete(key);
+    }
+    count(storeName: string): Promise<number> {
+        return this.transaction(storeName, "readonly").objectStore(storeName).count();
+    }
+}
 
 export interface OpenOptions {
-    upgrade?: (database: IDBDatabase, oldVersion: number, tx: IDBTransaction) => void | Promise<void>;
+    upgrade?: (database: IDBDatabase, oldVersion: number, newVersion: number, transaction: IDBTransaction) => void;
     blocked?: (currentVersion: number, blockedVersion: number) => void;
 }
 
 /**
- * Opens the database. Behaves like `openDB` from idb:
- * - calls `upgrade` inside the versionchange transaction
- * - calls `blocked` if another tab holds an old-version connection open
- * - rejects on open error; resolves on success
+ * Opens the database, mirroring idb's openDB:
+ * - `upgrade` runs inside the versionchange transaction
+ * - `blocked` fires when another tab holds an old-version connection open
+ * - rejects if opening fails (or the upgrade callback throws/aborts)
  */
-export function open(name: string, version: number, options: OpenOptions = {}): Promise<IDBDatabase> {
+export function openDB(name: string, version: number, options: OpenOptions = {}): Promise<Database> {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(name, version);
-        request.addEventListener("upgradeneeded", (event) => {
-            const db = request.result;
-            // Wrap the upgrade callback so it runs inside the versionchange
-            // transaction — stores created there are visible to the caller.
+        request.onupgradeneeded = (event) => {
             try {
-                options.upgrade?.(db, event.oldVersion, request.transaction!);
+                options.upgrade?.(request.result, event.oldVersion, event.newVersion ?? version, request.transaction!);
             } catch (err) {
+                // Fail the open so callers don't get a half-migrated DB.
                 request.transaction?.abort();
-                reject(err);
+                reject(err instanceof Error ? err : new Error(String(err)));
             }
-        });
-        request.addEventListener("blocked", (event) => {
+        };
+        request.onblocked = (event) => {
             options.blocked?.(event.oldVersion, event.newVersion ?? version);
-        });
-        request.addEventListener("success", async () => {
-            const db = request.result;
-            db.addEventListener("versionchange", () => db.close());
-            resolve(db);
-        });
-        request.addEventListener("error", () => reject(request.error));
-    });
-}
-
-// --- Transaction helpers ----------------------------------------------------
-
-type StoreMode = "readonly" | "readwrite";
-
-/** Opens a transaction across stores and returns its object stores, plus tx. */
-export function withStores(
-    db: IDBDatabase,
-    names: string | string[],
-    mode: StoreMode,
-    fn: (stores: { [name: string]: IDBObjectStore }, tx: IDBTransaction) => void,
-): Promise<void> {
-    const tx = db.transaction(names, mode);
-    const storeMap: { [name: string]: IDBObjectStore } = {};
-    for (const name of (Array.isArray(names) ? names : [names])) {
-        storeMap[name] = tx.objectStore(name);
-    }
-    // Call fn synchronously — requests must exist before yielding the event
-    // loop or the transaction auto-commits (classic IndexedDB constraint).
-    fn(storeMap, tx);
-    return new Promise((resolve, reject) => {
-        tx.addEventListener("complete", () => resolve());
-        tx.addEventListener("abort", () => reject(tx.error ?? new Error("Transaction aborted")));
-        tx.addEventListener("error", () => reject(tx.error ?? new Error("Transaction error")));
-    });
-}
-
-// --- Single-request sugar (equivalents of db.get/put/delete/getAll/count) ---
-
-export function get<T = any>(store: IDBObjectStore, key: IDBValidKey): Promise<T | undefined> {
-    return req(store.get(key));
-}
-export function getAll<T = any>(store: IDBObjectStore, range?: IDBKeyRange): Promise<T[]> {
-    return req(store.getAll(range));
-}
-export function put(store: IDBObjectStore, value: any, key?: IDBValidKey): Promise<IDBValidKey> {
-    return req(store.put(value, key));
-}
-export function del(store: IDBObjectStore, key: IDBValidKey): Promise<undefined> {
-    return req(store.delete(key));
-}
-export function count(store: IDBObjectStore, range?: IDBKeyRange): Promise<number> {
-    return req(store.count(range));
-}
-
-/**
- * Iterates a cursor on an index or store, awaiting each step. Returns the
- * number of visited entries — the callback decides whether to stop early
- * (return "stop") or continue.
- */
-export function openCursor(
-    source: IDBObjectStore | IDBIndex,
-    direction: IDBCursorDirection,
-    visit: (cursor: IDBCursorWithValue) => void | "stop",
-): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const request = source.openCursor(null, direction);
-        request.addEventListener("success", () => {
-            const cursor = request.result;
-            if (!cursor) return resolve();
-            if (visit(cursor) === "stop") return resolve();
-            cursor.continue();
-        });
-        request.addEventListener("error", () => reject(request.error));
+        };
+        request.onsuccess = () => resolve(new Database(request.result));
+        request.onerror = () => reject(request.error);
     });
 }

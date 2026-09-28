@@ -1,4 +1,4 @@
-import { IDBPDatabase, openDB } from "idb";
+import { type Database, openDB } from "./idb";
 import { type DataverseTable } from "dataverse-schema";
 import { type GenericProperties } from "dataverse-schema";
 import { getEtag } from "dataverse-schema";
@@ -243,8 +243,8 @@ export class SyncEngine {
         }
     }
 
-    private db: IDBPDatabase | Promise<IDBPDatabase> | undefined;
-    async getDB(): Promise<IDBPDatabase> {
+    private db: Database | Promise<Database> | undefined;
+    async getDB(): Promise<Database> {
         if (!this.db) {
             const self = this
             const dbPromise = openDB(this.name, this.dbVersion, {

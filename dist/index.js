@@ -1,5 +1,3 @@
-import { openDB } from "idb";
-
 //#region src/util.ts
 const ETAG = "$etag";
 const rxGUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
@@ -4506,6 +4504,155 @@ function serializeFetchXml(ast) {
 		ast.useRawOrderBy ? `useraworderby="true"` : void 0
 	].filter((value) => value !== void 0);
 	return `<fetch${ast.kind === "xml-aggregate" ? ` aggregate="true"` : ""}><entity ${values.join(" ")}>${serializeContents(ast)}</entity></fetch>`;
+}
+
+//#endregion
+//#region src/sync/idb.ts
+/**
+* Minimal promise wrapper over the raw IndexedDB API — a drop-in replacement
+* for the parts of the `idb` package that SyncEngine uses. Zero dependencies.
+*
+* What is implemented (and deliberately not more):
+* - `openDB(name, version, { upgrade, blocked })` with idb-compatible callbacks
+* - implicit per-call requests on the database (`db.get/put/delete/getAll/count`)
+* - explicit transactions with promisified object stores and `tx.done`
+* - promisified `openCursor` (first cursor entry — the flush loop re-opens a
+*   fresh transaction per iteration, so `continue()` is not needed here)
+*
+* Note: `openDB` does NOT auto-close on `versionchange` — SyncEngine attaches
+* its own handler to track the new version before closing.
+*/
+/** Wraps a single IDB request into a promise of its result. */
+function req(request) {
+	return new Promise((resolve, reject) => {
+		request.onsuccess = () => resolve(request.result);
+		request.onerror = () => reject(request.error);
+	});
+}
+/** Resolves when the transaction commits; rejects on abort/error. */
+function txDone(tx) {
+	return new Promise((resolve, reject) => {
+		tx.oncomplete = () => resolve();
+		tx.onabort = () => reject(tx.error ?? /* @__PURE__ */ new Error("Transaction aborted"));
+		tx.onerror = () => reject(tx.error ?? /* @__PURE__ */ new Error("Transaction error"));
+	});
+}
+/** A promisified view of an IDBObjectStore (or of an index via .index()). */
+var Store = class Store {
+	bare;
+	constructor(bare) {
+		this.bare = bare;
+	}
+	get(key) {
+		return req(this.bare.get(key));
+	}
+	getAll(range) {
+		return req(this.bare.getAll(range));
+	}
+	put(value, key) {
+		return req(this.bare.put(value, key));
+	}
+	add(value, key) {
+		return req(this.bare.add(value, key));
+	}
+	delete(key) {
+		return req(this.bare.delete(key));
+	}
+	count(range) {
+		return req(this.bare.count(range));
+	}
+	clear() {
+		return req(this.bare.clear());
+	}
+	index(name) {
+		return new Store(this.bare.index(name));
+	}
+	/**
+	* Opens a cursor and resolves with the first entry's cursor (or undefined
+	* when the source is empty). Callers that need to keep iterating can call
+	* cursor.continue() themselves.
+	*/
+	openCursor(range, direction) {
+		return req(this.bare.openCursor(range ?? void 0, direction));
+	}
+};
+/** A promisified transaction: promisified stores plus a `done` promise. */
+var Tx = class {
+	bare;
+	names;
+	/** Promisified store when the transaction covers exactly one store. */
+	store;
+	done;
+	constructor(bare, names) {
+		this.bare = bare;
+		this.names = names;
+		this.store = this.objectStore(names[0]);
+		this.done = txDone(bare);
+	}
+	objectStore(name) {
+		return new Store(this.bare.objectStore(name));
+	}
+};
+/** A promisified IDBDatabase: convenience single-request methods plus transactions. */
+var Database = class {
+	bare;
+	constructor(bare) {
+		this.bare = bare;
+	}
+	get version() {
+		return this.bare.version;
+	}
+	get objectStoreNames() {
+		return this.bare.objectStoreNames;
+	}
+	close() {
+		this.bare.close();
+	}
+	addEventListener(type, listener) {
+		this.bare.addEventListener(type, listener);
+	}
+	transaction(names, mode) {
+		return new Tx(this.bare.transaction(names, mode), Array.isArray(names) ? names : [names]);
+	}
+	get(storeName, key) {
+		return this.transaction(storeName, "readonly").objectStore(storeName).get(key);
+	}
+	getAll(storeName) {
+		return this.transaction(storeName, "readonly").objectStore(storeName).getAll();
+	}
+	put(storeName, value) {
+		return this.transaction(storeName, "readwrite").objectStore(storeName).put(value);
+	}
+	delete(storeName, key) {
+		return this.transaction(storeName, "readwrite").objectStore(storeName).delete(key);
+	}
+	count(storeName) {
+		return this.transaction(storeName, "readonly").objectStore(storeName).count();
+	}
+};
+/**
+* Opens the database, mirroring idb's openDB:
+* - `upgrade` runs inside the versionchange transaction
+* - `blocked` fires when another tab holds an old-version connection open
+* - rejects if opening fails (or the upgrade callback throws/aborts)
+*/
+function openDB(name, version, options = {}) {
+	return new Promise((resolve, reject) => {
+		const request = indexedDB.open(name, version);
+		request.onupgradeneeded = (event) => {
+			try {
+				options.upgrade?.(request.result, event.oldVersion, event.newVersion ?? version, request.transaction);
+			} catch (err) {
+				request.transaction?.abort();
+				reject(err instanceof Error ? err : new Error(String(err)));
+			}
+		};
+		request.onblocked = (event) => {
+			options.blocked?.(event.oldVersion, event.newVersion ?? version);
+		};
+		request.onsuccess = () => resolve(new Database(request.result));
+		request.onerror = () => reject(request.error);
+	});
 }
 
 //#endregion

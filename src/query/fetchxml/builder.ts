@@ -1,4 +1,4 @@
-﻿import { DataverseTable, DataverseIntersectTable } from "../../table";
+import { DataverseTable, DataverseIntersectTable } from "../../table";
 import { GenericProperties, Infer } from "../../types";
 import { FilterExpr, FieldRef } from "../filter/expr";
 import { Aggregation, GroupByExpr } from "../shared/aggregation";
@@ -253,34 +253,34 @@ type SubJoinBuilder<TProps extends GenericProperties, TResult extends Record<str
         subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
         intersect?: boolean,
     ): SubJoinBuilder<TProps, TResult, TSelected>
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
         subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
-    ): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>
+    ): SubJoinBuilder<TProps, JoinResult<L, TResult, TJoinResult>, TSelected>
     join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: FilterCollector<T2>) => void,
     ): SubJoinBuilder<TProps, TResult, TSelected>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
-    ): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>
+    ): SubJoinBuilder<TProps, JoinResult<L, TResult, TJoinResult>, TSelected>
     join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: FilterCollector<T2>) => void,
     ): SubJoinBuilder<TProps, TResult, TSelected>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
-    ): SubJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TSelected>
+    ): SubJoinBuilder<TProps, JoinResult<L, TResult, TJoinResult>, TSelected>
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubJoinBuilder<TProps, TResult, TSelected>
     toXml(): string
@@ -293,6 +293,21 @@ type NormalLinkType = Exclude<FetchLinkType, FilterOnlyLinkType>
 
 type NoOverlap<T extends Record<string, any>, U extends Record<string, any>> =
     Extract<keyof T, keyof U> extends never ? Simplify<T & U> : never
+
+/** Link types that do not guarantee a matching row — merged fields may be absent. */
+type OuterLinkType = "outer"
+
+/**
+ * Makes every property optional (possibly undefined), used for fields selected
+ * through an outer `join` where no matching row may exist.
+ */
+type Optionalize<T extends Record<string, any>> = {
+    [K in keyof T]+?: T[K] | undefined
+}
+
+/** Result merge for a join: outer links make the joined fields optional, inner links keep them required. */
+type JoinResult<TLinkType extends NormalLinkType, TResult extends Record<string, any>, TJoinResult extends Record<string, any>> =
+    NoOverlap<TResult, TLinkType extends OuterLinkType ? Optionalize<TJoinResult> : TJoinResult>
 
 // --- Aggregate subquery builder (apply path: has apply, no select) ---
 
@@ -311,34 +326,34 @@ type SubAggregateJoinBuilder<TProps extends GenericProperties, TResult extends R
         subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
         intersect?: boolean,
     ): SubAggregateJoinBuilder<TProps, TResult, TApplied>
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
         subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
-    ): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>
+    ): SubAggregateJoinBuilder<TProps, JoinResult<L, TResult, TJoinResult>, TApplied>
     join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: FilterCollector<T2>) => void,
     ): SubAggregateJoinBuilder<TProps, TResult, TApplied>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>,
-    ): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>
+    ): SubAggregateJoinBuilder<TProps, JoinResult<L, TResult, TJoinResult>, TApplied>
     join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: FilterCollector<T2>) => void,
     ): SubAggregateJoinBuilder<TProps, TResult, TApplied>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>,
-    ): SubAggregateJoinBuilder<TProps, NoOverlap<TResult, TJoinResult>, TApplied>
+    ): SubAggregateJoinBuilder<TProps, JoinResult<L, TResult, TJoinResult>, TApplied>
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>
     orderby(entityname: string, attribute: string, direction?: 'asc' | 'desc'): SubAggregateJoinBuilder<TProps, TResult, TApplied>
     toXml(): string
@@ -360,34 +375,34 @@ export interface FetchXmlSelectQuery<TProps extends GenericProperties, TResult e
         subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
         intersect?: boolean,
     ): FetchXmlSelectQuery<TProps, TResult>
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
         subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
-    ): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>
+    ): FetchXmlSelectQuery<TProps, JoinResult<L, TResult, TJoinResult>>
     join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: FilterCollector<T2>) => void,
     ): FetchXmlSelectQuery<TProps, TResult>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
-    ): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>
+    ): FetchXmlSelectQuery<TProps, JoinResult<L, TResult, TJoinResult>>
     join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: FilterCollector<T2>) => void,
     ): FetchXmlSelectQuery<TProps, TResult>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
-    ): FetchXmlSelectQuery<TProps, NoOverlap<TResult, TJoinResult>>
+    ): FetchXmlSelectQuery<TProps, JoinResult<L, TResult, TJoinResult>>
     distinct(): FetchXmlSelectQuery<TProps, TResult>
     top(n: number): FetchXmlSelectQuery<TProps, TResult>
     orderby(fieldSelector: (f: FieldProxy<TProps>) => string | FieldRef<any>, direction?: 'asc' | 'desc'): FetchXmlSelectQuery<TProps, TResult>
@@ -419,8 +434,8 @@ export interface FetchXmlInitial<TProps extends GenericProperties> {
         subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
         intersect?: boolean,
     ): FetchXmlInitial<TProps>
-    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
@@ -432,8 +447,8 @@ export interface FetchXmlInitial<TProps extends GenericProperties> {
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: FilterCollector<T2>) => void,
     ): FetchXmlInitial<TProps>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
     ): FetchXmlInitial<TProps>
@@ -442,8 +457,8 @@ export interface FetchXmlInitial<TProps extends GenericProperties> {
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: FilterCollector<T2>) => void,
     ): FetchXmlInitial<TProps>
-    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
     ): FetchXmlInitial<TProps>
@@ -535,24 +550,25 @@ export class FetchXmlAggregateQuery<
         TFrom extends keyof TDataverseTable["fields"],
         TTo extends keyof TProps,
         TJoinResult extends Record<string, any>,
+        L extends NormalLinkType,
     >(
-        linkType: FetchLinkType,
+        linkType: L,
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
         subquery: (q: SubAggregateJoinBuilder<TDataverseTable["fields"], {}>) => SubAggregateJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
-    ): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>
-    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: FetchLinkType,
+    ): FetchXmlAggregateQuery<TProps, JoinResult<L, TResult, TJoinResult>>
+    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>,
-    ): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>
-    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: FetchLinkType,
+    ): FetchXmlAggregateQuery<TProps, JoinResult<L, TResult, TJoinResult>>
+    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: SubAggregateJoinBuilder<T2, {}>) => SubAggregateJoinBuilder<T2, TJoinResult>,
-    ): FetchXmlAggregateQuery<TProps, NoOverlap<TResult, TJoinResult>>
+    ): FetchXmlAggregateQuery<TProps, JoinResult<L, TResult, TJoinResult>>
     public join(
         linkType: FetchLinkType,
         tableOrIntersect: DataverseTable<any> | DataverseIntersectTable<any, any>,
@@ -887,34 +903,34 @@ export class EntityQueryBuilder<
         subquery: (q: FilterCollector<TDataverseTable["fields"]>) => void,
         intersect?: boolean,
     ): EntityQueryBuilder<TProps, TResult>
-    public join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    public join<TDataverseTable extends DataverseTable<any>, TFrom extends keyof TDataverseTable["fields"], TTo extends keyof TProps, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         table: TDataverseTable,
         from: TFrom,
         to: TTo,
         subquery: (q: SubJoinBuilder<TDataverseTable["fields"], {}>) => SubJoinBuilder<TDataverseTable["fields"], TJoinResult>,
         intersect?: boolean,
-    ): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>
+    ): EntityQueryBuilder<TProps, JoinResult<L, TResult, TJoinResult>>
     public join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: FilterCollector<T2>) => void,
     ): EntityQueryBuilder<TProps, TResult>
-    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<TProps, T2>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
-    ): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>
+    ): EntityQueryBuilder<TProps, JoinResult<L, TResult, TJoinResult>>
     public join<T2 extends GenericProperties>(
         linkType: FilterOnlyLinkType,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: FilterCollector<T2>) => void,
     ): EntityQueryBuilder<TProps, TResult>
-    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>>(
-        linkType: NormalLinkType,
+    public join<T2 extends GenericProperties, TJoinResult extends Record<string, any>, L extends NormalLinkType>(
+        linkType: L,
         intersectTable: DataverseIntersectTable<T2, TProps>,
         subquery: (q: SubJoinBuilder<T2, {}>) => SubJoinBuilder<T2, TJoinResult>,
-    ): EntityQueryBuilder<TProps, NoOverlap<TResult, TJoinResult>>
+    ): EntityQueryBuilder<TProps, JoinResult<L, TResult, TJoinResult>>
     public join(
         linkType: FetchLinkType,
         tableOrIntersect: DataverseTable<any> | DataverseIntersectTable<any, any>,
