@@ -2889,7 +2889,7 @@
     lines.push(`${indent}</link-entity>`);
     return lines;
   }
-  function collectAliasesFromAttributes(builder, map, attrs) {
+  function collectAliasesFromAttributes(builder, map, attrs, isOuter = false) {
     const fields = builder._table.fields;
     for (const attr of attrs) {
       const entry = Object.entries(fields).find(([, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name);
@@ -2899,24 +2899,26 @@
         map.set(attr.alias, {
           field: FieldRef.fromPath(fieldDef, dataverseName),
           getDefault: () => fieldDef.getDefault?.(),
-          name: attr.alias
+          name: attr.alias,
+          isOuter
         });
       } else {
         map.set(attr.alias, {
           field: void 0,
           getDefault: () => void 0,
-          name: attr.name
+          name: attr.name,
+          isOuter
         });
       }
     }
   }
-  function collectAliasesRecursive(builder, map) {
+  function collectAliasesRecursive(builder, map, inheritedOuter = false) {
     const attrs = builder._getEffectiveAttributes?.() ?? [];
-    collectAliasesFromAttributes(builder, map, attrs);
+    collectAliasesFromAttributes(builder, map, attrs, inheritedOuter);
     for (const link of builder._links ?? []) {
       if (link.builder instanceof FilterCollector) continue;
       if (EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) continue;
-      collectAliasesRecursive(link.builder, map);
+      collectAliasesRecursive(link.builder, map, inheritedOuter || link.linkType === "outer");
     }
   }
   async function transformRowWithAliases(table, aliasInfo, v) {
@@ -2925,8 +2927,13 @@
       const recordId = v[table.primaryKey.property.fromDataverseName] ?? v[table.primaryKey.property.logicalName] ?? "";
       const ctx = { table, client: table.client, recordId };
       for (const [alias, info] of aliasInfo) {
-        if (info.name in v) {
-          result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+        const raw = v[info.name];
+        if (info.isOuter && raw == null && !(info.name in v)) {
+          result[alias] = info.field ? void 0 : raw;
+        } else if (info.isOuter && raw == null) {
+          result[alias] = info.getDefault();
+        } else if (info.name in v) {
+          result[alias] = info.field ? await info.field.transformFromDataverse(raw, ctx) : raw;
         } else {
           result[alias] = info.getDefault();
         }
@@ -3850,7 +3857,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-28T14:15:58.903Z"}
+      meta.textContent = `build ${"2026-09-29T01:05:54.984Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3943,7 +3950,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-28T14:15:58.903Z",
+          build: "2026-09-29T01:05:54.984Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3962,7 +3969,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-28T14:15:58.903Z"}\``,
+        `Build: \`${"2026-09-29T01:05:54.984Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4557,9 +4564,29 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)");
             const outerNames = new Set(outer.map((r) => r.parentName));
             assertEquals([...outerNames].sort(), [ctx.state.lonelyName, ctx.state.parentName].sort(), "both parents present via outer join");
+            const lonely = outer.filter((r) => r.parentName === ctx.state.lonelyName);
+            assertEquals(lonely.length, 1, "childless parent appears once");
+            assertEquals(lonely[0].kid, void 0, "absent outer-joined field is undefined, not a field default");
+            const populated = outer.filter((r) => r.parentName === ctx.state.parentName);
+            assertEquals(populated.length, 3, "populated parent repeated per child");
+            assert(populated.every((r) => r.kid !== void 0), "matched outer-joined rows are not undefined");
             const inner = await base("inner");
             assertEquals(inner.length, 3, "populated parent repeated per child");
             assertEquals(inner.every((r) => r.parentName === ctx.state.parentName), true, "inner join hit the right parent");
+            assert(inner.every((r) => r.kid !== void 0), "inner-joined fields are never undefined");
+          }
+        },
+        {
+          name: "apply over outer join keeps childless parent with no borrowed aggregate",
+          fn: async () => {
+            const rows = await fetchXml(ctx.tables.TestTable0).apply((f) => ({ parentLabel: groupby(f.name) })).join("outer", ctx.tables.TestTable, "testLookup", "id", (sub) => sub.apply((f) => ({ kidSum: sum(f.int) }))).execute();
+            assert(rows.length >= 2, "childless parent kept by outer join");
+            const lonely = rows.find((r) => r.parentLabel === ctx.state.lonelyName);
+            assert(lonely, "row for lonely parent exists");
+            const kidSum = lonely.kidSum;
+            assert(kidSum == null || kidSum === 0, `childless parent aggregate is empty (got ${kidSum}), never another parent's sum`);
+            const parent = rows.find((r) => r.parentLabel === ctx.state.parentName);
+            assertEquals(parent?.kidSum, 147, "matched parent sums its children (5+42+100)");
           }
         },
         {

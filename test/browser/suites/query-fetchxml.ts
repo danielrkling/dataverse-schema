@@ -88,9 +88,33 @@ export const fetchxmlSuite: Suite = {
           assertEquals(outer.length, 4, "lonely parent once + populated parent per child (join multiplies)")
           const outerNames = new Set(outer.map((r) => r.parentName))
           assertEquals([...outerNames].sort(), [ctx.state.lonelyName, ctx.state.parentName].sort(), "both parents present via outer join")
+          const lonely = outer.filter((r) => r.parentName === ctx.state.lonelyName)
+          assertEquals(lonely.length, 1, "childless parent appears once")
+          assertEquals(lonely[0].kid, undefined, "absent outer-joined field is undefined, not a field default")
+          const populated = outer.filter((r) => r.parentName === ctx.state.parentName)
+          assertEquals(populated.length, 3, "populated parent repeated per child")
+          assert(populated.every((r) => r.kid !== undefined), "matched outer-joined rows are not undefined")
           const inner = await base("inner")
           assertEquals(inner.length, 3, "populated parent repeated per child")
           assertEquals(inner.every((r) => r.parentName === ctx.state.parentName), true, "inner join hit the right parent")
+          assert(inner.every((r) => r.kid !== undefined), "inner-joined fields are never undefined")
+        },
+      },
+      {
+        name: "apply over outer join keeps childless parent with no borrowed aggregate",
+        fn: async () => {
+          // Aggregate children per parent through an outer link-entity.
+          const rows = await fetchXml(ctx.tables.TestTable0)
+            .apply((f) => ({ parentLabel: groupby(f.name) }))
+            .join("outer", ctx.tables.TestTable, "testLookup", "id", (sub) => sub.apply((f) => ({ kidSum: sum(f.int) })))
+            .execute()
+          assert(rows.length >= 2, "childless parent kept by outer join")
+          const lonely = rows.find((r) => (r as any).parentLabel === ctx.state.lonelyName)
+          assert(lonely, "row for lonely parent exists")
+          const kidSum = (lonely as any).kidSum
+          assert(kidSum == null || kidSum === 0, `childless parent aggregate is empty (got ${kidSum}), never another parent's sum`)
+          const parent = rows.find((r) => (r as any).parentLabel === ctx.state.parentName)
+          assertEquals((parent as any)?.kidSum, 147, "matched parent sums its children (5+42+100)")
         },
       },
       {

@@ -19,6 +19,8 @@ type AliasInfo = {
     field?: FieldRef<any>;
     getDefault: () => any;
     name: string;
+    /** True when the alias comes from an outer join — a null/absent raw value resolves to undefined. */
+    isOuter?: boolean;
 };
 
 type ExecuteOptions = {
@@ -167,6 +169,7 @@ function collectAliasesFromAttributes(
     builder: EntityQueryBuilder<any, any> | FetchXmlAggregateQuery<any, any>,
     map: Map<string, AliasInfo>,
     attrs: readonly AttrDef[],
+    isOuter = false,
 ): void {
     const fields = (builder as any)._table.fields as Record<string, any>;
     for (const attr of attrs) {
@@ -178,25 +181,27 @@ function collectAliasesFromAttributes(
                 field: FieldRef.fromPath(fieldDef, dataverseName),
                 getDefault: () => fieldDef.getDefault?.(),
                 name: attr.alias,
+                isOuter,
             });
         } else {
             map.set(attr.alias, {
                 field: undefined,
                 getDefault: () => undefined,
                 name: attr.name,
+                isOuter,
             });
         }
     }
 }
 
 /** Resolves every attribute alias (root + non-filter-only joins) to its field definition. */
-function collectAliasesRecursive(builder: any, map: Map<string, AliasInfo>): void {
+function collectAliasesRecursive(builder: any, map: Map<string, AliasInfo>, inheritedOuter = false): void {
     const attrs = (builder as any)._getEffectiveAttributes?.() ?? [];
-    collectAliasesFromAttributes(builder, map, attrs);
+    collectAliasesFromAttributes(builder, map, attrs, inheritedOuter);
     for (const link of ((builder as any)._links ?? []) as LinkDef[]) {
         if (link.builder instanceof FilterCollector) continue;
         if (EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) continue;
-        collectAliasesRecursive(link.builder, map);
+        collectAliasesRecursive(link.builder, map, inheritedOuter || link.linkType === "outer");
     }
 }
 
@@ -210,8 +215,15 @@ async function transformRowWithAliases(
         const recordId = v[table.primaryKey.property.fromDataverseName] ?? v[table.primaryKey.property.logicalName] ?? "";
         const ctx = { table, client: table.client, recordId };
         for (const [alias, info] of aliasInfo) {
-            if (info.name in v) {
-                result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
+            const raw = v[info.name];
+            if (info.isOuter && raw == null && !(info.name in v)) {
+                // Absent property on an outer join: no matching row, value is undefined
+                result[alias] = info.field ? undefined : raw;
+            } else if (info.isOuter && raw == null) {
+                // Explicit null on an outer join: use the field default
+                result[alias] = info.getDefault();
+            } else if (info.name in v) {
+                result[alias] = info.field ? await info.field.transformFromDataverse(raw, ctx) : raw;
             } else {
                 result[alias] = info.getDefault();
             }

@@ -1,8 +1,8 @@
 import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
-  primaryKey, string, number, choice, fetchXml, eq, gt, and, FieldRef,
-  groupby, sum, count, average, lookupId,
+  primaryKey, string, number, choice, fetchXml, eq, gt, and, FieldRef, lookupId,
+  groupby, sum, count, average,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -237,4 +237,67 @@ test("composite and() filters nest as a filter group", () => {
   expect(xml).toContain(
     `<filter type="and"><condition attribute="name" operator="eq" value="A" /><condition attribute="revenue" operator="gt" value="1" /></filter>`,
   )
+})
+
+// --- joined row transformation (outer vs inner null handling) ---
+
+const Location = new DataverseTable({
+  client, entitySetName: "locations", logicalName: "location",
+  fields: { id: primaryKey("locationid"), locName: string("name") },
+})
+
+const Address = new DataverseTable({
+  client, entitySetName: "addresses", logicalName: "address",
+  fields: {
+    id: primaryKey("addressid"),
+    street: string("street"),
+    zip: number("zipcode"),
+    locationId: lookupId("locationid", () => Location),
+  },
+})
+
+const Person = new DataverseTable({
+  client, entitySetName: "people", logicalName: "person",
+  fields: {
+    pk: primaryKey("personid"),
+    name: string("fullname"),
+    street: string("street"),
+  },
+})
+
+/** Stubs the client's page iterator with the given raw rows for the next execute()/iterate() call. */
+function stubPages(rows: Record<string, any>[]) {
+  (client as any).iteratePages = async function* () {
+    yield rows
+  }
+}
+
+test("outer join: absent linked property transforms to undefined", async () => {
+  // person.name aliased as "name_" via select, joined address alias absent
+  stubPages([{ personid: "p1", personName: "Ann" }])
+  const rows = await fetchXml(Person)
+    .select(f => ({ personName: f.name }))
+    .join("outer", Address, "id", "pk", sub => sub.select(f => ({ addrStreet: f.street })))
+    .execute()
+  expect(rows).toHaveLength(1)
+  expect(rows[0].personName).toBe("Ann")
+  expect(rows[0]).toHaveProperty("addrStreet", undefined)
+})
+
+test("outer join: explicit null uses the joined field default", async () => {
+  stubPages([{ personid: "p1", personName: "Ann", addrStreet: null }])
+  const rows = await fetchXml(Person)
+    .select(f => ({ personName: f.name }))
+    .join("outer", Address, "id", "pk", sub => sub.select(f => ({ addrStreet: f.street })))
+    .execute()
+  expect(rows[0].addrStreet).toBe("")
+})
+
+test("inner join: null uses the joined field default (not undefined)", async () => {
+  stubPages([{ personid: "p1", personName: "Ann", addrStreet: null }])
+  const rows = await fetchXml(Person)
+    .select(f => ({ personName: f.name }))
+    .join("inner", Address, "id", "pk", sub => sub.select(f => ({ addrStreet: f.street })))
+    .execute()
+  expect(rows[0].addrStreet).toBe("")
 })
