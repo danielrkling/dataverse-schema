@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
-  primaryKey, string, number, choice, fetchXml, eq, gt, and, FieldRef, lookupId,
+  primaryKey, string, number, choice, NumberField, fetchXml, eq, gt, and, FieldRef, lookupId,
   groupby, sum, count, average,
 } from "../src"
 
@@ -17,7 +17,7 @@ const Account = new DataverseTable({
   fields: {
     id: primaryKey("accountid"),
     name: string("name"),
-    revenue: number("revenue"),
+    revenue: number("revenue") as NumberField,
     status: choice("statuscode", { 1: "Active", 2: "Inactive" }),
   },
 })
@@ -251,7 +251,7 @@ const Address = new DataverseTable({
   fields: {
     id: primaryKey("addressid"),
     street: string("street"),
-    zip: number("zipcode"),
+    zip: number("zipcode") as NumberField,
     locationId: lookupId("locationid", () => Location),
   },
 })
@@ -284,16 +284,17 @@ test("outer join: absent linked property transforms to undefined", async () => {
   expect(rows[0]).toHaveProperty("addrStreet", undefined)
 })
 
-test("outer join: explicit null uses the joined field default", async () => {
+test("outer join: explicit null resolves to null", async () => {
   stubPages([{ personid: "p1", personName: "Ann", addrStreet: null }])
   const rows = await fetchXml(Person)
     .select(f => ({ personName: f.name }))
     .join("outer", Address, "id", "pk", sub => sub.select(f => ({ addrStreet: f.street })))
     .execute()
+  // street is non-nullable: server null folds into the field default ""
   expect(rows[0].addrStreet).toBe("")
 })
 
-test("inner join: null uses the joined field default (not undefined)", async () => {
+test("inner join: null resolves to null (not undefined)", async () => {
   stubPages([{ personid: "p1", personName: "Ann", addrStreet: null }])
   const rows = await fetchXml(Person)
     .select(f => ({ personName: f.name }))
@@ -301,3 +302,6 @@ test("inner join: null uses the joined field default (not undefined)", async () 
     .execute()
   expect(rows[0].addrStreet).toBe("")
 })
+
+
+

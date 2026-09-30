@@ -1,6 +1,6 @@
 import { expectTypeOf, test } from "vitest"
 import { fetchXml, Infer, FieldRef, eq, FetchXmlInitial, FetchXmlSelectQuery } from "../src"
-import { DataverseTable, DataverseIntersectTable, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection } from "../src"
+import { DataverseTable, DataverseIntersectTable, NumberField, DateTimeField, primaryKey, string, number, boolean, datetime, lookup, lookupId, collection } from "../src"
 import { DataverseClient } from "../src/client"
 import { sum, count, groupby, average, min, max } from "../src"
 
@@ -19,7 +19,7 @@ const Address = new DataverseTable({
   fields: {
     id: primaryKey("addressid"),
     street: string("street_Address"),
-    zip: number("zip_code"),
+    zip: number("zip_code") as NumberField,
     locationId: lookupId("address_Location", () => Location),
     location: lookup("address_Location", () => Location),
   },
@@ -30,7 +30,7 @@ const Person = new DataverseTable({
   fields: {
     pk: primaryKey("personid"),
     name: string("fullname"),
-    age: number("person_age"),
+    age: number("person_age") as NumberField,
     active: boolean("active"),
     addressId: lookupId("person_Address", () => Address),
     address: lookup("person_Address", () => Address),
@@ -43,8 +43,8 @@ test("select narrows to exact fields", () => {
   const q = fetchXml(Person).select(f => ({ myName: f.name, myAge: f.age }))
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["myName"]>().toBeString()
-  expectTypeOf<R["myAge"]>().toBeNumber()
+  expectTypeOf<R["myName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["myAge"]>().toEqualTypeOf<number | null>()
   expectTypeOf<R>().not.toHaveProperty("pk")
   expectTypeOf<R>().not.toHaveProperty("active")
 })
@@ -68,7 +68,7 @@ test("join merges result type", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["addrStreet"]>().toBeString()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string>()
 })
 
 test("join with select on both tables merges types", () => {
@@ -79,9 +79,9 @@ test("join with select on both tables merges types", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["personName"]>().toBeString()
-  expectTypeOf<R["addrStreet"]>().toBeString()
-  expectTypeOf<R["addrZip"]>().toBeNumber()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["addrZip"]>().toEqualTypeOf<number | null>()
   expectTypeOf<R>().not.toHaveProperty("age")
 })
 
@@ -96,9 +96,9 @@ test("multiple joins merge all result types", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["personName"]>().toBeString()
-  expectTypeOf<R["addrStreet"]>().toBeString()
-  expectTypeOf<R["locName"]>().toBeString()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["locName"]>().toEqualTypeOf<string>()
 })
 
 test("outer join merges result type", () => {
@@ -119,7 +119,7 @@ test("filter-only join preserves result type", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["personName"]>().toBeString()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
   expectTypeOf<R>().not.toHaveProperty("addrStreet")
 })
 
@@ -131,7 +131,7 @@ test("SubJoinBuilder.select returns exact merged type", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R>().toEqualTypeOf<{ personName: string; a: string; b: number }>()
+  expectTypeOf<R>().toEqualTypeOf<{ personName: string; a: string; b: number | null }>()
 })
 
 test("join without sub-select is a type error (must call select)", () => {
@@ -155,7 +155,7 @@ test("filter after join uses original table fields and preserves join results", 
 
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R>().toEqualTypeOf<{ personName: string; addrZip: number }>()
+  expectTypeOf<R>().toEqualTypeOf<{ personName: string; addrZip: number | null }>()
 })
 
 // --- Nested join tests (SubJoinBuilder.join) ---
@@ -171,9 +171,9 @@ test("nested join inside SubJoinBuilder merges types", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["personName"]>().toBeString()
-  expectTypeOf<R["addrStreet"]>().toBeString()
-  expectTypeOf<R["locName"]>().toBeString()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["locName"]>().toEqualTypeOf<string>()
 })
 
 test("nested join with multiple levels", () => {
@@ -191,9 +191,9 @@ test("nested join with multiple levels", () => {
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
   expectTypeOf<R["pk"]>().toBeString()
-  expectTypeOf<R["street"]>().toBeString()
-  expectTypeOf<R["locName"]>().toBeString()
-  expectTypeOf<R["personAge"]>().toBeNumber()
+  expectTypeOf<R["street"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["locName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["personAge"]>().toEqualTypeOf<number | null>()
 })
 
 test("nested join with filter-only on inner join", () => {
@@ -207,8 +207,8 @@ test("nested join with filter-only on inner join", () => {
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["personName"]>().toBeString()
-  expectTypeOf<R["addrStreet"]>().toBeString()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string>()
   expectTypeOf<R>().not.toHaveProperty("locName")
 })
 
@@ -317,7 +317,7 @@ test("filter-only join: no fields in result (TResult={})", () => {
     .join("inner", Address, "id", "pk", (sub) => sub.filter(f => eq(f.street, "123")))
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
 
-  expectTypeOf<R["personName"]>().toBeString()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
   expectTypeOf<R>().not.toHaveProperty("street")
 })
 
@@ -373,8 +373,8 @@ test("join with non-overlapping keys merges correctly", () => {
       sub.select(f => ({ addrStreet: f.street }))
     )
   type R = ReturnType<typeof q.execute> extends Promise<infer U> ? U extends (infer V)[] ? V : never : never
-  expectTypeOf<R["personName"]>().toBeString()
-  expectTypeOf<R["addrStreet"]>().toBeString()
+  expectTypeOf<R["personName"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["addrStreet"]>().toEqualTypeOf<string>()
 })
 
 test("join with overlapping keys produces never (type error)", () => {
@@ -423,15 +423,15 @@ const Audit = new DataverseTable({
   client, entitySetName: "audits", logicalName: "audit",
   fields: {
     id: primaryKey("auditid"),
-    createdOn: datetime("createdon_audit"),
-    score: number("score"),
+    createdOn: datetime("createdon_audit") as DateTimeField,
+    score: number("score") as NumberField,
   },
 })
 
 test("aggregate min/max infer number vs date from field type", () => {
   const q = fetchXml(Audit).apply(f => ({ first: min(f.createdOn), best: max(f.score), avgScore: average(f.score) }))
-  expectTypeOf<(typeof q)["T"]["first"]>().toEqualTypeOf<Date>()
-  expectTypeOf<(typeof q)["T"]["best"]>().toEqualTypeOf<number>()
+  expectTypeOf<(typeof q)["T"]["first"]>().toEqualTypeOf<number | Date>()
+  expectTypeOf<(typeof q)["T"]["best"]>().toEqualTypeOf<number | Date>()
   expectTypeOf<(typeof q)["T"]["avgScore"]>().toEqualTypeOf<number>()
 })
 

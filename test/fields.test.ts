@@ -1,17 +1,17 @@
 import { expect, test } from "vitest"
 import * as v from "valibot"
 import {
-  string, nullableString, number, nullableNumber, boolean, nullableBoolean, primaryKey,
-  datetime, nullableDateTime, date, nullableDate, list, image, file, formatted, multiChoice,
+  string, number, boolean, primaryKey,
+  datetime, date, createdOn, modifiedOn, versionNumber, stateCode, list, image, file, formatted, multiChoice,
   collection, collectionIds, lookupId, lookup, DataverseTable,
-  choice, nullableChoice, nullableMultiChoice, SKIP, json, standardParse, standardSafeParse,
+  choice, SKIP, json, standardParse, standardSafeParse,
 } from "../src"
 import { DataverseClient } from "../src/client"
 
 const testClient = new DataverseClient({ url: "https://test.crm.dynamics.com" })
 const testRefTable = new DataverseTable({ client: testClient, entitySetName: "contacts", logicalName: "contacts", fields: { id: primaryKey("contactid") } })
 
-test("string field type and defaults", () => {
+test("string factory is non-nullable by design", () => {
   const f = string("fullname")
   expect(f.type).toBe("string")
   expect(f.kind).toBe("value")
@@ -19,35 +19,48 @@ test("string field type and defaults", () => {
   expect(f.getDefault()).toBe("")
 })
 
-test("nullableString field defaults to null", () => {
-  const f = nullableString("nickname")
-  expect(f.getDefault()).toBeNull()
+test("required string folds null into its default", () => {
+  const f = string("fullname", { required: true })
+  expect(f.getDefault()).toBe("")
+  expect(f.transformValueFromDataverse(null)).toBe("")
+  expect(f.transformValueFromDataverse("Hello")).toBe("Hello")
 })
 
-test("number field type and defaults", () => {
+test("string folds null into its empty default", () => {
+  const f = string("nickname")
+  expect(f.getDefault()).toBe("")
+  expect(f.transformValueFromDataverse(null)).toBe("")
+})
+
+test("number field is nullable by default", () => {
   const f = number("age")
   expect(f.type).toBe("number")
-  expect(f.getDefault()).toBe(0)
-})
-
-test("nullableNumber field defaults to null", () => {
-  const f = nullableNumber("score")
   expect(f.getDefault()).toBeNull()
 })
 
-test("boolean field defaults to false", () => {
-  const f = boolean("active")
-  expect(f.getDefault()).toBe(false)
-})
-
-test("boolean field normalizes null to false", () => {
-  expect(boolean("active").transformValueFromDataverse(null)).toBe(false)
-})
-
-test("nullableBoolean field defaults to null and preserves null", () => {
-  const f = nullableBoolean("active")
+test("required number is validation-only and stays nullable", () => {
+  const f = number("age", { required: true })
   expect(f.getDefault()).toBeNull()
   expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("system number is non-null: null fails fast", () => {
+  const f = number("statecode", { system: true })
+  expect(f.getDefault()).toBe(0)
+  expect(() => f.transformValueFromDataverse(null)).toThrow("non-nullable")
+  expect(f.transformValueFromDataverse(42)).toBe(42)
+})
+
+test("boolean field is non-nullable by design", () => {
+  const f = boolean("active")
+  expect(f.getDefault()).toBe(false)
+  expect(f.transformValueFromDataverse(null)).toBe(false)
+})
+
+test("required boolean folds null into the default", () => {
+  const f = boolean("active", { required: true })
+  expect(f.getDefault()).toBe(false)
+  expect(f.transformValueFromDataverse(null)).toBe(false)
   expect(f.transformValueFromDataverse(true)).toBe(true)
 })
 
@@ -63,41 +76,45 @@ test("primaryKey field returns different UUIDs each call", () => {
   expect(f.getDefault()).not.toBe(f.getDefault())
 })
 
-test("datetime field defaults to Date", () => {
+test("datetime field is nullable by default", () => {
   const f = datetime("createdon")
-  expect(f.getDefault()).toBeInstanceOf(Date)
-})
-
-test("datetime transformValueFromDataverse converts string to Date", () => {
-  const f = datetime("createdon")
-  const result = f.transformValueFromDataverse("2024-01-15T10:30:00Z")
-  expect(result).toBeInstanceOf(Date)
-  expect(result.getFullYear()).toBe(2024)
-})
-
-test("datetime transformValueFromDataverse folds null and absent into the default", () => {
-  const f = datetime("createdon")
-  expect(f.transformValueFromDataverse(null)).toBeInstanceOf(Date)
-  expect(f.transformValueFromDataverse(undefined)).toBeInstanceOf(Date)
-})
-
-test("nullableDateTime field defaults to null", () => {
-  const f = nullableDateTime("deletedon")
   expect(f.getDefault()).toBeNull()
-})
-
-test("nullableDateTime transformValueFromDataverse returns null for null input", () => {
-  const f = nullableDateTime("deletedon")
   expect(f.transformValueFromDataverse(null)).toBeNull()
 })
 
-test("date field parses date-only strings", () => {
+test("system datetime is non-null: null fails fast", () => {
+  const f = datetime("createdon", { system: true })
+  expect(f.getDefault()).toBeInstanceOf(Date)
+  expect(() => f.transformValueFromDataverse(null)).toThrow("non-nullable")
+  expect(f.transformValueFromDataverse("2024-01-15T10:30:00Z")).toBeInstanceOf(Date)
+})
+
+test("sugar factories produce system fields", () => {
+  expect(createdOn().getDefault()).toBeInstanceOf(Date)
+  expect(modifiedOn().getDefault()).toBeInstanceOf(Date)
+  expect(versionNumber().getDefault()).toBe(0)
+  expect(stateCode().getDefault()).toBe(0)
+})
+
+test("required (validation) datetime still converts strings; reads stay nullable", () => {
+  const f = datetime("createdon", { required: true })
+  const result = f.transformValueFromDataverse("2024-01-15T10:30:00Z") as Date | null
+  expect(result).toBeInstanceOf(Date)
+  expect((result as Date).getFullYear()).toBe(2024)
+})
+
+test("date field is nullable by default", () => {
   const f = date("birthdate")
   expect(f.type).toBe("dateOnly")
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("system date parses date-only strings and is non-null", () => {
+  const f = date("birthdate", { system: true })
   const result = f.transformValueFromDataverse("2024-01-15")
   expect(result).toBeInstanceOf(Date)
-  expect(result.getMonth()).toBe(0)
-  expect(result.getDate()).toBe(15)
+  expect((result as Date).getMonth()).toBe(0)
+  expect((result as Date).getDate()).toBe(15)
 })
 
 test("date field transformValueToDataverse formats as date-only", () => {
@@ -106,26 +123,18 @@ test("date field transformValueToDataverse formats as date-only", () => {
   expect(result).toBe("2024-01-15")
 })
 
-test("date field folds null and absent into the default", () => {
-  const f = date("birthdate")
-  expect(f.transformValueFromDataverse(null)).toBeInstanceOf(Date)
-  expect(f.transformValueFromDataverse(undefined)).toBeInstanceOf(Date)
+test("system date fails fast on null instead of folding", () => {
+  const f = date("birthdate", { system: true })
+  expect(() => f.transformValueFromDataverse(null)).toThrow("non-nullable")
+  expect(() => f.transformValueFromDataverse(undefined)).toThrow("non-nullable")
 })
 
-test("date getDefault returns a fresh date each call", () => {
+test("date getDefault (nullable) returns null; system date key still has the class default", () => {
   const f = date("birthdate")
-  expect(f.getDefault()).toBeInstanceOf(Date)
-  expect(f.getDefault()).not.toBe(f.getDefault())
-})
-
-test("nullableDate field defaults to null", () => {
-  const f = nullableDate("birthdate")
   expect(f.getDefault()).toBeNull()
-})
-
-test("nullableDate transformValueFromDataverse returns null for null", () => {
-  const f = nullableDate("birthdate")
-  expect(f.transformValueFromDataverse(null)).toBeNull()
+  const s = date("birthdate", { system: true })
+  expect(s.getDefault()).toBeInstanceOf(Date)
+  expect(s.getDefault()).not.toBe(s.getDefault())
 })
 
 test("list field validates against choices", async () => {
@@ -143,12 +152,19 @@ test("list field issues for invalid value", async () => {
   expect(result.success).toBe(false)
 })
 
-test("choice field type and defaults", () => {
+test("choice field is nullable by default", () => {
   const f = choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" })
   expect(f.type).toBe("choice")
   expect(f.kind).toBe("value")
   expect(f.logicalName).toBe("statuscode")
+  expect(f.getDefault()).toBeNull()
+  expect(f.transformValueFromDataverse(null)).toBeNull()
+})
+
+test("system choice folds null into its default", () => {
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" }, { system: true })
   expect(f.getDefault()).toBe("Active")
+  expect(() => f.transformValueFromDataverse(null)).toThrow("non-nullable")
 })
 
 test("choice transformValueFromDataverse maps number to string", () => {
@@ -166,56 +182,62 @@ test("choice transformValueToDataverse maps string to number", () => {
 })
 
 test("choice validates against option values", async () => {
-  const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" }, { required: true })
   expect(await standardParse(f.schema, "Active")).toBe("Active")
   expect(await standardParse(f.schema, "Inactive")).toBe("Inactive")
   await expect(standardParse(f.schema, "Unknown" as any)).rejects.toThrow()
 })
 
 test("choice issues for invalid value", async () => {
-  const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" }, { required: true })
   const result = await standardSafeParse(f.schema, "Bogus")
   expect(result.success).toBe(false)
 })
 
-test("nullableChoice field defaults to null", () => {
-  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
-  expect(f.type).toBe("choice")
-  expect(f.getDefault()).toBeNull()
-})
-
-test("nullableChoice transformValueFromDataverse handles null", () => {
-  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+test("nullable choice default handles null", () => {
+  const f = choice("prioritycode", { 1: "Low", 2: "High" })
   expect(f.transformValueFromDataverse(null)).toBeNull()
 })
 
 // --- Dynamic choice (no choices provided) ---
 
-test("dynamic choice behaves like a number field", () => {
+test("untyped choice is exactly a number field", () => {
   const f = choice("statuscode")
-  expect(f.type).toBe("dynamicChoice")
+  expect(f.type).toBe("number")
   expect(f.kind).toBe("value")
-  expect(f.getDefault()).toBe(0)
+  expect(f.getDefault()).toBeNull()
+  expect(f.transformValueFromDataverse(null)).toBeNull()
   expect(f.transformValueFromDataverse(900004)).toBe(900004)
   expect(f.transformValueToDataverse(900004)).toBe(900004)
 })
 
-test("dynamic choice rejects non-numeric payloads", () => {
-  const f = choice("statuscode")
-  expect(() => f.transformValueFromDataverse("Active")).toThrow("Invalid choice value: Active (statuscode)")
-  expect(() => f.transformValueToDataverse("Active" as any)).toThrow("Invalid choice value")
+test("untyped choice rejects non-numeric payloads like number()", () => {
+  const f = choice("statuscode", { required: true })
+  expect(() => f.transformValueFromDataverse("Active")).toThrow("Invalid number value: Active")
+  expect(f.transformValueToDataverse("Active" as any)).toBe("Active") // writes pass through to the API
 })
 
 test("dynamic choice validates numbers only", async () => {
-  const f = choice("statuscode")
+  const f = choice("statuscode", { required: true })
   expect(await standardParse(f.schema, 1)).toBe(1)
   await expect(standardParse(f.schema, 1)).resolves.toBe(1)
   const result = await standardSafeParse(f.schema, "Bogus")
   expect(result.success).toBe(false)
 })
 
+test("required dynamic choice is validation-only; nullable default stays null", () => {
+  const f = choice("statuscode", { required: true })
+  expect(f.getDefault()).toBeNull()
+})
+
+test("system dynamic choice is singleton non-null: null fails fast", () => {
+  const f = choice("statuscode", { system: true })
+  expect(f.getDefault()).toBe(0)
+  expect(() => f.transformValueFromDataverse(null)).toThrow("non-nullable")
+})
+
 test("nullable dynamic choice passes raw values through", () => {
-  const f = nullableChoice("statuscode")
+  const f = choice("statuscode")
   expect(f.getDefault()).toBeNull()
   expect(f.transformValueFromDataverse(null)).toBeNull()
   expect(f.transformValueFromDataverse(900004)).toBe(900004)
@@ -223,7 +245,7 @@ test("nullable dynamic choice passes raw values through", () => {
 })
 
 test("dynamic multiChoice reads CSV as numbers and writes CSV", () => {
-  const f = multiChoice("nnsyc200_months")
+  const f = multiChoice("nnsyc200_months", { required: true })
   expect(f.type).toBe("dynamicMultiChoice")
   expect(f.transformValueFromDataverse("3,4,5")).toEqual([3, 4, 5])
   expect(f.transformValueFromDataverse(null)).toEqual([])
@@ -233,24 +255,24 @@ test("dynamic multiChoice reads CSV as numbers and writes CSV", () => {
   expect(() => f.transformValueToDataverse("nope" as any)).toThrow("requires an array")
 })
 
-test("nullable dynamic multiChoice handles null", () => {
-  const f = nullableMultiChoice("nnsyc200_months")
-  expect(f.transformValueFromDataverse(null)).toBeNull()
+test("dynamic multiChoice handles null", () => {
+  const f = multiChoice("nnsyc200_months")
+  expect(f.transformValueFromDataverse(null)).toEqual([])
   expect(f.transformValueFromDataverse("3,4")).toEqual([3, 4])
 })
 test("nullableChoice transformValueFromDataverse maps number to string", () => {
-  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  const f = choice("prioritycode", { 1: "Low", 2: "High" })
   expect(f.transformValueFromDataverse(1)).toBe("Low")
   expect(f.transformValueFromDataverse(2)).toBe("High")
 })
 
 test("nullableChoice transformValueToDataverse handles null", () => {
-  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  const f = choice("prioritycode", { 1: "Low", 2: "High" })
   expect(f.transformValueToDataverse(null)).toBeNull()
 })
 
 test("nullableChoice transformValueToDataverse maps string to number", () => {
-  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+  const f = choice("prioritycode", { 1: "Low", 2: "High" })
   expect(f.transformValueToDataverse("Low")).toBe(1)
   expect(f.transformValueToDataverse("High")).toBe(2)
 })
@@ -294,15 +316,15 @@ test("formatted field uses Display.V1.FormattedValue suffix", () => {
   expect(f.getReadOnly()).toBe(true)
 })
 
-test("string transformValueFromDataverse handles null", () => {
+test("string transformValueFromDataverse folds null into its default", () => {
   const f = string("name")
   expect(f.transformValueFromDataverse(null)).toBe("")
   expect(f.transformValueFromDataverse("Hello")).toBe("Hello")
 })
 
-test("number transformValueFromDataverse handles null", () => {
+test("number transformValueFromDataverse passes null through", () => {
   const f = number("age")
-  expect(f.transformValueFromDataverse(null)).toBe(0)
+  expect(f.transformValueFromDataverse(null)).toBeNull()
   expect(f.transformValueFromDataverse(42)).toBe(42)
 })
 
@@ -328,14 +350,14 @@ test("field without readonly option is not read-only", () => {
 })
 
 test("required validator via valibot schema", async () => {
-  const f = nullableString("name")
-  f.schema = v.pipe(v.nullable(v.string()), v.check(v => v != null, "Required"))
-  const result = await standardSafeParse(f.schema, null)
+  const f = string("name")
+  f.schema = v.pipe(v.string(), v.check(v => v.length > 0, "Required"))
+  const result = await standardSafeParse(f.schema, "")
   expect(result.success).toBe(false)
   if (!result.success) {
     expect(result.issues[0].message).toBe("Required")
   }
-  const result2 = await standardSafeParse(f.schema, "")
+  const result2 = await standardSafeParse(f.schema, "x")
   expect(result2.success).toBe(true)
 })
 
@@ -435,7 +457,7 @@ test("async Standard Schemas are supported through the composed table schema", a
 })
 
 test("required option rejects null, undefined, and empty strings", async () => {
-  const f = nullableString("name", { required: true })
+  const f = string("name", { required: true })
   const missing = await standardSafeParse(f.schema, null)
   expect(missing.success).toBe(false)
   if (!missing.success) expect(missing.issues[0].message).toBe("Value is required")
@@ -449,7 +471,7 @@ test("required option rejects null, undefined, and empty strings", async () => {
 test("required option composes into the table schema", async () => {
   const t = new DataverseTable({
     client: testClient, entitySetName: "accounts", logicalName: "account",
-    fields: { id: primaryKey("accountid"), name: nullableString("name", { required: true }) },
+    fields: { id: primaryKey("accountid"), name: string("name", { required: true }) },
   })
   const bad = await standardSafeParse(t.schema, { id: "123e4567-e89b-12d3-a456-426614174000", name: null })
   expect(bad.success).toBe(false)
@@ -461,10 +483,10 @@ test("required option composes into the table schema", async () => {
   expect(good.success).toBe(true)
 })
 
-test("required option does not change the field default or transforms", () => {
-  const f = nullableString("name", { required: true })
-  expect(f.getDefault()).toBeNull()
-  expect(f.transformValueFromDataverse(null)).toBeNull()
+test("schema option does not change a field default or transforms", () => {
+  const f = string("name", { schema: v.pipe(v.string(), v.check(v => v.length >= 0, "Required")) })
+  expect(f.getDefault()).toBe("")
+  expect(f.transformValueFromDataverse(null)).toBe("")
 })
 
 test("string transformValueToDataverse passes through", () => {
@@ -519,13 +541,13 @@ test("collection has type collection", () => {
 })
 
 test("validation works with valibot pipe", async () => {
-  const f = nullableString("name")
+  const f = string("name")
   f.schema = v.pipe(
-    v.nullable(v.string()),
-    v.check(v => v != null, "Required"),
-    v.check(v => v == null || v.length >= 2, "Too short"),
+    v.string(),
+    v.check(v => v.length > 0, "Required"),
+    v.check(v => v.length >= 2, "Too short"),
   )
-  const result1 = await standardSafeParse(f.schema, null)
+  const result1 = await standardSafeParse(f.schema, "")
   expect(result1.success).toBe(false)
   if (!result1.success) expect(result1.issues[0].message).toBe("Required")
 
@@ -562,38 +584,30 @@ test("multiChoice schema rejects values outside the choice set", async () => {
   expect(result.success).toBe(false)
 })
 
-test("multiChoice getDefault returns independent empty arrays", () => {
-  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" })
+test("required multiChoice getDefault returns independent empty arrays", () => {
+  const f = multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" }, { required: true })
   const a = f.getDefault()
   const b = f.getDefault()
   expect(a).toEqual([])
   expect(a).not.toBe(b)
 })
 
-test("number field coerces numeric FetchXML strings and falls back to its default for null", () => {
-  const f = number("age");
+test("system number coerces numeric FetchXML strings and fails fast on null", () => {
+  const f = number("age", { system: true });
 
   expect(f.transformValueFromDataverse("42")).toBe(42);
   expect(f.transformValueFromDataverse("38.5")).toBe(38.5);
 
-  expect(f.transformValueFromDataverse(null)).toBe(0);
-  expect(f.transformValueFromDataverse(undefined)).toBe(0);
+  expect(() => f.transformValueFromDataverse(null)).toThrow("non-nullable");
+  expect(() => f.transformValueFromDataverse(undefined)).toThrow("non-nullable");
 
   expect(() => f.transformValueFromDataverse("junk")).toThrow(
     "Invalid number value: junk",
   );
 });
 
-test("number field uses a configured default when Dataverse omits a value", () => {
-  const f = number("score", { default: 100 });
-
-  expect(f.getDefault()).toBe(100);
-  expect(f.transformValueFromDataverse(null)).toBe(100);
-  expect(f.transformValueFromDataverse(undefined)).toBe(100);
-});
-
 test("nullable number coerces numeric strings and preserves missing Dataverse values", () => {
-  const f = nullableNumber("score");
+  const f = number("score");
 
   expect(f.transformValueFromDataverse("7")).toBe(7);
   expect(f.transformValueFromDataverse("38.5")).toBe(38.5);
@@ -606,8 +620,8 @@ test("nullable number coerces numeric strings and preserves missing Dataverse va
   );
 });
 
-test("nullable number preserves server null even when it has a local default", () => {
-  const f = nullableNumber("score", { default: 100 });
+test("number default option is the local default for new records", () => {
+  const f = number("score", { default: 100 });
 
   // Used for new local records.
   expect(f.getDefault()).toBe(100);
@@ -618,35 +632,35 @@ test("nullable number preserves server null even when it has a local default", (
 });
 
 test("boolean field coerces stringly true/false", () => {
-  expect(boolean("active").transformValueFromDataverse("true")).toBe(true)
-  expect(boolean("active").transformValueFromDataverse("False")).toBe(false)
-  expect(nullableBoolean("flag").transformValueFromDataverse("true")).toBe(true)
-  expect(nullableBoolean("flag").transformValueFromDataverse(null)).toBeNull()
+  expect(boolean("active", { required: true }).transformValueFromDataverse("true")).toBe(true)
+  expect(boolean("active", { required: true }).transformValueFromDataverse("False")).toBe(false)
+  expect(boolean("flag").transformValueFromDataverse("true")).toBe(true)
+  expect(boolean("flag").transformValueFromDataverse(null)).toBe(false)
 })
 
 // --- Choice choices accessor ---
 
 test("choice exposes frozen labels via choices", () => {
-  const f = choice("statuscode", { 1: "Active", 2: "Inactive" })
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" }, { required: true })
   expect(f.labels).toEqual(["Active", "Inactive"])
   expect(Object.isFrozen(f.choices))
 })
 
-test("nullableChoice exposes frozen labels via choices", () => {
-  const f = nullableChoice("prioritycode", { 1: "Low", 2: "High" })
+test("nullable choice exposes frozen labels via choices", () => {
+  const f = choice("prioritycode", { 1: "Low", 2: "High" })
   expect(f.labels).toEqual(["Low", "High"])
   expect(Object.isFrozen(f.choices))
 })
 
-// --- NullableDateField write ---
+// --- Date write ---
 
-test("nullableDate transformValueToDataverse returns null for null input", () => {
-  const f = nullableDate("birthdate")
-  expect(f.transformValueToDataverse(null)).toBeNull()
+test("date transformValueToDataverse throws for null (writes need an explicit value)", () => {
+  const f = date("birthdate")
+  expect(() => f.transformValueToDataverse(null)).toThrow("Invalid date value")
 })
 
-test("nullableDate transformValueToDataverse throws for non-date values", () => {
-  const f = nullableDate("birthdate")
+test("date transformValueToDataverse throws for non-date values", () => {
+  const f = date("birthdate")
   expect(() => f.transformValueToDataverse("2024-01-01" as any)).toThrow("Invalid date value")
 })
 

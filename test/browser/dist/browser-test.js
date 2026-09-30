@@ -1632,6 +1632,11 @@
   function buildTableQueryAst(table, options) {
     const query = new ODataQuery(table);
     query.select();
+    for (const [key, prop] of Object.entries(table.fields)) {
+      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
+        query.expand(key);
+      }
+    }
     if (options?.filter) query.filter(options.filter);
     if (options?.top !== void 0) query.top(options.top);
     if (typeof options?.orderby === "string") {
@@ -2321,6 +2326,7 @@
     schema;
     #getDefault;
     #readOnly;
+    #nullable;
     constructor(name, definition, options) {
       this.schemaName = name;
       this.logicalName = name.toLowerCase();
@@ -2328,15 +2334,30 @@
       this.toDataverseName = this.logicalName;
       const defaultValue = options && Object.hasOwn(options, "default") ? options.default : definition.defaultValue;
       this.#getDefault = asDefaultFactory(defaultValue);
-      this.#readOnly = options?.readonly ?? false;
+      this.#readOnly = options?.system === true || options?.readonly === true;
+      this.#nullable = definition.nullable ?? false;
       const baseSchema = options?.schema ?? definition.schema;
-      this.schema = options?.required ? requiredOf(baseSchema) : baseSchema;
+      const withNull = this.#nullable ? nullableOf(baseSchema) : baseSchema;
+      this.schema = options?.required ? requiredOf(withNull) : withNull;
     }
     getDefault() {
       return this.#getDefault();
     }
     getReadOnly() {
       return this.#readOnly;
+    }
+    isNullable() {
+      return this.#nullable;
+    }
+    /**
+     * How a `null`/absent wire value becomes a field value.
+     * Nullable fields → `null`; non-nullable fields fail fast.
+     */
+    nullToRead() {
+      if (this.isNullable()) return null;
+      throw new Error(
+        `Field "${this.logicalName}" is non-nullable but Dataverse returned null`
+      );
     }
     transformValueFromDataverse(value, ctx) {
       return value;
@@ -2360,10 +2381,14 @@
     kind = "value";
     type = "number";
     constructor(name, options) {
-      super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
+      super(name, {
+        defaultValue: options?.system === true ? 0 : null,
+        schema: NUMBER_SCHEMA,
+        nullable: options?.system !== true
+      }, options);
     }
     transformValueFromDataverse(value) {
-      if (value == null) return this.getDefault();
+      if (value == null) return this.nullToRead();
       const result = typeof value === "string" ? Number(value) : value;
       if (typeof result !== "number" || !Number.isFinite(result)) {
         throw new Error(`Invalid number value: ${value}`);
@@ -2467,11 +2492,12 @@
       }
       const labels = Object.values(choiceMap);
       super(name, {
-        defaultValue: choiceMap[Number(firstKey)],
+        defaultValue: options?.system === true ? choiceMap[Number(firstKey)] : null,
         schema: checkSchema(
           (value) => labels.includes(value),
           `Value not in [${labels}]`
-        )
+        ),
+        nullable: options?.system !== true
       }, options);
       this.choices = choiceMap;
       this.labels = Object.freeze([...labels]);
@@ -2494,31 +2520,12 @@
       throw new Error(`Unknown choice label: ${value}`);
     }
     transformValueFromDataverse(value) {
-      if (value == null) return this.getDefault();
+      if (value == null) return this.nullToRead();
       return this.fromChoiceValue(value);
     }
     transformValueToDataverse(value) {
+      if (value == null) return null;
       return this.toChoiceValue(value);
-    }
-  }
-  class DynamicChoiceField extends FieldBase {
-    kind = "value";
-    type = "dynamicChoice";
-    constructor(name, options) {
-      super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
-    }
-    transformValueFromDataverse(value) {
-      if (value == null) return this.getDefault();
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
-      }
-      return value;
-    }
-    transformValueToDataverse(value) {
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
-      }
-      return value;
     }
   }
   class DynamicMultiChoiceField extends FieldBase {
@@ -2557,12 +2564,13 @@
     type = "dateTime";
     constructor(name, options) {
       super(name, {
-        defaultValue: () => /* @__PURE__ */ new Date(),
-        schema: DATE_SCHEMA
+        defaultValue: options?.system === true ? () => /* @__PURE__ */ new Date() : null,
+        schema: DATE_SCHEMA,
+        nullable: options?.system !== true
       }, options);
     }
     transformValueFromDataverse(value) {
-      if (value == null) return this.getDefault();
+      if (value == null) return this.nullToRead();
       const result = new Date(value);
       if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
       return result;
@@ -2573,12 +2581,13 @@
     type = "dateOnly";
     constructor(name, options) {
       super(name, {
-        defaultValue: () => parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
-        schema: DATE_SCHEMA
+        defaultValue: options?.system === true ? () => parseDateOnly((/* @__PURE__ */ new Date()).toISOString()) : null,
+        schema: DATE_SCHEMA,
+        nullable: options?.system !== true
       }, options);
     }
     transformValueFromDataverse(value) {
-      if (value == null) return this.getDefault();
+      if (value == null) return this.nullToRead();
       return parseValidDateOnly(value);
     }
     transformValueToDataverse(value) {
@@ -2669,22 +2678,26 @@
     return new PrimaryKeyField(name, options);
   }
   function multiChoice(...args) {
-    if (args.length === 1) {
-      return new DynamicMultiChoiceField(args[0]);
+    const name = args[0];
+    const isChoices = args.length > 1 && args[1] != null && typeof args[1] === "object" && Object.keys(args[1]).some((k) => /^\d+$/.test(k));
+    if (isChoices) {
+      return new MultiChoiceField(name, args[1], args[2]);
     }
-    return new MultiChoiceField(args[0], args[1], args[2]);
+    return new DynamicMultiChoiceField(name, args[1]);
   }
   function choice(...args) {
-    if (args.length === 1) {
-      return new DynamicChoiceField(args[0]);
+    const name = args[0];
+    const isChoices = args.length > 1 && args[1] != null && typeof args[1] === "object" && Object.keys(args[1]).some((k) => /^\d+$/.test(k));
+    if (isChoices) {
+      return new ChoiceField(name, args[1], args[2]);
     }
-    return new ChoiceField(args[0], args[1], args[2]);
-  }
-  function datetime(name, options) {
-    return new DateTimeField(name, options);
+    return new NumberField(name, args[1]);
   }
   function date(name, options) {
     return new DateField(name, options);
+  }
+  function datetime(name, options) {
+    return new DateTimeField(name, options);
   }
   function image(name, options) {
     return new ImageField(name, options);
@@ -2699,7 +2712,8 @@
     constructor(name, getTable, options) {
       super(name, {
         defaultValue: null,
-        schema: nullableOf(GUID_SCHEMA)
+        schema: GUID_SCHEMA,
+        nullable: options?.system !== true
       }, options);
       this.#getTable = getTable;
       this.fromDataverseName = `_${this.logicalName}_value`;
@@ -2764,8 +2778,18 @@
   function collection(name, getTable, options) {
     return new CollectionProperty(name, getTable, options);
   }
-  function lookupId(name, getTable, options) {
-    return new LookupIdProperty(name, getTable, options);
+  const lookupId = (name, getTable, options) => new LookupIdProperty(name, getTable, options);
+  function createdOn(name = "createdon", options) {
+    return new DateTimeField(name, { ...options, system: true });
+  }
+  function modifiedOn(name = "modifiedon", options) {
+    return new DateTimeField(name, { ...options, system: true });
+  }
+  function versionNumber(name = "versionnumber", options) {
+    return new NumberField(name, { ...options, system: true });
+  }
+  function stateCode(name = "statecode", options) {
+    return new NumberField(name, { ...options, system: true });
   }
   class LookupProperty extends FieldBase {
     kind = "navigation";
@@ -3548,18 +3572,18 @@
     const baseFields = {
       id: primaryKey("nnsyc200_test_tableid"),
       bool: boolean("nnsyc200_boolean"),
-      modifiedOn: datetime("modifiedon"),
+      modifiedOn: modifiedOn(),
       datetime: datetime("nnsyc200_datetime"),
       dateOnly: date("nnsyc200_dateonly"),
-      stateCode: number("statecode"),
+      stateCode: stateCode(),
       int: number("nnsyc200_int"),
-      versionNumber: number("versionnumber"),
+      versionNumber: versionNumber(),
       file: file("nnsyc200_file"),
       formula: string("nnsyc200_formula"),
       date: datetime("nnsyc200_date"),
-      createdOn: datetime("createdon"),
+      createdOn: createdOn(),
       text: string("nnsyc200_text"),
-      statusCode: choice("statuscode", { 1: "Active", 2: "Inactive" }),
+      statusCode: choice("statuscode", { 1: "Active", 2: "Inactive" }, { required: true }),
       choice: choice("nnsyc200_choice", { 1: "A", 2: "B", 3: "C" }, { default: "B" }),
       multiChoice: multiChoice("nnsyc200_choice_month", { 1: "A", 2: "B", 3: "C" }),
       image: image("nnsyc200_image"),
@@ -3857,7 +3881,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-29T01:05:54.984Z"}
+      meta.textContent = `build ${"2026-09-30T01:09:57.293Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3950,7 +3974,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-29T01:05:54.984Z",
+          build: "2026-09-30T01:09:57.293Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3969,7 +3993,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-29T01:05:54.984Z"}\``,
+        `Build: \`${"2026-09-30T01:09:57.293Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4395,7 +4419,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchOdata(ctx.tables.TestTable).select("int").filter(scope).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
             const ints = rows.map((r) => r.int);
-            assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
+            assertEquals(ints.sort((a, b) => (a ?? 0) - (b ?? 0)), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
           }
         },
         {
@@ -4403,7 +4427,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchOdata(ctx.tables.TestTable).select("int", "choice").filter(scope).filter((f) => and(or(eq(f.int, 5), eq(f.int, 42)), not(eq(f.choice, "B")))).execute();
             const composedInts = rows.map((r) => r.int);
-            assertEquals(composedInts.sort((a, b) => a - b), [5, 42], `composed filter ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
+            assertEquals(composedInts.sort((a, b) => (a ?? 0) - (b ?? 0)), [5, 42], `composed filter ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
             assertEquals(rows.every((r) => r.choice !== "B"), true, "not(B) respected");
           }
         },
@@ -4433,6 +4457,28 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const allSmallChildren = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => all(f.children, (c) => lt(c.int, 40))).execute();
             const smallIds = [...allIds].filter((id) => id !== ctx.state.parent);
             assertEquals([...allSmallChildren].map((r) => r.id).sort(), smallIds.sort(), "vacuous all() matches childless rows; parent excluded (child int 42)");
+          }
+        },
+        {
+          name: "getRecords auto-expands lookups and collections",
+          fn: async () => {
+            const childName = ctx.fx.name("c2");
+            const childRows = await ctx.tables.TestTable.getRecords({
+              filter: `startswith(nnsyc200_name,'${childName}')`
+            });
+            assert(childRows.length === 1, "child row returned");
+            const nav = childRows[0].testLookupNav;
+            assert(nav && nav.id === ctx.state.parent, `lookup expanded to parent (got ${JSON.stringify(nav)})`);
+            assertEquals(nav.int, 100, "expanded lookup fields transformed");
+            assert(Array.isArray(childRows[0].children), "collection expanded to array");
+            const parentRows = await ctx.tables.TestTable0.getRecords({
+              filter: `nnsyc200_test_tableid eq ${ctx.state.parent}`
+            });
+            const kids = parentRows[0].children ?? [];
+            assertEquals(kids.length, 3, "expanded collection returns linked children");
+            for (const k of kids) {
+              assert(typeof k.int === "number" && typeof k.name === "string", "expanded child transformed");
+            }
           }
         },
         {
@@ -4639,7 +4685,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ id: f.id, int: f.int })).filter(scoped).filter((f) => and(gt(f.int, 6), lt(f.int, 50))).execute();
             const ints = rows.map((r) => r.int);
-            assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
+            assertEquals(ints.sort((a, b) => (a ?? 0) - (b ?? 0)), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`);
           }
         },
         {

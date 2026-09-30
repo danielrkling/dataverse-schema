@@ -1,5 +1,5 @@
 import { expectTypeOf, test } from "vitest"
-import { DataverseClient, DataverseTable, primaryKey, string, number, nullableNumber, boolean, choice, type Infer, type GUID } from "../src"
+import { DataverseClient, DataverseTable, primaryKey, string, number, boolean, NumberField, choice, type Infer, type GUID } from "../src"
 import { dataverseCollectionOptions, dataverseOfflineCollectionOptions, SyncEngine } from "../src/tanstack-db"
 import { createCollection } from "@tanstack/db"
 
@@ -9,8 +9,8 @@ const Account = new DataverseTable({
   fields: {
     id: primaryKey("accountid"),
     name: string("name"),
-    revenue: number("revenue"),
-    score: nullableNumber("score"),
+    revenue: number("revenue") as NumberField,
+    score: number("score") as NumberField,
     active: boolean("active"),
     tier: choice("tier", { 1: "Gold", 2: "Silver" } as const),
   },
@@ -23,10 +23,10 @@ test("online collection rows infer Infer<fields>", () => {
   type ColRow = NonNullable<ReturnType<typeof collection.get>>
   expectTypeOf<ColRow["id"]>().toEqualTypeOf<GUID>()
   expectTypeOf<ColRow["name"]>().toEqualTypeOf<string>()
-  expectTypeOf<ColRow["revenue"]>().toEqualTypeOf<number>()
+  expectTypeOf<ColRow["revenue"]>().toEqualTypeOf<number | null>()
   expectTypeOf<ColRow["score"]>().toEqualTypeOf<number | null>()
   expectTypeOf<ColRow["active"]>().toEqualTypeOf<boolean>()
-  expectTypeOf<ColRow["tier"]>().toEqualTypeOf<"Gold" | "Silver">()
+  expectTypeOf<ColRow["tier"]>().toEqualTypeOf<"Gold" | "Silver" | null>()
   // getKey is string | number
   expectTypeOf(collection.get).parameter(0).toEqualTypeOf<string | number>()
 })
@@ -38,9 +38,9 @@ test("offline collection rows infer Infer<fields>", () => {
     const collection = createCollection(dataverseOfflineCollectionOptions(engine, { table: Account }))
     type ColRow = NonNullable<ReturnType<typeof collection.get>>
     expectTypeOf<ColRow["id"]>().toEqualTypeOf<GUID>()
-    expectTypeOf<ColRow["revenue"]>().toEqualTypeOf<number>()
+    expectTypeOf<ColRow["revenue"]>().toEqualTypeOf<number | null>()
     expectTypeOf<ColRow["score"]>().toEqualTypeOf<number | null>()
-    expectTypeOf<ColRow["tier"]>().toEqualTypeOf<"Gold" | "Silver">()
+    expectTypeOf<ColRow["tier"]>().toEqualTypeOf<"Gold" | "Silver" | null>()
     expectTypeOf(collection.get).parameter(0).toEqualTypeOf<string | number>()
   }
   void check
@@ -70,7 +70,7 @@ test("collection accepts explicit id and query options", () => {
     void bad
 
     type GoldRow = NonNullable<ReturnType<typeof gold.get>>
-    expectTypeOf<GoldRow["tier"]>().toEqualTypeOf<"Gold" | "Silver">()
+    expectTypeOf<GoldRow["tier"]>().toEqualTypeOf<"Gold" | "Silver" | null>()
     type SilverRow = NonNullable<ReturnType<typeof silver.get>>
     expectTypeOf<SilverRow["id"]>().toEqualTypeOf<GUID>()
   }
@@ -88,3 +88,4 @@ test("collection accepts explicit id and query options", () => {
   }
   void offlineCheck
 })
+

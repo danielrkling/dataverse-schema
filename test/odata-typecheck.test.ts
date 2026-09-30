@@ -1,7 +1,7 @@
 import { expectTypeOf, test } from "vitest"
 import {
   Infer, GUID, DataverseTable, DataverseClient,
-  primaryKey, string, number, choice, datetime, lookup, collection,
+  primaryKey, string, number, choice, datetime, NumberField, DateTimeField, lookup, collection,
   fetchOdata, eq, ne, gt, and, any, all, groupby, sum, count, FieldRef, FilterExpr,
   EqualUserId,
 } from "../src"
@@ -21,7 +21,7 @@ const Contact = new DataverseTable({
   fields: {
     id: primaryKey("contactid"),
     name: string("fullname"),
-    age: number("age"),
+    age: number("age") as NumberField,
     location: lookup("location_id", () => Location),
   },
 })
@@ -31,9 +31,9 @@ const Account = new DataverseTable({
   fields: {
     id: primaryKey("accountid"),
     name: string("name"),
-    revenue: number("revenue"),
+    revenue: number("revenue") as NumberField,
     status: choice("statuscode", { 1: "Active", 2: "Inactive" } as const),
-    createdOn: datetime("createdon"),
+    createdOn: datetime("createdon") as DateTimeField,
     primaryContact: lookup("primarycontactid", () => Contact),
     contacts: collection("account_contacts", () => Contact),
   },
@@ -43,7 +43,7 @@ const Account = new DataverseTable({
 
 test("select narrows the execute result to chosen fields", () => {
   const q = fetchOdata(Account).select("name", "revenue")
-  expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ name: string; revenue: number }[]>()
+  expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{ name: string; revenue: number | null }[]>()
 })
 
 test("select with no keys resolves to the full record type", () => {
@@ -64,13 +64,13 @@ test("select rejects unknown keys", () => {
 test("plain expand merges the related record type (lookup → nullable)", () => {
   const q = fetchOdata(Account).select("name").expand("primaryContact")
   type Row = Awaited<ReturnType<typeof q.execute>>[number]
-  expectTypeOf<Row["primaryContact"]>().toEqualTypeOf<{ id: GUID; name: string; age: number; location: { id: GUID; name: string } | null } | null>()
+  expectTypeOf<Row["primaryContact"]>().toEqualTypeOf<{ id: GUID; name: string; age: number | null; location: { id: GUID; name: string } | null } | null>()
 })
 
 test("plain expand merges the related records type (collection → array)", () => {
   const q = fetchOdata(Account).select("name").expand("contacts")
   type Row = Awaited<ReturnType<typeof q.execute>>[number]
-  expectTypeOf<Row["contacts"]>().toEqualTypeOf<{ id: GUID; name: string; age: number; location: { id: GUID; name: string } | null }[]>()
+  expectTypeOf<Row["contacts"]>().toEqualTypeOf<{ id: GUID; name: string; age: number | null; location: { id: GUID; name: string } | null }[]>()
 })
 
 test("collection expand with sub-select narrows element type", () => {
@@ -103,7 +103,7 @@ test("multiple expands accumulate into the row type", () => {
   expectTypeOf<Row>().toEqualTypeOf<{
     name: string
     primaryContact: { name: string } | null
-    contacts: { age: number }[]
+    contacts: { age: number | null }[]
   }>()
 })
 
@@ -122,7 +122,7 @@ test("table query options accept FilterExpr and typed proxy callbacks", () => {
     expectTypeOf(eq(string("fullname"), "Acme")).toEqualTypeOf<FilterExpr>()
     expectTypeOf(eq(choice("statuscode", { 1: "Active", 2: "Inactive" } as const), "Active")).toEqualTypeOf<FilterExpr>()
     // @ts-expect-error number field rejects string values
-    eq(number("revenue"), "oops")
+    eq(number("revenue") as NumberField, "oops")
     // @ts-expect-error string field rejects number values
     eq(string("fullname"), 5)
     // @ts-expect-error unknown choice label
@@ -180,7 +180,7 @@ test("apply infers aggregate result types", () => {
     n: count(),
   }))
   expectTypeOf(q.execute).returns.resolves.toEqualTypeOf<{
-    byStatus: "Active" | "Inactive"
+    byStatus: "Active" | "Inactive" | null
     total: number
     n: number
   }[]>()
@@ -238,3 +238,7 @@ test("iterate and iteratePages yield narrowed rows", async () => {
   }
   expectTypeOf(check).returns.resolves.toBeVoid()
 })
+
+
+
+

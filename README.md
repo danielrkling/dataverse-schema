@@ -266,7 +266,7 @@ const results = await fetchOdata(Person)
   .orderby((r) => r.totalAge, "desc")
   .top(10)
   .execute();
-// results: Array<{ city: string; totalAge: number; avgAge: number }>
+// results: Array<{ city: string | null; totalAge: number; avgAge: number }>
 ```
 
 ### Option 3: FetchXML Builder
@@ -299,6 +299,8 @@ const results2 = await fetchXml(Person)
 ```
 
 Joins are supported through `.join(linkType, tableOrIntersect, subquery)` where `linkType` is one of `"inner"`, `"outer"`, `"any"`, `"not any"`, `"all"`, `"not all"`, `"exists"`, `"in"`, or `"matchfirstrowusingcrossapply"`.
+
+**Result types for joins:** fields selected through a join are merged into the result type. `inner` joins produce required fields (a matching row always exists); `outer` joins make the joined fields optional (`T | undefined`) — when the join matches no row, the alias columns are absent. Filter-only link types (`any`, `exists`, …) contribute no result fields — the callback has `.filter()` only.
 
 ### FetchXML Conditions
 
@@ -378,23 +380,21 @@ fetchXml(Contact).filter((f) => or(
 
 ## Validation
 
-All fields and tables carry a [valibot](https://valibot.dev/) schema. Field factories apply a sensible default schema (e.g. `number()` → `v.number()`, `string()` → `v.string()`) that you can override with the `schema` option.
+All fields and tables carry a Standard Schema V1 (`ValidationSchema<T> = StandardSchemaV1<T, T>`) — any compliant library works, including [valibot](https://valibot.dev/), Zod, and ArkType. Field factories apply a sensible built-in schema (e.g. `number()` checks `typeof value === "number"`, `string()` checks `typeof value === "string"`, nullable fields allow `null`) that you can override with the `schema` option.
 
 ```typescript
 import * as v from "valibot";
-import { string, DataverseTable, ValidationSchema } from "dataverse-schema";
+import { string, DataverseTable, standardSafeParse, ValidationSchema } from "dataverse-schema";
 
 const nameField = string("fullname", {
-  schema: v.pipe(v.string(), v.minLength(2), v.maxLength(100)),
+  schema: v.pipe(v.nullable(v.string()), v.maxLength(100)),
 });
 
 // Access the compiled schema
-const schema: ValidationSchema<string> = nameField.schema;
+const schema: ValidationSchema<string | null> = nameField.schema;
 
-// Validate a value with valibot
-import { safeParse } from "valibot";
-const result = safeParse(nameField.schema, "");
-// result.issues[0].message describes the failure when unsuccessful
+// Validate with the built-in Standard Schema helpers (works with any provider)
+const result = await standardSafeParse(nameField.schema, "");
 
 // Table-level validation
 const Person = new DataverseTable({
@@ -409,9 +409,9 @@ const Person = new DataverseTable({
 const tableSchema = Person.getSchema();
 ```
 
-Use `v.parse` / `v.safeParse` (from `valibot`) against `field.schema` or `table.getSchema()` to validate values. Validation errors surface as valibot issues.
+Use `standardParse` / `standardSafeParse` (from `dataverse-schema`) against `field.schema` or `table.getSchema()` to validate values. Validation errors surface as Standard Schema issues. `{ required: true }` composes in a `required` check that rejects `null`/`undefined`/empty strings.
 
-The enum-like factories validate membership out of the box: `list()` rejects values outside its array, `choice()`/`nullableChoice()` reject labels outside their option map, and `multiChoice()` rejects arrays containing values outside its `choices`.
+The enum-like factories validate membership out of the box: `list()` rejects values outside its array, `choice()` rejects labels outside their option map, and `multiChoice()` rejects arrays containing values outside its `choices`.
 
 ## Batching
 
@@ -445,24 +445,18 @@ const PersonNameOnly = Person.pickProperties("name");
 
 ## Field Types
 
-| Factory | TypeScript Type | Default | Description |
+| Factory | TypeScript Type (read) | New-record default | Description |
 |---------|----------------|---------|-------------|
-| `string(name)` | `string` | `""` | Text field |
-| `nullableString(name)` | `string \| null` | `null` | Nullable text |
-| `number(name)` | `number` | `0` | Numeric field |
-| `nullableNumber(name)` | `number \| null` | `null` | Nullable number |
-| `boolean(name)` | `boolean` | `false` | Boolean field |
-| `nullableBoolean(name)` | `boolean \| null` | `null` | Nullable boolean |
+| `string(name)` | `string` | `""` | Text field. Non-null by design: Dataverse coerces empty strings to `null`, so a missing value reads as `""` |
+| `number(name)` | `number \| null` | `null` | Numeric field. Nullable by default; wire `null` reads as `null` |
+| `boolean(name)` | `boolean` | `false` | Boolean field. Non-null by design: Dataverse never sends `null` |
 | `primaryKey(name)` | `GUID` | `crypto.randomUUID()` | Auto-generated UUID |
-| `date(name)` | `Date` | today (fresh per call) | Date-only (no time) |
-| `datetime(name)` | `Date` | `new Date()` | Date/time |
-| `nullableDate(name)` | `Date \| null` | `null` | Nullable date-only |
-| `nullableDateTime(name)` | `Date \| null` | `null` | Nullable date/time |
+| `date(name)` | `Date \| null` | `null` | Date-only (no time). Nullable by default |
+| `datetime(name)` | `Date \| null` | `null` | Date/time. Nullable by default |
 | `list(name, values)` | `T \| null` | `null` | Choice/picklist (array of allowed values) |
-| `choice(name, choices)` | `T[keyof T]` (label) | first option | Choice/picklist (number→label map) |
-| `nullableChoice(name, choices)` | `T[keyof T] \| null` | `null` | Nullable choice |
-| `multiChoice(name, choices)` | `number[]` | `[]` | Multi-select picklist; reads CSV as `number[]`, writes CSV, empty selection writes `null`. Values are validated against `choices` |
-| `json(name, { schema })` | `T` | per schema | JSON column validated by a required valibot schema |
+| `choice(name, choices)` | `T[keyof T] \| null` | `null` | Choice/picklist (number→label map) |
+| `multiChoice(name, choices)` | `("A" \| "B")[]` | `[]` | Multi-select picklist; reads CSV as label arrays, writes CSV, `null`/nothing-selected reads as `[]` |
+| `json(name, { schema })` | `T` | per schema | JSON column validated by a required schema |
 | `formatted(name)` | `string \| null` | `null` | Formatted display value (always read-only) |
 | `image(name)` | `ImageRef \| null` | `null` | Image column (`url`, `fullSizeUrl`, `data`); upload/clear via the `data` channel |
 | `file(name)` | `FileRef \| null` | `null` | File column (`name`, `url`, `data`); upload/clear via the `data` channel |
@@ -471,11 +465,19 @@ const PersonNameOnly = Person.pickProperties("name");
 | `collectionIds(name, getTable)` | `GUID[]` | `[]` | Collection of references |
 | `collection(name, getTable)` | `T[]` | `[]` | Collection with expanded data |
 
-All factories accept an optional trailing `options` object (`{ default?, readonly?, schema? }`) — including the navigation factories (`lookup`, `lookupId`, `collection`, `collectionIds`).
+Calling `choice(name)` **without a choices map** is just a numeric column: it returns a `number`-typed field (nullable `number | null`), exactly like `number()` — use it for option sets not known at compile time.
 
-Allowed values are exposed at runtime as frozen arrays: `list().list`, `choice().choices`, `nullableChoice().choices`, and `multiChoice().choices`.
+All factories accept an optional trailing `options` object (`{ default?, required?, readonly?, schema?, system? }`) — including the navigation factories (`lookup`, `lookupId`, `collection`, `collectionIds`).
 
-**Null & empty reads:** Dataverse represents empty columns as explicit `null` or omits them entirely. Non-nullable fields fold both into their default (e.g. `datetime()` → now, `string()` → `""`). Use the `nullable*` factories to preserve empties as `null`. Values that are present but malformed (e.g. an unparseable datetime string) always throw.
+Allowed values are exposed at runtime as frozen arrays: `list().list`, `choice().choices`, and `multiChoice().choices`.
+
+**Null & empty reads:** the nullability model is explicit per field kind:
+- *Nullable fields* (`number`, `datetime`, `date`, `choice`, `lookupId`) read `T | null` — a wire `null` stays `null`; the new-record default is `null`. A `{ default: X }` option only affects locally-created records.
+- *Non-null by wire semantics*: `string()` (empty string ≡ `null` on the wire → reads `""`), `boolean()` (Dataverse never sends `null` → reads `false`), `multiChoice()` (`null` ≡ "nothing selected" → reads `[]`), `primaryKey()`.
+- *System fields* (`{ system: true }`): server-managed columns Dataverse always populates (`createdon`, `statecode`, …). They imply `readonly`, read non-null (`Date`, not `Date | null`), and a wire `null` **fails fast** with an error. Sugar factories exist for the fixed-name ones: `createdOn()`, `modifiedOn()`, `versionNumber()`, `stateCode()`, `createdBy()`.
+- `{ required: true }` is validation-only: it rejects `null`/`undefined`/empty strings through `table.schema`, but does not change read types or transforms.
+
+Values that are present but malformed (e.g. an unparseable datetime string) always throw.
 
 **Circular table references:** `lookupId`/`collectionIds` thunks are intentionally untyped (`() => any`) so two tables can reference each other without creating TypeScript inference cycles. If two tables reference each other through `lookup`/`collection` on **both** ends, TypeScript cannot infer the mutually recursive types (TS7022) — break the cycle by using `lookupId`/`collectionIds` for one direction, or annotate one table explicitly.
 

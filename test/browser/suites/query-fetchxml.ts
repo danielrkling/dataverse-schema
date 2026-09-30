@@ -182,7 +182,7 @@ export const fetchxmlSuite: Suite = {
             .filter((f) => and(gt(f.int, 6), lt(f.int, 50)))
             .execute()
           const ints = rows.map((r) => r.int)
-          assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
+          assertEquals(ints.sort((a, b) => (a ?? 0) - (b ?? 0)), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
         },
       },
       {

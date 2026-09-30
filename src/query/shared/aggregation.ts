@@ -27,17 +27,22 @@ export class Aggregation<V = any> {
 
 type NumericRef = FieldRef<number> | FieldRef<number | null>
 
+/** Accepts nullable or non-nullable refs and infers the bare value type. */
+type ScalarRef<V extends number | Date> =
+  | FieldRef<NonNullable<V>>
+  | FieldRef<NonNullable<V> | null>
+
 export function sum<V extends number>(field: NumericRef): Aggregation<number> {
   return new Aggregation("sum", fieldName(field), field as FieldRef<number>)
 }
 
 /** min/max keep the field's value type: a date column yields `Date`, a numeric one `number`. */
-export function min<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V> {
-  return new Aggregation<V>("min", fieldName(field), field as FieldRef<V>)
+export function min<V extends number | Date>(field: ScalarRef<V>): Aggregation<NonNullable<V>> {
+  return new Aggregation<NonNullable<V>>("min", fieldName(field), field as FieldRef<NonNullable<V>>)
 }
 
-export function max<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V> {
-  return new Aggregation<V>("max", fieldName(field), field as FieldRef<V>)
+export function max<V extends number | Date>(field: ScalarRef<V>): Aggregation<NonNullable<V>> {
+  return new Aggregation<NonNullable<V>>("max", fieldName(field), field as FieldRef<NonNullable<V>>)
 }
 
 export function average<V extends number>(field: NumericRef): Aggregation<number> {

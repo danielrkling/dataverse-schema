@@ -660,6 +660,13 @@ export function buildTableQueryAst<T extends GenericProperties>(
 ): ODataSelectAst {
   const query = new ODataQuery(table)
   query.select()
+  // Auto-expand navigation properties so transformed records include their
+  // related data (users narrow via pickProperties to keep expands out).
+  for (const [key, prop] of Object.entries(table.fields) as [string, any][]) {
+    if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
+      query.expand(key as any)
+    }
+  }
 
   if (options?.filter) query.filter(options.filter as any)
   if (options?.top !== undefined) query.top(options.top)

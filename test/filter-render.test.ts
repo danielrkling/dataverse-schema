@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import {
   eq, ne, gt, and, or, not, contains, startsWith, endsWith, isNull, isNotNull,
   Between, In, ContainsValues, EqualUserId, LastXDays, Today, FieldRef,
-  choice, nullableChoice, string, number, datetime, lookupId, primaryKey,
+  choice, ChoiceField, string, number, datetime, lookupId, primaryKey,
 } from "../src"
 
 const ref = (name: string) => new FieldRef(name)
@@ -36,7 +36,7 @@ test("choice labels are transformed to option values in comparisons", () => {
 })
 
 test("nullable choice labels transform with null passthrough", () => {
-  const prio = FieldRef.fromPath(nullableChoice("prioritycode", { 1: "Low", 2: "High" }), "prioritycode")
+  const prio = FieldRef.fromPath(choice("prioritycode", { 1: "Low", 2: "High" }), "prioritycode")
   expect(eq(prio, "High").toOdata()).toBe("(prioritycode eq 2)")
   expect(eq(prio, null).toOdata()).toBe("(prioritycode eq null)")
 })
@@ -53,7 +53,7 @@ test("unknown choice labels throw at expression time", () => {
 
 test("choice labels transform inside CRM function values", () => {
   const status = new FieldRef<"Active" | "Inactive">(
-    choice("statuscode", { 1: "Active", 2: "Inactive" } as const),
+    new ChoiceField("statuscode", { 1: "Active", 2: "Inactive" } as const, { required: true }) as ChoiceField<Readonly<{ 1: "Active"; 2: "Inactive" }>, false>,
     "statuscode",
   )
   expect(In(status, ["Active", "Inactive"]).toString()).toContain("PropertyValues=[1,2]")

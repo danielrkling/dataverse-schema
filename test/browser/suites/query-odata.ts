@@ -86,7 +86,7 @@ export const odataSuite: Suite = {
             .filter((f) => and(gt(f.int, 6), lt(f.int, 50)))
             .execute()
           const ints = rows.map((r) => r.int)
-          assertEquals(ints.sort((a, b) => a - b), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
+          assertEquals(ints.sort((a, b) => (a ?? 0) - (b ?? 0)), [7, 42], `windowed ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
         },
       },
       {
@@ -98,7 +98,7 @@ export const odataSuite: Suite = {
             .filter((f) => and(or(eq(f.int, 5), eq(f.int, 42)), not(eq(f.choice, "B"))))
             .execute()
           const composedInts = rows.map((r) => r.int)
-          assertEquals(composedInts.sort((a, b) => a - b), [5, 42], `composed filter ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
+          assertEquals(composedInts.sort((a, b) => (a ?? 0) - (b ?? 0)), [5, 42], `composed filter ints (raw ${JSON.stringify(rows.map((r) => r.int))})`)
           assertEquals(rows.every((r) => r.choice !== "B"), true, "not(B) respected")
         },
       },
@@ -142,6 +142,31 @@ export const odataSuite: Suite = {
             .execute()
           const smallIds = [...allIds].filter((id) => id !== ctx.state.parent)
           assertEquals([...allSmallChildren].map((r) => r.id).sort(), smallIds.sort(), "vacuous all() matches childless rows; parent excluded (child int 42)")
+        },
+      },
+      {
+        name: "getRecords auto-expands lookups and collections",
+        fn: async () => {
+          // Child rows: c1-c3 link to the parent via the lookup nav.
+          const childName = ctx.fx.name("c2")
+          const childRows = await ctx.tables.TestTable.getRecords({
+            filter: `startswith(nnsyc200_name,'${childName}')`,
+          })
+          assert(childRows.length === 1, "child row returned")
+          const nav = childRows[0].testLookupNav
+          assert(nav && nav.id === ctx.state.parent, `lookup expanded to parent (got ${JSON.stringify(nav)})`)
+          assertEquals(nav!.int, 100, "expanded lookup fields transformed")
+          assert(Array.isArray(childRows[0].children), "collection expanded to array")
+
+          // Parent row: its collection contains the 3 linked children.
+          const parentRows = await ctx.tables.TestTable0.getRecords({
+            filter: `nnsyc200_test_tableid eq ${ctx.state.parent}`,
+          })
+          const kids = parentRows[0].children ?? []
+          assertEquals(kids.length, 3, "expanded collection returns linked children")
+          for (const k of kids) {
+            assert(typeof k.int === "number" && typeof k.name === "string", "expanded child transformed")
+          }
         },
       },
       {

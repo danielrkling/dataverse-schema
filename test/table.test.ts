@@ -2,7 +2,7 @@ import { expect, test } from "vitest"
 import * as v from "valibot"
 import {
   DataverseTable, DataverseIntersectTable, DataverseClient,
-  primaryKey, string, nullableString, number, choice, nullableChoice,
+  primaryKey, string, number, choice,
   datetime, date, boolean, json, formatted, file, image,
   lookup, collection, lookupId, collectionIds, standardSafeParse,
 } from "../src"
@@ -166,17 +166,17 @@ test("transformValueFromDataverse defaults fields absent from the payload", asyn
     // name, revenue, createdon intentionally absent (e.g. partial select)
   })
   expect(result.name).toBe("")
-  expect(result.revenue).toBe(0)
-  expect(result.createdOn).toBeInstanceOf(Date)
+  expect(result.revenue).toBeNull()
+  expect(result.createdOn).toBeNull()
 })
 
-test("transformValueFromDataverse normalizes nulls for non-nullable fields", async () => {
+test("transformValueFromDataverse passes nulls through for nullable fields", async () => {
   const result = await Account.transformValueFromDataverse({
     accountid: "some-guid", name: null, revenue: null, statuscode: 1, createdon: null,
   })
   expect(result.name).toBe("")
-  expect(result.revenue).toBe(0)
-  expect(result.createdOn).toBeInstanceOf(Date)
+  expect(result.revenue).toBeNull()
+  expect(result.createdOn).toBeNull()
 })
 
 test("transformValueFromDataverse transforms expanded navigation records", async () => {
@@ -235,10 +235,10 @@ test("transformValueToDataverse formats date-only fields", async () => {
 test("transformValueToDataverse handles null values", async () => {
   const T = new DataverseTable({
     client, entitySetName: "people", logicalName: "person",
-    fields: { id: primaryKey("personid"), nick: nullableString("nickname"), priority: nullableChoice("prio", { 1: "Low" }) },
-  })
-  const result = await T.transformValueToDataverse({ nick: null, priority: null })
-  expect(result).toEqual({ nickname: null, prio: null })
+    fields: { id: primaryKey("personid"), nick: string("nickname"), score: number("score"), priority: choice("prio", { 1: "Low" }) },
+    })
+  const result = await T.transformValueToDataverse({ score: null, priority: null })
+  expect(result).toEqual({ score: null, prio: null })
 })
 
 // --- Table algebra ---

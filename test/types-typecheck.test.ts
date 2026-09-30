@@ -3,9 +3,9 @@ import * as v from "valibot"
 import {
   Infer, GUID, AlternateKey, DataverseKey, NarrowKeysByValue, GetTable,
   DataverseTable, DataverseIntersectTable, DataverseClient,
-  primaryKey, PrimaryKeyField, string, nullableString, number, nullableNumber, boolean, nullableBoolean,
-  datetime, nullableDateTime, date, nullableDate, list, choice, nullableChoice,
-  json, formatted, file, image, multiChoice, nullableMultiChoice, lookup, collection, lookupId, collectionIds,
+  primaryKey, PrimaryKeyField, string, number, boolean,
+  datetime, date, list, choice, NumberField, DateTimeField, DateField, FieldValue,
+  json, formatted, file, image, multiChoice, lookup, collection, lookupId, collectionIds,
 } from "../src"
 
 const client = new DataverseClient({ url: "https://test.crm.dynamics.com" })
@@ -32,18 +32,18 @@ const Account = new DataverseTable({
   fields: {
     id: primaryKey("accountid"),
     name: string("name"),
-    nickname: nullableString("nickname"),
-    revenue: number("revenue"),
-    score: nullableNumber("score"),
+    nickname: string("nickname"),
+    revenue: number("revenue") as NumberField,
+    score: number("score") as NumberField,
     active: boolean("active"),
-    flagged: nullableBoolean("flagged"),
-    createdOn: datetime("createdon"),
-    closedOn: nullableDateTime("closedon"),
-    birthDate: date("birthdate"),
-    clearedDate: nullableDate("cleareddate"),
+    flagged: boolean("flagged"),
+    createdOn: datetime("createdon") as DateTimeField,
+    closedOn: datetime("closedon") as DateTimeField,
+    birthDate: date("birthdate") as DateField,
+    clearedDate: date("cleareddate") as DateField,
     gender: list("gendercode", ["M", "F"] as const),
     status: choice("statuscode", { 1: "Active", 2: "Inactive" } as const),
-    priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" } as const),
+    priority: choice("prioritycode", { 1: "Low", 2: "High" } as const),
     label: formatted("statuscode"),
     doc: file("document"),
     months: multiChoice("nnsyc200_choice_month", { 1: "Jan", 2: "Feb" }),
@@ -58,21 +58,23 @@ const Account = new DataverseTable({
 // --- Field-level inference ---
 
 test("field factories infer value types through getDefault", () => {
+  expectTypeOf(string("a", { required: true }).getDefault()).toBeString()
+  expectTypeOf((number("a", { required: true }) as NumberField).getDefault()).toEqualTypeOf<number | null>()
+  expectTypeOf(boolean("a", { required: true }).getDefault()).toBeBoolean()
   expectTypeOf(string("a").getDefault()).toBeString()
-  expectTypeOf(number("a").getDefault()).toBeNumber()
+  // nullable numbers keep 0 as the construction-time default; only null reads stay null
+  expectTypeOf((number("a") as NumberField).getDefault()).toEqualTypeOf<number | null>()
   expectTypeOf(boolean("a").getDefault()).toBeBoolean()
-  expectTypeOf(nullableString("a").getDefault()).toEqualTypeOf<string | null>()
-  expectTypeOf(nullableNumber("a").getDefault()).toEqualTypeOf<number | null>()
-  expectTypeOf(nullableBoolean("a").getDefault()).toEqualTypeOf<boolean | null>()
-  expectTypeOf(nullableDateTime("a").getDefault()).toEqualTypeOf<Date | null>()
-  expectTypeOf(nullableDate("a").getDefault()).toEqualTypeOf<Date | null>()
+  expectTypeOf((datetime("a") as DateTimeField).getDefault()).toEqualTypeOf<FieldValue<Date, true>>()
+  expectTypeOf((date("a") as DateField).getDefault()).toEqualTypeOf<FieldValue<Date, true>>()
   expectTypeOf(formatted("a").getDefault()).toEqualTypeOf<string | null>()
 })
 
 test("choice and list infer label/element unions", () => {
-  const f = choice("statuscode", { 1: "Active", 2: "Inactive" } as const)
-  expectTypeOf(f.getDefault()).toEqualTypeOf<"Active" | "Inactive">()
-  const nf = nullableChoice("prio", { 1: "Low", 2: "High" } as const)
+  const f = choice("statuscode", { 1: "Active", 2: "Inactive" } as const, { required: true })
+  // `required` is validation-only now: the nullable instantiation keeps null in reads, and getDefault is the class default
+  expectTypeOf(f.getDefault()).toEqualTypeOf<"Active" | "Inactive" | null>()
+  const nf = choice("prio", { 1: "Low", 2: "High" } as const)
   expectTypeOf(nf.getDefault()).toEqualTypeOf<"Low" | "High" | null>()
   const lf = list("gendercode", ["M", "F"] as const)
   expectTypeOf(lf.getDefault()).toEqualTypeOf<"M" | "F" | null>()
@@ -97,18 +99,18 @@ test("json infers the schema output type", () => {
 test("Infer resolves the full record type", () => {
   type R = Infer<typeof Account>
   expectTypeOf<R["id"]>().toEqualTypeOf<GUID>()
-  expectTypeOf<R["name"]>().toBeString()
-  expectTypeOf<R["nickname"]>().toEqualTypeOf<string | null>()
-  expectTypeOf<R["revenue"]>().toBeNumber()
+  expectTypeOf<R["name"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["nickname"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["revenue"]>().toEqualTypeOf<number | null>()
   expectTypeOf<R["score"]>().toEqualTypeOf<number | null>()
-  expectTypeOf<R["active"]>().toBeBoolean()
-  expectTypeOf<R["flagged"]>().toEqualTypeOf<boolean | null>()
-  expectTypeOf<R["createdOn"]>().toEqualTypeOf<Date>()
-  expectTypeOf<R["closedOn"]>().toEqualTypeOf<Date | null>()
-  expectTypeOf<R["birthDate"]>().toEqualTypeOf<Date>()
-  expectTypeOf<R["clearedDate"]>().toEqualTypeOf<Date | null>()
+  expectTypeOf<R["active"]>().toEqualTypeOf<boolean>()
+  expectTypeOf<R["flagged"]>().toEqualTypeOf<boolean>()
+  expectTypeOf<R["createdOn"]>().toEqualTypeOf<FieldValue<Date, true>>()
+  expectTypeOf<R["closedOn"]>().toEqualTypeOf<FieldValue<Date, true>>()
+  expectTypeOf<R["birthDate"]>().toEqualTypeOf<FieldValue<Date, true>>()
+  expectTypeOf<R["clearedDate"]>().toEqualTypeOf<FieldValue<Date, true>>()
   expectTypeOf<R["gender"]>().toEqualTypeOf<"M" | "F" | null>()
-  expectTypeOf<R["status"]>().toEqualTypeOf<"Active" | "Inactive">()
+  expectTypeOf<R["status"]>().toEqualTypeOf<"Active" | "Inactive" | null>()
   expectTypeOf<R["priority"]>().toEqualTypeOf<"Low" | "High" | null>()
   expectTypeOf<R["label"]>().toEqualTypeOf<string | null>()
   expectTypeOf<R["contactId"]>().toEqualTypeOf<GUID | null>()
@@ -124,14 +126,10 @@ test("multiChoice infers label arrays", () => {
 
 test("dynamic choice overloads infer raw numeric values", () => {
   const d = choice("statuscode")
-  expectTypeOf(d.getDefault()).toEqualTypeOf<number>()
-  const dn = nullableChoice("statuscode")
-  expectTypeOf(dn.getDefault()).toEqualTypeOf<number | null>()
+  expectTypeOf(d.getDefault()).toEqualTypeOf<number | null>()
   const dm = multiChoice("months")
   expectTypeOf(dm.getDefault()).toEqualTypeOf<number[]>()
-  const dmn = nullableMultiChoice("months")
-  expectTypeOf(dmn.getDefault()).toEqualTypeOf<number[] | null>()
-  expectTypeOf(d.transformValueFromDataverse(900004)).toEqualTypeOf<number>()
+  expectTypeOf(d.transformValueFromDataverse(900004)).toEqualTypeOf<number | null>()
   expectTypeOf(dm.transformValueFromDataverse("1,2")).toEqualTypeOf<number[]>()
 })
 
@@ -181,21 +179,21 @@ test("table.T mirrors Infer", () => {
 
 test("pickProperties narrows the inferred record", () => {
   const Picked = Account.pickProperties("name", "status")
-  expectTypeOf<Infer<typeof Picked>>().toEqualTypeOf<{ name: string; status: "Active" | "Inactive" }>()
+  expectTypeOf<Infer<typeof Picked>>().toEqualTypeOf<{ name: string; status: "Active" | "Inactive" | null }>()
 })
 
 test("omitProperties removes keys from the inferred record", () => {
   const Without = Account.omitProperties("revenue")
   type R = Infer<typeof Without>
-  expectTypeOf<R["name"]>().toBeString()
+  expectTypeOf<R["name"]>().toEqualTypeOf<string>()
   expectTypeOf<R>().not.toHaveProperty("revenue")
 })
 
 test("appendProperties extends the inferred record", () => {
   const Extended = Account.appendProperties({ extra: string("new_col") })
   type R = Infer<typeof Extended>
-  expectTypeOf<R["extra"]>().toBeString()
-  expectTypeOf<R["name"]>().toBeString()
+  expectTypeOf<R["extra"]>().toEqualTypeOf<string>()
+  expectTypeOf<R["name"]>().toEqualTypeOf<string>()
 })
 
 // --- Utility types ---
@@ -240,3 +238,5 @@ test("DataverseIntersectTable preserves both table types", () => {
   expectTypeOf(ix.table1).toEqualTypeOf<typeof Account>()
   expectTypeOf(ix.table2).toEqualTypeOf<typeof Contact>()
 })
+
+

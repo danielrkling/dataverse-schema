@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 import {
-  DataverseTable, DataverseClient, primaryKey, string, number, choice,
+  DataverseTable, DataverseClient, primaryKey, string, number, choice, NumberField,
   lookup, collection, fetchOdata, any, all, eq, ne, gt, and, FieldRef,
   groupby, sum, count, average, min, max, buildTableQueryAst, EqualUserId,
 } from "../src"
@@ -17,7 +17,7 @@ const Account = new DataverseTable({
   fields: {
     id: primaryKey("accountid"),
     name: string("name"),
-    revenue: number("revenue"),
+    revenue: number("revenue") as NumberField,
     status: choice("statuscode", { 1: "Active", 2: "Inactive" }),
     primaryContact: lookup("primarycontactid", () => Contact),
     contacts: collection("account_contacts", () => Contact),
@@ -221,7 +221,7 @@ test("unknown orderby field throws", () => {
 
 // --- buildTableQueryAst (default table query) ---
 
-test("default table query stays flat regardless of navigation properties", () => {
+test("default table query auto-expands navigation properties", () => {
   const Task = new DataverseTable({
     client, entitySetName: "tasks", logicalName: "task",
     fields: { id: primaryKey("taskid"), subject: string("subject") },
@@ -244,7 +244,8 @@ test("default table query stays flat regardless of navigation properties", () =>
 
   const ast = buildTableQueryAst(Parent)
   expect(ast.select!.length).toBeGreaterThan(0)
-  expect(ast.expands ?? []).toHaveLength(0)
+  // Each navigation property (lookup + collection) is expanded by default.
+  expect(ast.expands!.map(e => e.navigation)).toEqual(["parent_children"])
 })
 
 test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () => {

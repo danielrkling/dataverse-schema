@@ -7,28 +7,18 @@ import {
   StringField,
   NumberField,
   BooleanField,
-  NullableBooleanField,
   DateTimeField,
   ImageField,
   ListField,
   MultiChoiceField,
-  NullableStringField,
-  NullableNumberField,
-  NullableDateTimeField,
-  NullableDateField,
   FileField,
   FormattedField,
   ChoiceField,
-  NullableChoiceField,
   JsonField,
-  DynamicChoiceField,
-  NullableDynamicChoiceField,
   DynamicMultiChoiceField,
-  NullableDynamicMultiChoiceField,
-  NullableMultiChoiceField,
+  DateField,
+  FieldBase,
 } from "./fields";
-import { DateField } from "./fields";
-import { FieldBase } from "./fields";
 import { DataverseTable } from "./table";
 import { ETAG } from "./util";
 
@@ -126,27 +116,20 @@ export type GenericNavigationProperty =
 export type GenericValueProperty =
   | PrimaryKeyField // Represents the primary key of an entity (usually a GUID).
   | StringField // Represents a string value.
-  | NullableStringField
-  | NumberField // Represents a numeric value.
-  | NullableNumberField
+  | NumberField<true> // Numeric value (nullable by default)
+  | NumberField<false> // System numeric value
   | BooleanField // Represents a boolean value.
-  | NullableBooleanField
-  | DateTimeField // Represents a date and/or time value.
-  | NullableDateTimeField
-  | DateField  
-  | NullableDateField
-  |   ImageField // Represents an image value.
+  | DateTimeField<true>
+  | DateTimeField<false>
+  | DateField<true>
+  | DateField<false>
+  | ImageField // Represents an image value.
   | ListField<any> // Represents a list of strings or numbers
   | MultiChoiceField<any> // Represents a multi-select choice column
-  | NullableMultiChoiceField<any> // Nullable wrapper over MultiChoiceField
-  | DynamicChoiceField // Untyped option-set column (raw numeric values)
-  | NullableDynamicChoiceField
   | DynamicMultiChoiceField // Untyped multi-select column (raw numeric values)
-  | NullableDynamicMultiChoiceField
   | FileField
   | FormattedField
-  | ChoiceField<any>
-  | NullableChoiceField<any>
+  | ChoiceField<any, true>
   | JsonField<any>
 
 /**

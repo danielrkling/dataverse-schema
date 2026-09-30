@@ -42,14 +42,22 @@ export type DefaultValue<T> = T | (() => T);
 
 export type FieldOptions<T> = {
   default?: DefaultValue<T>;
+  /** Exclude the field from request bodies / updates. Implied by `system`. */
   readonly?: boolean;
+  /** Validation-only: reject `null`/`undefined`/empty strings via `table.schema`. */
   required?: boolean;
+  /** Server-managed field that Dataverse always populates (createdon, statecode, …).
+   *  Implies `readonly`. Reads are non-null: a null from the wire fails fast instead
+   *  of folding silently into a default. */
+  system?: boolean;
   schema?: ValidationSchema<T>;
 };
 
 type FieldDefinition<T> = {
   defaultValue: DefaultValue<T>;
   schema: ValidationSchema<T>;
+  /** Whether absence on the wire resolves to `null` (nullable fields) or fails fast. */
+  nullable?: boolean;
 };
 
 export const SKIP = Symbol("skip")
@@ -66,9 +74,13 @@ export type TransformContext = {
  * ## Transform contract
  * - `transformValueFromDataverse(value, ctx?)` converts a raw API payload into the
  *   typed record value. Dataverse represents empty columns as explicit `null` (or
- *   omits the key entirely); non-nullable fields fold both into their field default.
- *   Use the `nullable*` variants to preserve empties as `null`. Values that are
- *   present but malformed still throw.
+ *   omits the key entirely).
+ * - Field factories decide how empties resolve. Nullable factories — `number`,
+ *   `datetime`, `date`, dynamic `choice` — read `T | null` and pass `null`
+ *   through untouched. Non-nullable factories — `string` (empty string ≡ null on
+ *   the wire), `boolean` (Dataverse never sends null), `multiChoice` (null ≡ no
+ *   selection ≡ `[]`) — and `{ required: true }` fields fold null/missing values
+ *   into the field default. Values that are present but malformed still throw.
  * - `transformValueToDataverse(value, ctx?)` converts a record value into its API
  *   payload. It may return synchronously or return a `Promise`. Returning the
  *   {@link SKIP} symbol excludes the value from the request body (used by file/image
@@ -79,9 +91,8 @@ export type TransformContext = {
  *
  * Fields created with `readonly: true` are never included in request bodies,
  * `updatePropertyValue`, or `deletePropertyValue`.
- * Fields created with `required: true` reject `null`, `undefined`, and
- * empty/whitespace-only strings when validated (e.g. through `table.schema`) —
- * handy for nullable fields.
+ * Fields created with `required: true` reject `null`, `undefined`, and empty or
+ * whitespace-only strings when validated (e.g. through `table.schema`).
  */
 export abstract class FieldBase<T> implements ValidationSchema<T> {
   /**
@@ -106,11 +117,12 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
 
   #getDefault: () => T;
   #readOnly: boolean
+  #nullable: boolean
 
   constructor(
     name: string,
     definition: FieldDefinition<T>,
-    options?: FieldOptions<T>,
+    options?: FieldOptions<T> & { system?: boolean },
   ) {
     this.schemaName = name;
     this.logicalName = name.toLowerCase();
@@ -125,12 +137,12 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
         : definition.defaultValue;
 
     this.#getDefault = asDefaultFactory(defaultValue);
-    this.#readOnly = options?.readonly ?? false;
+    this.#readOnly = options?.system === true || options?.readonly === true;
+    this.#nullable = definition.nullable ?? false;
 
     const baseSchema = options?.schema ?? definition.schema;
-    this.schema = options?.required
-      ? requiredOf(baseSchema)
-      : baseSchema;
+    const withNull = this.#nullable ? nullableOf(baseSchema) : baseSchema;
+    this.schema = (options?.required ? requiredOf(withNull) : withNull) as ValidationSchema<T>;
   }
 
   getDefault(): T {
@@ -139,6 +151,21 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
 
   getReadOnly(): boolean {
     return this.#readOnly
+  }
+
+  protected isNullable(): boolean {
+    return this.#nullable
+  }
+
+  /**
+   * How a `null`/absent wire value becomes a field value.
+   * Nullable fields → `null`; non-nullable fields fail fast.
+   */
+  protected nullToRead(): T {
+    if (this.isNullable()) return null as T;
+    throw new Error(
+      `Field "${this.logicalName}" is non-nullable but Dataverse returned null`,
+    );
   }
 
   transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T> {
@@ -152,57 +179,8 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
   afterSave?(ctx: TransformContext, value: any): Promise<void>
 }
 
-export class NullableField<
-  T,
-  F extends FieldBase<T> = FieldBase<T>,
-> extends FieldBase<T | null> {
-  readonly inner: F;
-
-  kind: F["kind"];
-  type: F["type"];
-
-  constructor(inner: F, options?: FieldOptions<T | null>) {
-    super(
-      inner.schemaName,
-      {
-        defaultValue: null,
-        schema: nullableOf(inner.schema),
-      },
-      {
-        ...options,
-        // A nullable wrapper cannot make an already-readonly field writable.
-        readonly: inner.getReadOnly() || options?.readonly,
-      },
-    );
-
-    this.inner = inner;
-
-    // Preserve the original field's Dataverse names and runtime metadata.
-    this.logicalName = inner.logicalName;
-    this.fromDataverseName = inner.fromDataverseName;
-    this.toDataverseName = inner.toDataverseName;
-    this.kind = inner.kind;
-    this.type = inner.type;
-  }
-
-  transformValueFromDataverse(
-    value: unknown,
-    ctx?: TransformContext,
-  ): T | null | Promise<T | null> {
-    return value == null
-      ? null
-      : this.inner.transformValueFromDataverse(value, ctx);
-  }
-
-  transformValueToDataverse(
-    value: unknown,
-    ctx?: TransformContext,
-  ): unknown {
-    return value == null
-      ? null
-      : this.inner.transformValueToDataverse(value, ctx);
-  }
-}
+/** Wire value for a field kind: `T | null` when nullable, bare `T` otherwise. */
+export type FieldValue<T, Nullable extends boolean> = T | (Nullable extends true ? null : never);
 
 export class BooleanField extends FieldBase<boolean> {
   kind = "value" as const;
@@ -218,25 +196,28 @@ export class BooleanField extends FieldBase<boolean> {
 }
 
 
-export class NumberField extends FieldBase<number> {
+export class NumberField<Nullable extends boolean = true> extends FieldBase<FieldValue<number, Nullable>> {
   kind = "value" as const;
-  type = "number" as const;
-  constructor(name: string, options?: FieldOptions<number>) {
-    super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
+  type = "number" as const;  constructor(name: string, options?: FieldOptions<FieldValue<number, Nullable>> & { system?: boolean }) {
+    super(name, {
+      defaultValue: ((options?.system === true ? 0 : null) as any),
+      schema: NUMBER_SCHEMA as ValidationSchema<FieldValue<number, Nullable>>,
+      nullable: options?.system !== true,
+    }, options);
   }
 
-  transformValueFromDataverse(value: unknown): number {
-    if (value == null) return this.getDefault();
-  
+  transformValueFromDataverse(value: unknown): FieldValue<number, Nullable> {
+    if (value == null) return this.nullToRead();
+
     const result = typeof value === "string"
       ? Number(value)
       : value;
-  
+
     if (typeof result !== "number" || !Number.isFinite(result)) {
       throw new Error(`Invalid number value: ${value}`);
     }
-  
-    return result;
+
+    return result as FieldValue<number, Nullable>;
   }
 }
 
@@ -249,7 +230,7 @@ export class StringField extends FieldBase<string> {
   }
 
   transformValueFromDataverse(value: any): string {
-    return value ?? this.getDefault();;
+    return value ?? this.getDefault();
   }
 }
 
@@ -395,7 +376,7 @@ export class MultiChoiceField<T extends Record<number, string>>
   }
 }
 
-export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
+export class ChoiceField<T extends Record<number, string>, Nullable extends boolean = true> extends FieldBase<FieldValue<T[keyof T], Nullable>> {
   kind = "value" as const;
   type = "choice" as const;
   readonly choices: Readonly<T>;
@@ -404,7 +385,7 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
   constructor(
     name: string,
     choices: T,
-    options?: FieldOptions<T[keyof T]>,
+    options?: FieldOptions<FieldValue<T[keyof T], Nullable>> & { system?: boolean },
   ) {
     const choiceMap = Object.freeze({ ...choices }) as Readonly<T>;
     const firstKey = Object.keys(choiceMap)[0];
@@ -416,11 +397,12 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
     const labels = Object.values(choiceMap) as [string, ...string[]];
 
     super(name, {
-      defaultValue: choiceMap[Number(firstKey) as keyof T],
+      defaultValue: ((options?.system === true ? choiceMap[Number(firstKey) as keyof T] : null) as any),
       schema: checkSchema<T[keyof T]>(
         (value) => (labels as readonly unknown[]).includes(value),
         `Value not in [${labels}]`,
-      ),
+      ) as ValidationSchema<FieldValue<T[keyof T], Nullable>>,
+      nullable: options?.system !== true,
     }, options);
 
     this.choices = choiceMap;
@@ -449,87 +431,20 @@ export class ChoiceField<T extends Record<number, string>> extends FieldBase<T[k
     throw new Error(`Unknown choice label: ${value}`);
   }
 
-  transformValueFromDataverse(value: any): T[keyof T] {
-    if (value == null) return this.getDefault();
-    return this.fromChoiceValue(value);
+  transformValueFromDataverse(value: any): FieldValue<T[keyof T], Nullable> {
+    if (value == null) return this.nullToRead();
+    return this.fromChoiceValue(value) as FieldValue<T[keyof T], Nullable>;
   }
 
-  transformValueToDataverse(value: any): number {
+  transformValueToDataverse(value: any): number | null {
+    if (value == null) return null;
     return this.toChoiceValue(value);
   }
 }
 
-export class NullableChoiceField<T extends Record<number, string>>
-  extends NullableField<T[keyof T], ChoiceField<T>> {
-  constructor(
-    name: string,
-    choices: T,
-    options?: FieldOptions<T[keyof T] | null>,
-  ) {
-    super(new ChoiceField(name, choices), options);
-  }
-
-  get choices(): Readonly<T> {
-    return this.inner.choices;
-  }
-
-  get labels(): readonly T[keyof T][] {
-    return this.inner.labels;
-  }
-
-  fromChoiceValue(value: number): T[keyof T] {
-    return this.inner.fromChoiceValue(value);
-  }
-
-  toChoiceValue(value: T[keyof T]): number {
-    return this.inner.toChoiceValue(value);
-  }
-}
-
-
-
 /**
- * Option-set column that works with raw Dataverse numeric option values.
- *
- * Use when the option set is not known at compile time (e.g. supplied by a
- * server call or global choice set). Unlike {@link ChoiceField}, there is no
- * value→label map: transforms are pass-through, the schema only checks that the
- * value is a number, and the newly-read (label-typed) behaviour never changes
- * mid-session.
- *
- * @example
- * const table = new DataverseTable({
- *   status: choice("statuscode"),
- * });
- * // Infer<typeof table>["status"] → number
- */
-export class DynamicChoiceField extends FieldBase<number> {
-  kind = "value" as const;
-  type = "dynamicChoice" as const;
-
-  constructor(name: string, options?: FieldOptions<number>) {
-    super(name, { defaultValue: 0, schema: NUMBER_SCHEMA }, options);
-  }
-
-  transformValueFromDataverse(value: unknown): number {
-    if (value == null) return this.getDefault();
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
-    }
-    return value;
-  }
-
-  transformValueToDataverse(value: unknown): number {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
-    }
-    return value;
-  }
-}
-
-/**
- * Multi-select choice column that works with raw Dataverse numeric option
- * values (MultiSelectPicklist). See {@link DynamicChoiceField}.
+ * Creates a multi-select choice column that works with raw Dataverse numeric option
+ * values (MultiSelectPicklist).
  *
  * The Web API stores these as a comma-delimited string of option values
  * (e.g. `"3,4,5"`); reads produce `number[]` and writes produce CSV strings.
@@ -584,78 +499,38 @@ export class DynamicMultiChoiceField extends FieldBase<number[]> {
   }
 }
 
-/** Nullable wrapper over {@link MultiChoiceField}. */
-export class NullableMultiChoiceField<T extends Record<number, string>>
-  extends NullableField<T[keyof T][], MultiChoiceField<T>> {
-  constructor(
-    name: string,
-    choices: T,
-    options?: FieldOptions<T[keyof T][] | null>,
-  ) {
-    super(new MultiChoiceField(name, choices), options);
-  }
-
-  get choices(): Readonly<T> {
-    return this.inner.choices;
-  }
-
-  get labels(): readonly T[keyof T][] {
-    return this.inner.labels;
-  }
-
-  fromChoiceValue(value: number): T[keyof T] {
-    return this.inner.fromChoiceValue(value);
-  }
-
-  toChoiceValue(value: T[keyof T]): number {
-    return this.inner.toChoiceValue(value);
-  }
-}
-
-/** Nullable wrapper over {@link DynamicChoiceField}. */
-export class NullableDynamicChoiceField extends NullableField<number, DynamicChoiceField> {
-  constructor(name: string, options?: FieldOptions<number | null>) {
-    super(new DynamicChoiceField(name), options);
-  }
-}
-
-/** Nullable wrapper over {@link DynamicMultiChoiceField}. */
-export class NullableDynamicMultiChoiceField extends NullableField<number[], DynamicMultiChoiceField> {
-  constructor(name: string, options?: FieldOptions<number[] | null>) {
-    super(new DynamicMultiChoiceField(name), options);
-  }
-}
-
-export class DateTimeField extends FieldBase<Date> {
+export class DateTimeField<Nullable extends boolean = true> extends FieldBase<FieldValue<Date, Nullable>> {
   kind = "value" as const;
   type = "dateTime" as const;
-  constructor(name: string, options?: FieldOptions<Date>) {
+  constructor(name: string, options?: FieldOptions<FieldValue<Date, Nullable>> & { system?: boolean }) {
     super(name, {
-      defaultValue: () => new Date(),
-      schema: DATE_SCHEMA,
+      defaultValue: ((options?.system === true ? () => new Date() : null) as any),
+      schema: DATE_SCHEMA as ValidationSchema<FieldValue<Date, Nullable>>,
+      nullable: options?.system !== true,
     }, options);
   }
-  transformValueFromDataverse(value: any): Date {
-    if (value == null) return this.getDefault();
+  transformValueFromDataverse(value: any): FieldValue<Date, Nullable> {
+    if (value == null) return this.nullToRead();
     const result = new Date(value);
     if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
-    return result;
+    return result as FieldValue<Date, Nullable>;
   }
 }
 
 
-export class DateField extends FieldBase<Date> {
+export class DateField<Nullable extends boolean = true> extends FieldBase<FieldValue<Date, Nullable>> {
   kind = "value" as const;
   type = "dateOnly" as const;
-  constructor(name: string, options?: FieldOptions<Date>) {
+  constructor(name: string, options?: FieldOptions<FieldValue<Date, Nullable>> & { system?: boolean }) {
     super(name, {
-      defaultValue: () => parseDateOnly(new Date().toISOString()),
-      schema: DATE_SCHEMA,
+      defaultValue: ((options?.system === true ? () => parseDateOnly(new Date().toISOString()) : null) as any),
+      schema: DATE_SCHEMA as ValidationSchema<FieldValue<Date, Nullable>>,
+      nullable: options?.system !== true,
     }, options);
   }
-  transformValueFromDataverse(value: any): Date {
-    if (value == null) return this.getDefault();
-    return parseValidDateOnly(value);
+  transformValueFromDataverse(value: any): FieldValue<Date, Nullable> {
+    if (value == null) return this.nullToRead();
+    return parseValidDateOnly(value) as FieldValue<Date, Nullable>;
   }
   transformValueToDataverse(value: any) {
     if (!(value instanceof Date) || !isValidDate(value)) throw new Error("Invalid date value");
@@ -815,37 +690,6 @@ export class JsonField<T> extends FieldBase<T> {
   }
 }
 
-export class NullableBooleanField extends NullableField<boolean, BooleanField> {
-  constructor(name: string, options?: FieldOptions<boolean | null>) {
-    super(new BooleanField(name), options);
-  }
-}
-
-export class NullableNumberField extends NullableField<number, NumberField> {
-  constructor(name: string, options?: FieldOptions<number | null>) {
-    super(new NumberField(name), options);
-  }
-}
-
-export class NullableStringField extends NullableField<string, StringField> {
-  constructor(name: string, options?: FieldOptions<string | null>) {
-    super(new StringField(name), options);
-  }
-}
-
-export class NullableDateTimeField
-  extends NullableField<Date, DateTimeField> {
-  constructor(name: string, options?: FieldOptions<Date | null>) {
-    super(new DateTimeField(name), options);
-  }
-}
-
-export class NullableDateField extends NullableField<Date, DateField> {
-  constructor(name: string, options?: FieldOptions<Date | null>) {
-    super(new DateField(name), options);
-  }
-}
-
 /**
  * Creates a boolean-typed Dataverse column definition.
  *
@@ -861,42 +705,30 @@ export function boolean(name: string, options?: FieldOptions<boolean>) {
   return new BooleanField(name, options);
 }
 
-export function nullableBoolean(name: string, options?: FieldOptions<boolean | null>) {
-  return new NullableBooleanField(name, options);
-}
-
 /**
- * Creates a number-typed Dataverse column definition.
+ * Creates a number-typed Dataverse column definition. Nullable by default.
+ * Pass `{ system: true }` for server-managed numbers that Dataverse always
+ * populates — the read type is non-null, the field is readonly, and a null from
+ * the wire fails fast. `{ required: true }` is validation-only.
  *
  * @param name The Dataverse logical name of the column (e.g. `"person_age"`).
  *
  * @example
  * const table = new DataverseTable({
- *   age: number("person_age"),
+ *   age: number("person_age"),                  // number | null
+ *   state: number("statecode", { system: true }),// number (readonly)
  * });
- * // Infer<typeof table>["age"] → number
  */
-export function number(name: string, options?: FieldOptions<number>) {
+export function number(name: string, options?: FieldOptions<number | null> & { system?: false | undefined; required?: boolean }): NumberField<true>;
+export function number(name: string, options: FieldOptions<number> & { system: true; required?: boolean }): NumberField<false>;
+export function number(name: string, options?: FieldOptions<number | null> & { system?: boolean; required?: boolean }): NumberField<boolean> {
   return new NumberField(name, options);
 }
 
 /**
- * Creates a nullable number column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   age: nullableNumber("person_age"),
- * });
- * // Infer<typeof table>["age"] → number | null
- */
-export function nullableNumber(name: string, options?: FieldOptions<number | null>) {
-  return new NullableNumberField(name, options);
-}
-
-/**
- * Creates a string-typed Dataverse column definition.
+ * Creates a string-typed Dataverse column definition. Non-null: Dataverse
+ * coerces empty strings to `null`, so a missing value reads as `""` — no
+ * information is lost either way.
  *
  * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
  *
@@ -908,21 +740,6 @@ export function nullableNumber(name: string, options?: FieldOptions<number | nul
  */
 export function string(name: string, options?: FieldOptions<string>) {
   return new StringField(name, options);
-}
-
-/**
- * Creates a nullable string column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   middleName: nullableString("middlename"),
- * });
- * // Infer<typeof table>["middleName"] → string | null
- */
-export function nullableString(name: string, options?: FieldOptions<string | null>) {
-  return new NullableStringField(name, options);
 }
 
 /**
@@ -955,20 +772,20 @@ export function primaryKey(name: string, options?: FieldOptions<GUID>) {
 export function list<const T extends string | number>(name: string, list: ReadonlyArray<T>, options?: FieldOptions<T | null>) {
   return new ListField<T>(name, list, options);
 }
-
 /**
  * Creates a multi-select choice column definition (MultiSelectPicklist).
- * Reads the Dataverse CSV format (`"3,4,5"`) as a `number[]` and writes
- * arrays back as CSV. An empty selection writes `null` (clears the column).
+ * Reads the Dataverse CSV format (`"3,4,5"`) as an array of configured string
+ * labels and writes arrays back as CSV. Non-null: Dataverse reports `null` for
+ * "nothing selected", which reads as `[]` — the same information.
  *
  * @param name The Dataverse logical name of the column.
  * @param choices The allowed numeric option values (or a value→label map).
  *
  * @example
  * const table = new DataverseTable({
- *   months: multiChoice("nnsyc200_months", [1, 2, 3]),
+ *   months: multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" }),
  * });
- * // Infer<typeof table>["months"] → number[]
+ * // Infer<typeof table>["months"] → ("Jan" | "Feb")[]
  */
 function multiChoice<const T extends Record<number, string>>(
   name: string,
@@ -985,161 +802,84 @@ function multiChoice<const T extends Record<number, string>>(
  * });
  * // Infer<typeof table>["months"] → number[]
  */
-function multiChoice(name: string): DynamicMultiChoiceField;
-function multiChoice(...args: any[]) {
-  if (args.length === 1) {
-    return new DynamicMultiChoiceField(args[0]);
+function multiChoice(name: string, options?: FieldOptions<number[]>): DynamicMultiChoiceField;
+function multiChoice(...args: any[]): any {
+  const name = args[0] as string;
+  // A choices map has numeric keys; otherwise it is an options object or absent
+  const isChoices = args.length > 1 && args[1] != null && typeof args[1] === "object" && Object.keys(args[1]).some((k) => /^\d+$/.test(k));
+  if (isChoices) {
+    return new MultiChoiceField(name, args[1], args[2]);
   }
-  return new MultiChoiceField(args[0], args[1], args[2]);
+  return new DynamicMultiChoiceField(name, args[1]);
 }
 export { multiChoice };
 
 /**
- * Creates a nullable multi-select choice column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- * @param choices An object mapping numeric option values to string labels.
- *
- * @example
- * const table = new DataverseTable({
- *   months: nullableMultiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" }),
- * });
- * // Infer<typeof table>["months"] → ("Jan" | "Feb")[] | null
- */
-function nullableMultiChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T][] | null>): NullableChoiceField<T>;
-/**
- * Overload of {@link nullableMultiChoice} for multi-select option sets not
- * known at compile time (allows `null`). Returns a number-array-typed field.
- *
- * @example
- * const table = new DataverseTable({
- *   months: nullableMultiChoice("nnsyc200_months"),
- * });
- * // Infer<typeof table>["months"] → number[] | null
- */
-function nullableMultiChoice(name: string): NullableDynamicMultiChoiceField;
-function nullableMultiChoice(...args: any[]): any {
-  if (args.length === 1) {
-    return new NullableDynamicMultiChoiceField(args[0]);
-  }
-  return new NullableMultiChoiceField(args[0], args[1], args[2]);
-}
-export { nullableMultiChoice };
-
-
-/**
  * Creates a choice/option-set column definition. Maps Dataverse numeric option values
- * to human-readable string labels.
+ * to human-readable string labels. Nullable by default; pass `{ required: true }`
+ * for a non-null read type.
  *
  * @param name The Dataverse logical name of the column.
  * @param choices An object mapping numeric option values to string labels.
- * @param options Optional field options (default, readonly, schema).
+ * @param options Optional field options (default, readonly, schema, required).
  *
  * @example
  * const table = new DataverseTable({
  *   status: choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" }),
  * });
- * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
+ * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived" | null
  */
-function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>): ChoiceField<T>;
-/**
- * Overload of {@link choice} for option sets not known at compile time.
- * Returns a number-typed field that passes raw Dataverse option values through.
- *
- * @example
- * const table = new DataverseTable({
- *   status: choice("statuscode"),
- * });
- * // Infer<typeof table>["status"] → number
- */
-function choice(name: string): DynamicChoiceField;
-function choice(...args: any[]) {
-  if (args.length === 1) {
-    return new DynamicChoiceField(args[0] as string);
+function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): ChoiceField<T, true>;
+function choice(name: string, options?: FieldOptions<number | null> & { system?: false | undefined; required?: boolean }): NumberField<true>;
+function choice(name: string, options: FieldOptions<number> & { system: true; required?: boolean }): NumberField<false>;
+function choice(...args: any[]): any {
+  const name = args[0] as string;
+  // Typed choices: (name, choices, options?); a choices map has numeric keys
+  const isChoices = args.length > 1 && args[1] != null && typeof args[1] === "object" && Object.keys(args[1]).some((k) => /^\d+$/.test(k));
+  if (isChoices) {
+    return new ChoiceField(name, args[1], args[2]);
   }
-  return new ChoiceField(args[0] as string, args[1], args[2]);
+  // Raw choice values: exactly the same behaviour as number()
+  return new NumberField(name, args[1]);
 }
 export { choice };
 
 /**
- * Creates a nullable choice/option-set column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- * @param choices An object mapping numeric option values to string labels.
- * @param options Optional field options (default, readonly, schema).
- *
- * @example
- * const table = new DataverseTable({
- *   priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" }),
- * });
- * // Infer<typeof table>["priority"] → "Low" | "High" | null
- */
-function nullableChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
-/**
- * Overload of {@link nullableChoice} for option sets not known at compile time
- * (allows `null`). Returns a number-typed field.
- *
- * @example
- * const table = new DataverseTable({
- *   priority: nullableChoice("prioritycode"),
- * });
- * // Infer<typeof table>["priority"] → number | null
- */
-function nullableChoice(name: string): NullableDynamicChoiceField;
-function nullableChoice(...args: any[]) {
-  if (args.length === 1) {
-    return new NullableDynamicChoiceField(args[0] as string);
-  }
-  return new NullableChoiceField(args[0] as string, args[1], args[2]);
-}
-export { nullableChoice };
-
-/**
- * Creates a date-time column definition (maps to JavaScript `Date`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   createdAt: datetime("createdon"),
- * });
- * // Infer<typeof table>["createdAt"] → Date
- */
-export function datetime(name: string, options?: FieldOptions<Date>) {
-  return new DateTimeField(name, options);
-}
-
-/**
  * Creates a date-only column definition (maps to JavaScript `Date`, time portion is zeroed).
+ * Nullable by default; pass `{ system: true }` for server-managed dates that
+ * Dataverse always populates — non-null read type, readonly, null fails fast.
  *
  * @param name The Dataverse logical name of the column.
  *
  * @example
  * const table = new DataverseTable({
- *   birthDate: date("birthdate"),
+ *   birthDate: date("birthdate"),                        // Date | null
+ *   anniversary: date("anniversary", { system: true }),  // Date (readonly)
  * });
- * // Infer<typeof table>["birthDate"] → Date
  */
-export function date(name: string, options?: FieldOptions<Date>) {
+export function date(name: string, options?: FieldOptions<Date | null> & { system?: false | undefined; required?: boolean }): DateField<true>;
+export function date(name: string, options: FieldOptions<Date> & { system: true; required?: boolean }): DateField<false>;
+export function date(name: string, options?: FieldOptions<Date | null> & { system?: boolean; required?: boolean }): DateField<boolean> {
   return new DateField(name, options);
 }
 
 /**
- * Creates a nullable date-only column definition (allows `null`).
+ * Creates a date-time column definition (maps to JavaScript `Date`).
+ * Nullable by default; pass `{ system: true }` for server-managed stamps that
+ * Dataverse always populates — non-null read type, readonly, null fails fast.
  *
  * @param name The Dataverse logical name of the column.
- */
-export function nullableDate(name: string, options?: FieldOptions<Date | null>) {
-  return new NullableDateField(name, options)
-}
-
-/**
- * Creates a nullable date-time column definition (allows `null`).
  *
- * @param name The Dataverse logical name of the column.
+ * @example
+ * const table = new DataverseTable({
+ *   createdAt: datetime("createdon", { system: true }), // Date (readonly)
+ *   reviewAt: datetime("review_on"),                    // Date | null
+ * });
  */
-export function nullableDateTime(name: string, options?: FieldOptions<Date | null>) {
-  return new NullableDateTimeField(name, options)
+export function datetime(name: string, options?: FieldOptions<Date | null> & { system?: false | undefined; required?: boolean }): DateTimeField<true>;
+export function datetime(name: string, options: FieldOptions<Date> & { system: true; required?: boolean }): DateTimeField<false>;
+export function datetime(name: string, options?: FieldOptions<Date | null> & { system?: boolean; required?: boolean }): DateTimeField<boolean> {
+  return new DateTimeField(name, options as FieldOptions<Date>);
 }
 
 /**
@@ -1195,15 +935,16 @@ export function json<T>(name: string, options: FieldOptions<T> & { schema: Valid
   return new JsonField<T>(name, options);
 }
 
-export class LookupIdProperty extends FieldBase<GUID | null> {
+export class LookupIdProperty<Nullable extends boolean = true> extends FieldBase<FieldValue<GUID, Nullable>> {
   kind = "navigation" as const;
   type = "lookupId" as const;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
+  constructor(name: string, getTable: GetTable, options?: FieldOptions<FieldValue<GUID, Nullable>> & { system?: boolean }) {
     super(name, {
-      defaultValue: null,
-      schema: nullableOf(GUID_SCHEMA),
+      defaultValue: null as FieldValue<GUID, Nullable>,
+      schema: GUID_SCHEMA as ValidationSchema<FieldValue<GUID, Nullable>>,
+      nullable: options?.system !== true,
     }, options);
     this.#getTable = getTable;
     this.fromDataverseName = `_${this.logicalName}_value`
@@ -1411,8 +1152,43 @@ export function collectionIds(name: string, getTable: GetTable, options?: FieldO
  * });
  * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
  */
-export function lookupId(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>) {
-  return new LookupIdProperty(name, getTable, options);
+export const lookupId: {
+  (name: string, getTable: GetTable, options?: FieldOptions<GUID | null> & { system?: false | undefined; required?: boolean }): LookupIdProperty<true>;
+  (name: string, getTable: GetTable, options: FieldOptions<GUID> & { system: true; required?: boolean }): LookupIdProperty<false>;
+} = (
+  name: string,
+  getTable: GetTable,
+  options?: FieldOptions<GUID | null> & { system?: boolean },
+): LookupIdProperty<boolean> =>
+  new LookupIdProperty(name, getTable, options);
+
+// --- System field sugar (server-managed, always populated, readonly, non-null reads) ---
+
+/** Server-managed record-create timestamp (`createdon`). Non-null `Date`, readonly. */
+export function createdOn(name = "createdon", options?: FieldOptions<Date>): DateTimeField<false> {
+  return new DateTimeField(name, { ...(options as any), system: true });
+}
+
+/** Server-managed record-modify timestamp (`modifiedon`). Non-null `Date`, readonly. */
+export function modifiedOn(name = "modifiedon", options?: FieldOptions<Date>): DateTimeField<false> {
+  return new DateTimeField(name, { ...(options as any), system: true });
+}
+
+/** Server-managed row-version number (`versionnumber`). Non-null `number`, readonly. */
+export function versionNumber(name = "versionnumber", options?: FieldOptions<number>): NumberField<false> {
+  return new NumberField(name, { ...(options as any), system: true });
+}
+
+/** Record state (draft/active/inactive) — `statecode`. Non-null `number`, readonly. */
+export function stateCode(name = "statecode", options?: FieldOptions<number>): NumberField<false> {
+  return new NumberField(name, { ...(options as any), system: true });
+}
+
+/** Record creator (`createdby`) — a lookup to the systemuser table. Non-null `GUID`, readonly.
+ *  Pass a `getTable` thunk if the id may ever be written; reads need no table. */
+export function createdBy(getTableOrName?: GetTable | string, name = "createdby", options?: FieldOptions<GUID>): LookupIdProperty<false> {
+  const getTable = typeof getTableOrName === "function" ? getTableOrName : () => { throw new Error("createdBy has no related table; pass a getTable thunk to support writes"); };
+  return new LookupIdProperty(name, getTable, { ...(options ?? {}), system: true });
 }
 
 export class LookupProperty<
