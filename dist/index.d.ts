@@ -188,10 +188,12 @@ declare class Aggregation<V = any> {
   constructor(operation: string, field?: string, fieldRef?: FieldRef<V>);
 }
 type NumericRef = FieldRef<number> | FieldRef<number | null>;
+/** Accepts nullable or non-nullable refs and infers the bare value type. */
+type ScalarRef<V extends number | Date> = FieldRef<NonNullable<V>> | FieldRef<NonNullable<V> | null>;
 declare function sum<V extends number>(field: NumericRef): Aggregation<number>;
 /** min/max keep the field's value type: a date column yields `Date`, a numeric one `number`. */
-declare function min<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V>;
-declare function max<V extends number | Date>(field: FieldRef<V> | FieldRef<V | null>): Aggregation<V>;
+declare function min<V extends number | Date>(field: ScalarRef<V>): Aggregation<NonNullable<V>>;
+declare function max<V extends number | Date>(field: ScalarRef<V>): Aggregation<NonNullable<V>>;
 declare function average<V extends number>(field: NumericRef): Aggregation<number>;
 declare function count(field?: FieldRef<any>): Aggregation<number>;
 declare function groupby<V>(field: FieldRef<V>): GroupByExpr<V>;
@@ -908,13 +910,21 @@ declare class DataverseIntersectTable<T1 extends GenericProperties, T2 extends G
 type DefaultValue<T> = T | (() => T);
 type FieldOptions<T> = {
   default?: DefaultValue<T>;
+  /** Exclude the field from request bodies / updates. Implied by `system`. */
   readonly?: boolean;
+  /** Validation-only: reject `null`/`undefined`/empty strings via `table.schema`. */
   required?: boolean;
+  /** Server-managed field that Dataverse always populates (createdon, statecode, …).
+   *  Implies `readonly`. Reads are non-null: a null from the wire fails fast instead
+   *  of folding silently into a default. */
+  system?: boolean;
   schema?: ValidationSchema<T>;
 };
 type FieldDefinition<T> = {
   defaultValue: DefaultValue<T>;
   schema: ValidationSchema<T>;
+  /** Whether absence on the wire resolves to `null` (nullable fields) or fails fast. */
+  nullable?: boolean;
 };
 declare const SKIP: unique symbol;
 type TransformContext = {
@@ -928,9 +938,13 @@ type TransformContext = {
  * ## Transform contract
  * - `transformValueFromDataverse(value, ctx?)` converts a raw API payload into the
  *   typed record value. Dataverse represents empty columns as explicit `null` (or
- *   omits the key entirely); non-nullable fields fold both into their field default.
- *   Use the `nullable*` variants to preserve empties as `null`. Values that are
- *   present but malformed still throw.
+ *   omits the key entirely).
+ * - Field factories decide how empties resolve. Nullable factories — `number`,
+ *   `datetime`, `date`, dynamic `choice` — read `T | null` and pass `null`
+ *   through untouched. Non-nullable factories — `string` (empty string ≡ null on
+ *   the wire), `boolean` (Dataverse never sends null), `multiChoice` (null ≡ no
+ *   selection ≡ `[]`) — and `{ required: true }` fields fold null/missing values
+ *   into the field default. Values that are present but malformed still throw.
  * - `transformValueToDataverse(value, ctx?)` converts a record value into its API
  *   payload. It may return synchronously or return a `Promise`. Returning the
  *   {@link SKIP} symbol excludes the value from the request body (used by file/image
@@ -941,9 +955,8 @@ type TransformContext = {
  *
  * Fields created with `readonly: true` are never included in request bodies,
  * `updatePropertyValue`, or `deletePropertyValue`.
- * Fields created with `required: true` reject `null`, `undefined`, and
- * empty/whitespace-only strings when validated (e.g. through `table.schema`) —
- * handy for nullable fields.
+ * Fields created with `required: true` reject `null`, `undefined`, and empty or
+ * whitespace-only strings when validated (e.g. through `table.schema`).
  */
 declare abstract class FieldBase<T> implements ValidationSchema<T> {
   #private;
@@ -963,32 +976,36 @@ declare abstract class FieldBase<T> implements ValidationSchema<T> {
   kind: string;
   type: string;
   schema: ValidationSchema<T>;
-  constructor(name: string, definition: FieldDefinition<T>, options?: FieldOptions<T>);
+  constructor(name: string, definition: FieldDefinition<T>, options?: FieldOptions<T> & {
+    system?: boolean;
+  });
   getDefault(): T;
   getReadOnly(): boolean;
+  protected isNullable(): boolean;
+  /**
+   * How a `null`/absent wire value becomes a field value.
+   * Nullable fields → `null`; non-nullable fields fail fast.
+   */
+  protected nullToRead(): T;
   transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | Promise<T>;
   transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown;
   afterSave?(ctx: TransformContext, value: any): Promise<void>;
 }
-declare class NullableField<T, F extends FieldBase<T> = FieldBase<T>> extends FieldBase<T | null> {
-  readonly inner: F;
-  kind: F["kind"];
-  type: F["type"];
-  constructor(inner: F, options?: FieldOptions<T | null>);
-  transformValueFromDataverse(value: unknown, ctx?: TransformContext): T | null | Promise<T | null>;
-  transformValueToDataverse(value: unknown, ctx?: TransformContext): unknown;
-}
+/** Wire value for a field kind: `T | null` when nullable, bare `T` otherwise. */
+type FieldValue<T, Nullable extends boolean> = T | (Nullable extends true ? null : never);
 declare class BooleanField extends FieldBase<boolean> {
   kind: "value";
   type: "boolean";
   constructor(name: string, options?: FieldOptions<boolean>);
   transformValueFromDataverse(value: any): boolean;
 }
-declare class NumberField extends FieldBase<number> {
+declare class NumberField<Nullable extends boolean = true> extends FieldBase<FieldValue<number, Nullable>> {
   kind: "value";
   type: "number";
-  constructor(name: string, options?: FieldOptions<number>);
-  transformValueFromDataverse(value: unknown): number;
+  constructor(name: string, options?: FieldOptions<FieldValue<number, Nullable>> & {
+    system?: boolean;
+  });
+  transformValueFromDataverse(value: unknown): FieldValue<number, Nullable>;
 }
 declare class StringField extends FieldBase<string> {
   kind: "value";
@@ -1040,51 +1057,24 @@ declare class MultiChoiceField<T extends Record<number, string>> extends FieldBa
   transformValueFromDataverse(value: unknown): T[keyof T][];
   transformValueToDataverse(value: unknown): string | null;
 }
-declare class ChoiceField<T extends Record<number, string>> extends FieldBase<T[keyof T]> {
+declare class ChoiceField<T extends Record<number, string>, Nullable extends boolean = true> extends FieldBase<FieldValue<T[keyof T], Nullable>> {
   kind: "value";
   type: "choice";
   readonly choices: Readonly<T>;
   readonly labels: readonly T[keyof T][];
-  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T]>);
+  constructor(name: string, choices: T, options?: FieldOptions<FieldValue<T[keyof T], Nullable>> & {
+    system?: boolean;
+  });
   /** Converts a Dataverse numeric option value to its typed label. */
   fromChoiceValue(value: number): T[keyof T];
   /** Converts a typed label to its Dataverse numeric option value. */
   toChoiceValue(value: T[keyof T]): number;
-  transformValueFromDataverse(value: any): T[keyof T];
-  transformValueToDataverse(value: any): number;
-}
-declare class NullableChoiceField<T extends Record<number, string>> extends NullableField<T[keyof T], ChoiceField<T>> {
-  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>);
-  get choices(): Readonly<T>;
-  get labels(): readonly T[keyof T][];
-  fromChoiceValue(value: number): T[keyof T];
-  toChoiceValue(value: T[keyof T]): number;
+  transformValueFromDataverse(value: any): FieldValue<T[keyof T], Nullable>;
+  transformValueToDataverse(value: any): number | null;
 }
 /**
- * Option-set column that works with raw Dataverse numeric option values.
- *
- * Use when the option set is not known at compile time (e.g. supplied by a
- * server call or global choice set). Unlike {@link ChoiceField}, there is no
- * value→label map: transforms are pass-through, the schema only checks that the
- * value is a number, and the newly-read (label-typed) behaviour never changes
- * mid-session.
- *
- * @example
- * const table = new DataverseTable({
- *   status: choice("statuscode"),
- * });
- * // Infer<typeof table>["status"] → number
- */
-declare class DynamicChoiceField extends FieldBase<number> {
-  kind: "value";
-  type: "dynamicChoice";
-  constructor(name: string, options?: FieldOptions<number>);
-  transformValueFromDataverse(value: unknown): number;
-  transformValueToDataverse(value: unknown): number;
-}
-/**
- * Multi-select choice column that works with raw Dataverse numeric option
- * values (MultiSelectPicklist). See {@link DynamicChoiceField}.
+ * Creates a multi-select choice column that works with raw Dataverse numeric option
+ * values (MultiSelectPicklist).
  *
  * The Web API stores these as a comma-delimited string of option values
  * (e.g. `"3,4,5"`); reads produce `number[]` and writes produce CSV strings.
@@ -1104,33 +1094,21 @@ declare class DynamicMultiChoiceField extends FieldBase<number[]> {
   transformValueFromDataverse(value: unknown): number[];
   transformValueToDataverse(value: unknown): string | null;
 }
-/** Nullable wrapper over {@link MultiChoiceField}. */
-declare class NullableMultiChoiceField<T extends Record<number, string>> extends NullableField<T[keyof T][], MultiChoiceField<T>> {
-  constructor(name: string, choices: T, options?: FieldOptions<T[keyof T][] | null>);
-  get choices(): Readonly<T>;
-  get labels(): readonly T[keyof T][];
-  fromChoiceValue(value: number): T[keyof T];
-  toChoiceValue(value: T[keyof T]): number;
-}
-/** Nullable wrapper over {@link DynamicChoiceField}. */
-declare class NullableDynamicChoiceField extends NullableField<number, DynamicChoiceField> {
-  constructor(name: string, options?: FieldOptions<number | null>);
-}
-/** Nullable wrapper over {@link DynamicMultiChoiceField}. */
-declare class NullableDynamicMultiChoiceField extends NullableField<number[], DynamicMultiChoiceField> {
-  constructor(name: string, options?: FieldOptions<number[] | null>);
-}
-declare class DateTimeField extends FieldBase<Date> {
+declare class DateTimeField<Nullable extends boolean = true> extends FieldBase<FieldValue<Date, Nullable>> {
   kind: "value";
   type: "dateTime";
-  constructor(name: string, options?: FieldOptions<Date>);
-  transformValueFromDataverse(value: any): Date;
+  constructor(name: string, options?: FieldOptions<FieldValue<Date, Nullable>> & {
+    system?: boolean;
+  });
+  transformValueFromDataverse(value: any): FieldValue<Date, Nullable>;
 }
-declare class DateField extends FieldBase<Date> {
+declare class DateField<Nullable extends boolean = true> extends FieldBase<FieldValue<Date, Nullable>> {
   kind: "value";
   type: "dateOnly";
-  constructor(name: string, options?: FieldOptions<Date>);
-  transformValueFromDataverse(value: any): Date;
+  constructor(name: string, options?: FieldOptions<FieldValue<Date, Nullable>> & {
+    system?: boolean;
+  });
+  transformValueFromDataverse(value: any): FieldValue<Date, Nullable>;
   transformValueToDataverse(value: any): string | null;
 }
 /**
@@ -1196,21 +1174,6 @@ declare class JsonField<T> extends FieldBase<T> {
   transformValueFromDataverse(value: any): Promise<T>;
   transformValueToDataverse(value: any): string | null;
 }
-declare class NullableBooleanField extends NullableField<boolean, BooleanField> {
-  constructor(name: string, options?: FieldOptions<boolean | null>);
-}
-declare class NullableNumberField extends NullableField<number, NumberField> {
-  constructor(name: string, options?: FieldOptions<number | null>);
-}
-declare class NullableStringField extends NullableField<string, StringField> {
-  constructor(name: string, options?: FieldOptions<string | null>);
-}
-declare class NullableDateTimeField extends NullableField<Date, DateTimeField> {
-  constructor(name: string, options?: FieldOptions<Date | null>);
-}
-declare class NullableDateField extends NullableField<Date, DateField> {
-  constructor(name: string, options?: FieldOptions<Date | null>);
-}
 /**
  * Creates a boolean-typed Dataverse column definition.
  *
@@ -1223,33 +1186,32 @@ declare class NullableDateField extends NullableField<Date, DateField> {
  * // Infer<typeof table>["isActive"] → boolean
  */
 declare function boolean(name: string, options?: FieldOptions<boolean>): BooleanField;
-declare function nullableBoolean(name: string, options?: FieldOptions<boolean | null>): NullableBooleanField;
 /**
- * Creates a number-typed Dataverse column definition.
+ * Creates a number-typed Dataverse column definition. Nullable by default.
+ * Pass `{ system: true }` for server-managed numbers that Dataverse always
+ * populates — the read type is non-null, the field is readonly, and a null from
+ * the wire fails fast. `{ required: true }` is validation-only.
  *
  * @param name The Dataverse logical name of the column (e.g. `"person_age"`).
  *
  * @example
  * const table = new DataverseTable({
- *   age: number("person_age"),
+ *   age: number("person_age"),                  // number | null
+ *   state: number("statecode", { system: true }),// number (readonly)
  * });
- * // Infer<typeof table>["age"] → number
  */
-declare function number(name: string, options?: FieldOptions<number>): NumberField;
+declare function number(name: string, options?: FieldOptions<number | null> & {
+  system?: false | undefined;
+  required?: boolean;
+}): NumberField<true>;
+declare function number(name: string, options: FieldOptions<number> & {
+  system: true;
+  required?: boolean;
+}): NumberField<false>;
 /**
- * Creates a nullable number column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   age: nullableNumber("person_age"),
- * });
- * // Infer<typeof table>["age"] → number | null
- */
-declare function nullableNumber(name: string, options?: FieldOptions<number | null>): NullableNumberField;
-/**
- * Creates a string-typed Dataverse column definition.
+ * Creates a string-typed Dataverse column definition. Non-null: Dataverse
+ * coerces empty strings to `null`, so a missing value reads as `""` — no
+ * information is lost either way.
  *
  * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
  *
@@ -1260,18 +1222,6 @@ declare function nullableNumber(name: string, options?: FieldOptions<number | nu
  * // Infer<typeof table>["name"] → string
  */
 declare function string(name: string, options?: FieldOptions<string>): StringField;
-/**
- * Creates a nullable string column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   middleName: nullableString("middlename"),
- * });
- * // Infer<typeof table>["middleName"] → string | null
- */
-declare function nullableString(name: string, options?: FieldOptions<string | null>): NullableStringField;
 /**
  * Creates a primary key (GUID) column definition for a Dataverse table.
  *
@@ -1299,17 +1249,18 @@ declare function primaryKey(name: string, options?: FieldOptions<GUID>): Primary
 declare function list<const T extends string | number>(name: string, list: ReadonlyArray<T>, options?: FieldOptions<T | null>): ListField<T>;
 /**
  * Creates a multi-select choice column definition (MultiSelectPicklist).
- * Reads the Dataverse CSV format (`"3,4,5"`) as a `number[]` and writes
- * arrays back as CSV. An empty selection writes `null` (clears the column).
+ * Reads the Dataverse CSV format (`"3,4,5"`) as an array of configured string
+ * labels and writes arrays back as CSV. Non-null: Dataverse reports `null` for
+ * "nothing selected", which reads as `[]` — the same information.
  *
  * @param name The Dataverse logical name of the column.
  * @param choices The allowed numeric option values (or a value→label map).
  *
  * @example
  * const table = new DataverseTable({
- *   months: multiChoice("nnsyc200_months", [1, 2, 3]),
+ *   months: multiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" }),
  * });
- * // Infer<typeof table>["months"] → number[]
+ * // Infer<typeof table>["months"] → ("Jan" | "Feb")[]
  */
 declare function multiChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T][]>): MultiChoiceField<T>;
 /**
@@ -1322,118 +1273,73 @@ declare function multiChoice<const T extends Record<number, string>>(name: strin
  * });
  * // Infer<typeof table>["months"] → number[]
  */
-declare function multiChoice(name: string): DynamicMultiChoiceField;
-/**
- * Creates a nullable multi-select choice column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- * @param choices An object mapping numeric option values to string labels.
- *
- * @example
- * const table = new DataverseTable({
- *   months: nullableMultiChoice("nnsyc200_months", { 1: "Jan", 2: "Feb" }),
- * });
- * // Infer<typeof table>["months"] → ("Jan" | "Feb")[] | null
- */
-declare function nullableMultiChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T][] | null>): NullableChoiceField<T>;
-/**
- * Overload of {@link nullableMultiChoice} for multi-select option sets not
- * known at compile time (allows `null`). Returns a number-array-typed field.
- *
- * @example
- * const table = new DataverseTable({
- *   months: nullableMultiChoice("nnsyc200_months"),
- * });
- * // Infer<typeof table>["months"] → number[] | null
- */
-declare function nullableMultiChoice(name: string): NullableDynamicMultiChoiceField;
+declare function multiChoice(name: string, options?: FieldOptions<number[]>): DynamicMultiChoiceField;
 /**
  * Creates a choice/option-set column definition. Maps Dataverse numeric option values
- * to human-readable string labels.
+ * to human-readable string labels. Nullable by default; pass `{ required: true }`
+ * for a non-null read type.
  *
  * @param name The Dataverse logical name of the column.
  * @param choices An object mapping numeric option values to string labels.
- * @param options Optional field options (default, readonly, schema).
+ * @param options Optional field options (default, readonly, schema, required).
  *
  * @example
  * const table = new DataverseTable({
  *   status: choice("statuscode", { 1: "Active", 2: "Inactive", 3: "Archived" }),
  * });
- * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived"
+ * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived" | null
  */
-declare function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T]>): ChoiceField<T>;
-/**
- * Overload of {@link choice} for option sets not known at compile time.
- * Returns a number-typed field that passes raw Dataverse option values through.
- *
- * @example
- * const table = new DataverseTable({
- *   status: choice("statuscode"),
- * });
- * // Infer<typeof table>["status"] → number
- */
-declare function choice(name: string): DynamicChoiceField;
-/**
- * Creates a nullable choice/option-set column definition (allows `null`).
- *
- * @param name The Dataverse logical name of the column.
- * @param choices An object mapping numeric option values to string labels.
- * @param options Optional field options (default, readonly, schema).
- *
- * @example
- * const table = new DataverseTable({
- *   priority: nullableChoice("prioritycode", { 1: "Low", 2: "High" }),
- * });
- * // Infer<typeof table>["priority"] → "Low" | "High" | null
- */
-declare function nullableChoice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): NullableChoiceField<T>;
-/**
- * Overload of {@link nullableChoice} for option sets not known at compile time
- * (allows `null`). Returns a number-typed field.
- *
- * @example
- * const table = new DataverseTable({
- *   priority: nullableChoice("prioritycode"),
- * });
- * // Infer<typeof table>["priority"] → number | null
- */
-declare function nullableChoice(name: string): NullableDynamicChoiceField;
-/**
- * Creates a date-time column definition (maps to JavaScript `Date`).
- *
- * @param name The Dataverse logical name of the column.
- *
- * @example
- * const table = new DataverseTable({
- *   createdAt: datetime("createdon"),
- * });
- * // Infer<typeof table>["createdAt"] → Date
- */
-declare function datetime(name: string, options?: FieldOptions<Date>): DateTimeField;
+declare function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): ChoiceField<T, true>;
+declare function choice(name: string, options?: FieldOptions<number | null> & {
+  system?: false | undefined;
+  required?: boolean;
+}): NumberField<true>;
+declare function choice(name: string, options: FieldOptions<number> & {
+  system: true;
+  required?: boolean;
+}): NumberField<false>;
 /**
  * Creates a date-only column definition (maps to JavaScript `Date`, time portion is zeroed).
+ * Nullable by default; pass `{ system: true }` for server-managed dates that
+ * Dataverse always populates — non-null read type, readonly, null fails fast.
  *
  * @param name The Dataverse logical name of the column.
  *
  * @example
  * const table = new DataverseTable({
- *   birthDate: date("birthdate"),
+ *   birthDate: date("birthdate"),                        // Date | null
+ *   anniversary: date("anniversary", { system: true }),  // Date (readonly)
  * });
- * // Infer<typeof table>["birthDate"] → Date
  */
-declare function date(name: string, options?: FieldOptions<Date>): DateField;
+declare function date(name: string, options?: FieldOptions<Date | null> & {
+  system?: false | undefined;
+  required?: boolean;
+}): DateField<true>;
+declare function date(name: string, options: FieldOptions<Date> & {
+  system: true;
+  required?: boolean;
+}): DateField<false>;
 /**
- * Creates a nullable date-only column definition (allows `null`).
+ * Creates a date-time column definition (maps to JavaScript `Date`).
+ * Nullable by default; pass `{ system: true }` for server-managed stamps that
+ * Dataverse always populates — non-null read type, readonly, null fails fast.
  *
  * @param name The Dataverse logical name of the column.
- */
-declare function nullableDate(name: string, options?: FieldOptions<Date | null>): NullableDateField;
-/**
- * Creates a nullable date-time column definition (allows `null`).
  *
- * @param name The Dataverse logical name of the column.
+ * @example
+ * const table = new DataverseTable({
+ *   createdAt: datetime("createdon", { system: true }), // Date (readonly)
+ *   reviewAt: datetime("review_on"),                    // Date | null
+ * });
  */
-declare function nullableDateTime(name: string, options?: FieldOptions<Date | null>): NullableDateTimeField;
+declare function datetime(name: string, options?: FieldOptions<Date | null> & {
+  system?: false | undefined;
+  required?: boolean;
+}): DateTimeField<true>;
+declare function datetime(name: string, options: FieldOptions<Date> & {
+  system: true;
+  required?: boolean;
+}): DateTimeField<false>;
 /**
  * Creates a formatted-value column definition for retrieving user-localized display values
  * (e.g. for option-set labels). These are read-only.
@@ -1477,11 +1383,13 @@ declare function file(name: string, options?: FieldOptions<FileRef | null>): Fil
 declare function json<T>(name: string, options: FieldOptions<T> & {
   schema: ValidationSchema<T>;
 }): JsonField<T>;
-declare class LookupIdProperty extends FieldBase<GUID | null> {
+declare class LookupIdProperty<Nullable extends boolean = true> extends FieldBase<FieldValue<GUID, Nullable>> {
   #private;
   kind: "navigation";
   type: "lookupId";
-  constructor(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>);
+  constructor(name: string, getTable: GetTable, options?: FieldOptions<FieldValue<GUID, Nullable>> & {
+    system?: boolean;
+  });
   get table(): DataverseTable<{
     id: PrimaryKeyField;
   }>;
@@ -1586,7 +1494,27 @@ declare function collectionIds(name: string, getTable: GetTable, options?: Field
  * });
  * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
  */
-declare function lookupId(name: string, getTable: GetTable, options?: FieldOptions<GUID | null>): LookupIdProperty;
+declare const lookupId: {
+  (name: string, getTable: GetTable, options?: FieldOptions<GUID | null> & {
+    system?: false | undefined;
+    required?: boolean;
+  }): LookupIdProperty<true>;
+  (name: string, getTable: GetTable, options: FieldOptions<GUID> & {
+    system: true;
+    required?: boolean;
+  }): LookupIdProperty<false>;
+};
+/** Server-managed record-create timestamp (`createdon`). Non-null `Date`, readonly. */
+declare function createdOn(name?: string, options?: FieldOptions<Date>): DateTimeField<false>;
+/** Server-managed record-modify timestamp (`modifiedon`). Non-null `Date`, readonly. */
+declare function modifiedOn(name?: string, options?: FieldOptions<Date>): DateTimeField<false>;
+/** Server-managed row-version number (`versionnumber`). Non-null `number`, readonly. */
+declare function versionNumber(name?: string, options?: FieldOptions<number>): NumberField<false>;
+/** Record state (draft/active/inactive) — `statecode`. Non-null `number`, readonly. */
+declare function stateCode(name?: string, options?: FieldOptions<number>): NumberField<false>;
+/** Record creator (`createdby`) — a lookup to the systemuser table. Non-null `GUID`, readonly.
+ *  Pass a `getTable` thunk if the id may ever be written; reads need no table. */
+declare function createdBy(getTableOrName?: GetTable | string, name?: string, options?: FieldOptions<GUID>): LookupIdProperty<false>;
 declare class LookupProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties> | null> {
   #private;
   kind: "navigation";
@@ -1692,7 +1620,7 @@ type GenericNavigationProperty = CollectionProperty<GenericProperties> | LookupP
  * Represents a generic value property in a Dataverse entity.  Value properties
  * store the actual data of an entity, such as strings, numbers, dates, etc.
  */
-type GenericValueProperty = PrimaryKeyField | StringField | NullableStringField | NumberField | NullableNumberField | BooleanField | NullableBooleanField | DateTimeField | NullableDateTimeField | DateField | NullableDateField | ImageField | ListField<any> | MultiChoiceField<any> | NullableMultiChoiceField<any> | DynamicChoiceField | NullableDynamicChoiceField | DynamicMultiChoiceField | NullableDynamicMultiChoiceField | FileField | FormattedField | ChoiceField<any> | NullableChoiceField<any> | JsonField<any>;
+type GenericValueProperty = PrimaryKeyField | StringField | NumberField<true> | NumberField<false> | BooleanField | DateTimeField<true> | DateTimeField<false> | DateField<true> | DateField<false> | ImageField | ListField<any> | MultiChoiceField<any> | DynamicMultiChoiceField | FileField | FormattedField | ChoiceField<any, true> | JsonField<any>;
 /**
  * Represents a generic property in a Dataverse entity.  A property can be
  * either a navigation property or a value property.
@@ -3077,4 +3005,4 @@ declare function isMetaOnly(delta: unknown): boolean;
  */
 declare function valuesEqual(a: unknown, b: unknown): boolean;
 //#endregion
-export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DefaultValue, DeleteRecordOptions, DoesNotContainValues, DynamicChoiceField, DynamicMultiChoiceField, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, type ErrorCategory, type ErrorGuidance, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableDynamicChoiceField, NullableDynamicMultiChoiceField, NullableField, NullableMultiChoiceField, NullableNumberField, NullableStringField, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, type SyncEngineOptions, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableMultiChoice, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, toTimestampValue, valuesEqual, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, AlternateKey, ApplyQuery, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, CollectionSubQuery, type ConflictDetails, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseClientOptions, DataverseHttpError, DataverseIntersectTable, DataverseKey, DataverseRecord, DataverseTable, DataverseTableOptions, DateField, DateTimeField, DefaultValue, DeleteRecordOptions, DoesNotContainValues, DynamicMultiChoiceField, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, type ErrorCategory, type ErrorGuidance, ExpandObject, ExpandValue, FetchLinkType, FetchXmlAggregateAst, FetchXmlAggregateQuery, FetchXmlAttributeAst, FetchXmlInitial, FetchXmlLinkAst, FetchXmlOrderAst, FetchXmlSelectAst, FetchXmlSelectQuery, FieldBase, type FieldDiff, type FieldDiffStatus, FieldOptions, type FieldPath, FieldProxy, FieldRef, FieldValue, FileField, FileRef, FilterCollector, FilterExpr, FilterField, FormattedField, GUID, GUID_SCHEMA, GenericNavigationProperty, GenericProperties, GenericProperty, GenericValueProperty, GetRecordOptions, GetTable, GroupByExpr, ImageField, ImageRef, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, Infer, InitialQuery, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, LookupSubQuery, MultiChoiceField, MutationOptions, MutationPersistenceError, NUMBER_SCHEMA, Name, NarrowKeysByValue, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberField, ODataAggregateAst, ODataAggregateExpressionAst, ODataAggregateOrderAst, ODataAlias, ODataApplyAst, ODataApplyQuery, ODataExpandAst, ODataFilterNode, ODataFilterValue, ODataOrderAst, ODataPath, ODataSelectAst, ODataTableQueryOptions, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PatchRecordOptions, PostRecordOptions, PreferOption, PrimaryKeyField, Primitive, type QueryProperty, QueryRequestOptions, type QueuedMutation, RequestOptions, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, type RetryOptions, SKIP, STRING_SCHEMA, SelectQuery, StandardParseResult, StringField, SyncEngine, type SyncEngineOptions, TableRequestOptions, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, TransformContext, Under, UnderOrEqual, ValidationSchema, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, createdBy, createdOn, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, modifiedOn, multiChoice, ne, not, nullableOf, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, stateCode, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, toTimestampValue, valuesEqual, versionNumber, wrapString, xml };

@@ -2083,6 +2083,7 @@ function fetchOdata(table) {
 function buildTableQueryAst(table, options) {
 	const query = new ODataQuery(table);
 	query.select();
+	for (const [key, prop] of Object.entries(table.fields)) if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) query.expand(key);
 	if (options?.filter) query.filter(options.filter);
 	if (options?.top !== void 0) query.top(options.top);
 	if (typeof options?.orderby === "string") for (const value of options.orderby.split(",")) {
@@ -2759,9 +2760,13 @@ const SKIP = Symbol("skip");
 * ## Transform contract
 * - `transformValueFromDataverse(value, ctx?)` converts a raw API payload into the
 *   typed record value. Dataverse represents empty columns as explicit `null` (or
-*   omits the key entirely); non-nullable fields fold both into their field default.
-*   Use the `nullable*` variants to preserve empties as `null`. Values that are
-*   present but malformed still throw.
+*   omits the key entirely).
+* - Field factories decide how empties resolve. Nullable factories — `number`,
+*   `datetime`, `date`, dynamic `choice` — read `T | null` and pass `null`
+*   through untouched. Non-nullable factories — `string` (empty string ≡ null on
+*   the wire), `boolean` (Dataverse never sends null), `multiChoice` (null ≡ no
+*   selection ≡ `[]`) — and `{ required: true }` fields fold null/missing values
+*   into the field default. Values that are present but malformed still throw.
 * - `transformValueToDataverse(value, ctx?)` converts a record value into its API
 *   payload. It may return synchronously or return a `Promise`. Returning the
 *   {@link SKIP} symbol excludes the value from the request body (used by file/image
@@ -2772,9 +2777,8 @@ const SKIP = Symbol("skip");
 *
 * Fields created with `readonly: true` are never included in request bodies,
 * `updatePropertyValue`, or `deletePropertyValue`.
-* Fields created with `required: true` reject `null`, `undefined`, and
-* empty/whitespace-only strings when validated (e.g. through `table.schema`) —
-* handy for nullable fields.
+* Fields created with `required: true` reject `null`, `undefined`, and empty or
+* whitespace-only strings when validated (e.g. through `table.schema`).
 */
 var FieldBase = class {
 	/**
@@ -2797,6 +2801,7 @@ var FieldBase = class {
 	schema;
 	#getDefault;
 	#readOnly;
+	#nullable;
 	constructor(name, definition, options) {
 		this.schemaName = name;
 		this.logicalName = name.toLowerCase();
@@ -2804,9 +2809,11 @@ var FieldBase = class {
 		this.toDataverseName = this.logicalName;
 		const defaultValue = options && Object.hasOwn(options, "default") ? options.default : definition.defaultValue;
 		this.#getDefault = asDefaultFactory(defaultValue);
-		this.#readOnly = options?.readonly ?? false;
+		this.#readOnly = options?.system === true || options?.readonly === true;
+		this.#nullable = definition.nullable ?? false;
 		const baseSchema = options?.schema ?? definition.schema;
-		this.schema = options?.required ? requiredOf(baseSchema) : baseSchema;
+		const withNull = this.#nullable ? nullableOf(baseSchema) : baseSchema;
+		this.schema = options?.required ? requiredOf(withNull) : withNull;
 	}
 	getDefault() {
 		return this.#getDefault();
@@ -2814,37 +2821,22 @@ var FieldBase = class {
 	getReadOnly() {
 		return this.#readOnly;
 	}
+	isNullable() {
+		return this.#nullable;
+	}
+	/**
+	* How a `null`/absent wire value becomes a field value.
+	* Nullable fields → `null`; non-nullable fields fail fast.
+	*/
+	nullToRead() {
+		if (this.isNullable()) return null;
+		throw new Error(`Field "${this.logicalName}" is non-nullable but Dataverse returned null`);
+	}
 	transformValueFromDataverse(value, ctx) {
 		return value;
 	}
 	transformValueToDataverse(value, ctx) {
 		return value;
-	}
-};
-var NullableField = class extends FieldBase {
-	inner;
-	kind;
-	type;
-	constructor(inner, options) {
-		super(inner.schemaName, {
-			defaultValue: null,
-			schema: nullableOf(inner.schema)
-		}, {
-			...options,
-			readonly: inner.getReadOnly() || options?.readonly
-		});
-		this.inner = inner;
-		this.logicalName = inner.logicalName;
-		this.fromDataverseName = inner.fromDataverseName;
-		this.toDataverseName = inner.toDataverseName;
-		this.kind = inner.kind;
-		this.type = inner.type;
-	}
-	transformValueFromDataverse(value, ctx) {
-		return value == null ? null : this.inner.transformValueFromDataverse(value, ctx);
-	}
-	transformValueToDataverse(value, ctx) {
-		return value == null ? null : this.inner.transformValueToDataverse(value, ctx);
 	}
 };
 var BooleanField = class extends FieldBase {
@@ -2866,12 +2858,13 @@ var NumberField = class extends FieldBase {
 	type = "number";
 	constructor(name, options) {
 		super(name, {
-			defaultValue: 0,
-			schema: NUMBER_SCHEMA
+			defaultValue: options?.system === true ? 0 : null,
+			schema: NUMBER_SCHEMA,
+			nullable: options?.system !== true
 		}, options);
 	}
 	transformValueFromDataverse(value) {
-		if (value == null) return this.getDefault();
+		if (value == null) return this.nullToRead();
 		const result = typeof value === "string" ? Number(value) : value;
 		if (typeof result !== "number" || !Number.isFinite(result)) throw new Error(`Invalid number value: ${value}`);
 		return result;
@@ -2985,8 +2978,9 @@ var ChoiceField = class extends FieldBase {
 		if (firstKey === void 0) throw new Error("Choice fields require at least one option");
 		const labels = Object.values(choiceMap);
 		super(name, {
-			defaultValue: choiceMap[Number(firstKey)],
-			schema: checkSchema((value) => labels.includes(value), `Value not in [${labels}]`)
+			defaultValue: options?.system === true ? choiceMap[Number(firstKey)] : null,
+			schema: checkSchema((value) => labels.includes(value), `Value not in [${labels}]`),
+			nullable: options?.system !== true
 		}, options);
 		this.choices = choiceMap;
 		this.labels = Object.freeze([...labels]);
@@ -3003,67 +2997,17 @@ var ChoiceField = class extends FieldBase {
 		throw new Error(`Unknown choice label: ${value}`);
 	}
 	transformValueFromDataverse(value) {
-		if (value == null) return this.getDefault();
+		if (value == null) return this.nullToRead();
 		return this.fromChoiceValue(value);
 	}
 	transformValueToDataverse(value) {
+		if (value == null) return null;
 		return this.toChoiceValue(value);
 	}
 };
-var NullableChoiceField = class extends NullableField {
-	constructor(name, choices, options) {
-		super(new ChoiceField(name, choices), options);
-	}
-	get choices() {
-		return this.inner.choices;
-	}
-	get labels() {
-		return this.inner.labels;
-	}
-	fromChoiceValue(value) {
-		return this.inner.fromChoiceValue(value);
-	}
-	toChoiceValue(value) {
-		return this.inner.toChoiceValue(value);
-	}
-};
 /**
-* Option-set column that works with raw Dataverse numeric option values.
-*
-* Use when the option set is not known at compile time (e.g. supplied by a
-* server call or global choice set). Unlike {@link ChoiceField}, there is no
-* value→label map: transforms are pass-through, the schema only checks that the
-* value is a number, and the newly-read (label-typed) behaviour never changes
-* mid-session.
-*
-* @example
-* const table = new DataverseTable({
-*   status: choice("statuscode"),
-* });
-* // Infer<typeof table>["status"] → number
-*/
-var DynamicChoiceField = class extends FieldBase {
-	kind = "value";
-	type = "dynamicChoice";
-	constructor(name, options) {
-		super(name, {
-			defaultValue: 0,
-			schema: NUMBER_SCHEMA
-		}, options);
-	}
-	transformValueFromDataverse(value) {
-		if (value == null) return this.getDefault();
-		if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
-		return value;
-	}
-	transformValueToDataverse(value) {
-		if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid choice value: ${value} (${this.logicalName})`);
-		return value;
-	}
-};
-/**
-* Multi-select choice column that works with raw Dataverse numeric option
-* values (MultiSelectPicklist). See {@link DynamicChoiceField}.
+* Creates a multi-select choice column that works with raw Dataverse numeric option
+* values (MultiSelectPicklist).
 *
 * The Web API stores these as a comma-delimited string of option values
 * (e.g. `"3,4,5"`); reads produce `number[]` and writes produce CSV strings.
@@ -3100,47 +3044,18 @@ var DynamicMultiChoiceField = class extends FieldBase {
 		return value.join(",");
 	}
 };
-/** Nullable wrapper over {@link MultiChoiceField}. */
-var NullableMultiChoiceField = class extends NullableField {
-	constructor(name, choices, options) {
-		super(new MultiChoiceField(name, choices), options);
-	}
-	get choices() {
-		return this.inner.choices;
-	}
-	get labels() {
-		return this.inner.labels;
-	}
-	fromChoiceValue(value) {
-		return this.inner.fromChoiceValue(value);
-	}
-	toChoiceValue(value) {
-		return this.inner.toChoiceValue(value);
-	}
-};
-/** Nullable wrapper over {@link DynamicChoiceField}. */
-var NullableDynamicChoiceField = class extends NullableField {
-	constructor(name, options) {
-		super(new DynamicChoiceField(name), options);
-	}
-};
-/** Nullable wrapper over {@link DynamicMultiChoiceField}. */
-var NullableDynamicMultiChoiceField = class extends NullableField {
-	constructor(name, options) {
-		super(new DynamicMultiChoiceField(name), options);
-	}
-};
 var DateTimeField = class extends FieldBase {
 	kind = "value";
 	type = "dateTime";
 	constructor(name, options) {
 		super(name, {
-			defaultValue: () => /* @__PURE__ */ new Date(),
-			schema: DATE_SCHEMA
+			defaultValue: options?.system === true ? () => /* @__PURE__ */ new Date() : null,
+			schema: DATE_SCHEMA,
+			nullable: options?.system !== true
 		}, options);
 	}
 	transformValueFromDataverse(value) {
-		if (value == null) return this.getDefault();
+		if (value == null) return this.nullToRead();
 		const result = new Date(value);
 		if (!isValidDate(result)) throw new Error(`Invalid datetime value: ${value}`);
 		return result;
@@ -3151,12 +3066,13 @@ var DateField = class extends FieldBase {
 	type = "dateOnly";
 	constructor(name, options) {
 		super(name, {
-			defaultValue: () => parseDateOnly((/* @__PURE__ */ new Date()).toISOString()),
-			schema: DATE_SCHEMA
+			defaultValue: options?.system === true ? () => parseDateOnly((/* @__PURE__ */ new Date()).toISOString()) : null,
+			schema: DATE_SCHEMA,
+			nullable: options?.system !== true
 		}, options);
 	}
 	transformValueFromDataverse(value) {
-		if (value == null) return this.getDefault();
+		if (value == null) return this.nullToRead();
 		return parseValidDateOnly(value);
 	}
 	transformValueToDataverse(value) {
@@ -3283,31 +3199,6 @@ var JsonField = class extends FieldBase {
 		return JSON.stringify(value);
 	}
 };
-var NullableBooleanField = class extends NullableField {
-	constructor(name, options) {
-		super(new BooleanField(name), options);
-	}
-};
-var NullableNumberField = class extends NullableField {
-	constructor(name, options) {
-		super(new NumberField(name), options);
-	}
-};
-var NullableStringField = class extends NullableField {
-	constructor(name, options) {
-		super(new StringField(name), options);
-	}
-};
-var NullableDateTimeField = class extends NullableField {
-	constructor(name, options) {
-		super(new DateTimeField(name), options);
-	}
-};
-var NullableDateField = class extends NullableField {
-	constructor(name, options) {
-		super(new DateField(name), options);
-	}
-};
 /**
 * Creates a boolean-typed Dataverse column definition.
 *
@@ -3322,39 +3213,13 @@ var NullableDateField = class extends NullableField {
 function boolean(name, options) {
 	return new BooleanField(name, options);
 }
-function nullableBoolean(name, options) {
-	return new NullableBooleanField(name, options);
-}
-/**
-* Creates a number-typed Dataverse column definition.
-*
-* @param name The Dataverse logical name of the column (e.g. `"person_age"`).
-*
-* @example
-* const table = new DataverseTable({
-*   age: number("person_age"),
-* });
-* // Infer<typeof table>["age"] → number
-*/
 function number(name, options) {
 	return new NumberField(name, options);
 }
 /**
-* Creates a nullable number column definition (allows `null`).
-*
-* @param name The Dataverse logical name of the column.
-*
-* @example
-* const table = new DataverseTable({
-*   age: nullableNumber("person_age"),
-* });
-* // Infer<typeof table>["age"] → number | null
-*/
-function nullableNumber(name, options) {
-	return new NullableNumberField(name, options);
-}
-/**
-* Creates a string-typed Dataverse column definition.
+* Creates a string-typed Dataverse column definition. Non-null: Dataverse
+* coerces empty strings to `null`, so a missing value reads as `""` — no
+* information is lost either way.
 *
 * @param name The Dataverse logical name of the column (e.g. `"fullname"`).
 *
@@ -3366,20 +3231,6 @@ function nullableNumber(name, options) {
 */
 function string(name, options) {
 	return new StringField(name, options);
-}
-/**
-* Creates a nullable string column definition (allows `null`).
-*
-* @param name The Dataverse logical name of the column.
-*
-* @example
-* const table = new DataverseTable({
-*   middleName: nullableString("middlename"),
-* });
-* // Infer<typeof table>["middleName"] → string | null
-*/
-function nullableString(name, options) {
-	return new NullableStringField(name, options);
 }
 /**
 * Creates a primary key (GUID) column definition for a Dataverse table.
@@ -3411,64 +3262,20 @@ function list(name, list, options) {
 	return new ListField(name, list, options);
 }
 function multiChoice(...args) {
-	if (args.length === 1) return new DynamicMultiChoiceField(args[0]);
-	return new MultiChoiceField(args[0], args[1], args[2]);
-}
-function nullableMultiChoice(...args) {
-	if (args.length === 1) return new NullableDynamicMultiChoiceField(args[0]);
-	return new NullableMultiChoiceField(args[0], args[1], args[2]);
+	const name = args[0];
+	if (args.length > 1 && args[1] != null && typeof args[1] === "object" && Object.keys(args[1]).some((k) => /^\d+$/.test(k))) return new MultiChoiceField(name, args[1], args[2]);
+	return new DynamicMultiChoiceField(name, args[1]);
 }
 function choice(...args) {
-	if (args.length === 1) return new DynamicChoiceField(args[0]);
-	return new ChoiceField(args[0], args[1], args[2]);
+	const name = args[0];
+	if (args.length > 1 && args[1] != null && typeof args[1] === "object" && Object.keys(args[1]).some((k) => /^\d+$/.test(k))) return new ChoiceField(name, args[1], args[2]);
+	return new NumberField(name, args[1]);
 }
-function nullableChoice(...args) {
-	if (args.length === 1) return new NullableDynamicChoiceField(args[0]);
-	return new NullableChoiceField(args[0], args[1], args[2]);
-}
-/**
-* Creates a date-time column definition (maps to JavaScript `Date`).
-*
-* @param name The Dataverse logical name of the column.
-*
-* @example
-* const table = new DataverseTable({
-*   createdAt: datetime("createdon"),
-* });
-* // Infer<typeof table>["createdAt"] → Date
-*/
-function datetime(name, options) {
-	return new DateTimeField(name, options);
-}
-/**
-* Creates a date-only column definition (maps to JavaScript `Date`, time portion is zeroed).
-*
-* @param name The Dataverse logical name of the column.
-*
-* @example
-* const table = new DataverseTable({
-*   birthDate: date("birthdate"),
-* });
-* // Infer<typeof table>["birthDate"] → Date
-*/
 function date(name, options) {
 	return new DateField(name, options);
 }
-/**
-* Creates a nullable date-only column definition (allows `null`).
-*
-* @param name The Dataverse logical name of the column.
-*/
-function nullableDate(name, options) {
-	return new NullableDateField(name, options);
-}
-/**
-* Creates a nullable date-time column definition (allows `null`).
-*
-* @param name The Dataverse logical name of the column.
-*/
-function nullableDateTime(name, options) {
-	return new NullableDateTimeField(name, options);
+function datetime(name, options) {
+	return new DateTimeField(name, options);
 }
 /**
 * Creates a formatted-value column definition for retrieving user-localized display values
@@ -3526,7 +3333,8 @@ var LookupIdProperty = class extends FieldBase {
 	constructor(name, getTable, options) {
 		super(name, {
 			defaultValue: null,
-			schema: nullableOf(GUID_SCHEMA)
+			schema: GUID_SCHEMA,
+			nullable: options?.system !== true
 		}, options);
 		this.#getTable = getTable;
 		this.fromDataverseName = `_${this.logicalName}_value`;
@@ -3698,8 +3506,44 @@ function collectionIds(name, getTable, options) {
 * });
 * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
 */
-function lookupId(name, getTable, options) {
-	return new LookupIdProperty(name, getTable, options);
+const lookupId = (name, getTable, options) => new LookupIdProperty(name, getTable, options);
+/** Server-managed record-create timestamp (`createdon`). Non-null `Date`, readonly. */
+function createdOn(name = "createdon", options) {
+	return new DateTimeField(name, {
+		...options,
+		system: true
+	});
+}
+/** Server-managed record-modify timestamp (`modifiedon`). Non-null `Date`, readonly. */
+function modifiedOn(name = "modifiedon", options) {
+	return new DateTimeField(name, {
+		...options,
+		system: true
+	});
+}
+/** Server-managed row-version number (`versionnumber`). Non-null `number`, readonly. */
+function versionNumber(name = "versionnumber", options) {
+	return new NumberField(name, {
+		...options,
+		system: true
+	});
+}
+/** Record state (draft/active/inactive) — `statecode`. Non-null `number`, readonly. */
+function stateCode(name = "statecode", options) {
+	return new NumberField(name, {
+		...options,
+		system: true
+	});
+}
+/** Record creator (`createdby`) — a lookup to the systemuser table. Non-null `GUID`, readonly.
+*  Pass a `getTable` thunk if the id may ever be written; reads need no table. */
+function createdBy(getTableOrName, name = "createdby", options) {
+	return new LookupIdProperty(name, typeof getTableOrName === "function" ? getTableOrName : () => {
+		throw new Error("createdBy has no related table; pass a getTable thunk to support writes");
+	}, {
+		...options ?? {},
+		system: true
+	});
 }
 var LookupProperty = class extends FieldBase {
 	kind = "navigation";
@@ -3844,7 +3688,7 @@ function renderLinkLines(link, indent) {
 	lines.push(`${indent}</link-entity>`);
 	return lines;
 }
-function collectAliasesFromAttributes(builder, map, attrs) {
+function collectAliasesFromAttributes(builder, map, attrs, isOuter = false) {
 	const fields = builder._table.fields;
 	for (const attr of attrs) {
 		const entry = Object.entries(fields).find(([, f]) => (f.fromDataverseName ?? f.logicalName) === attr.name);
@@ -3854,22 +3698,24 @@ function collectAliasesFromAttributes(builder, map, attrs) {
 			map.set(attr.alias, {
 				field: FieldRef.fromPath(fieldDef, dataverseName),
 				getDefault: () => fieldDef.getDefault?.(),
-				name: attr.alias
+				name: attr.alias,
+				isOuter
 			});
 		} else map.set(attr.alias, {
 			field: void 0,
 			getDefault: () => void 0,
-			name: attr.name
+			name: attr.name,
+			isOuter
 		});
 	}
 }
 /** Resolves every attribute alias (root + non-filter-only joins) to its field definition. */
-function collectAliasesRecursive(builder, map) {
-	collectAliasesFromAttributes(builder, map, builder._getEffectiveAttributes?.() ?? []);
+function collectAliasesRecursive(builder, map, inheritedOuter = false) {
+	collectAliasesFromAttributes(builder, map, builder._getEffectiveAttributes?.() ?? [], inheritedOuter);
 	for (const link of builder._links ?? []) {
 		if (link.builder instanceof FilterCollector) continue;
 		if (EntityQueryBuilder._isFilterOnlyLinkType(link.linkType)) continue;
-		collectAliasesRecursive(link.builder, map);
+		collectAliasesRecursive(link.builder, map, inheritedOuter || link.linkType === "outer");
 	}
 }
 async function transformRowWithAliases(table, aliasInfo, v) {
@@ -3881,8 +3727,13 @@ async function transformRowWithAliases(table, aliasInfo, v) {
 			client: table.client,
 			recordId
 		};
-		for (const [alias, info] of aliasInfo) if (info.name in v) result[alias] = info.field ? await info.field.transformFromDataverse(v[info.name], ctx) : v[info.name];
-		else result[alias] = info.getDefault();
+		for (const [alias, info] of aliasInfo) {
+			const raw = v[info.name];
+			if (info.isOuter && raw == null && !(info.name in v)) result[alias] = info.field ? void 0 : raw;
+			else if (info.isOuter && raw == null) result[alias] = info.getDefault();
+			else if (info.name in v) result[alias] = info.field ? await info.field.transformFromDataverse(raw, ctx) : raw;
+			else result[alias] = info.getDefault();
+		}
 		result[ETAG] = v["@odata.etag"];
 		return result;
 	}
@@ -5357,4 +5208,4 @@ var SyncEngine = class {
 };
 
 //#endregion
-export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, DynamicChoiceField, DynamicMultiChoiceField, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, MutationPersistenceError, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NullableBooleanField, NullableChoiceField, NullableDateField, NullableDateTimeField, NullableDynamicChoiceField, NullableDynamicMultiChoiceField, NullableField, NullableMultiChoiceField, NullableNumberField, NullableStringField, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, SyncEngine, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, multiChoice, ne, not, nullableBoolean, nullableChoice, nullableDate, nullableDateTime, nullableMultiChoice, nullableNumber, nullableOf, nullableString, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, toTimestampValue, valuesEqual, wrapString, xml };
+export { Above, AboveOrEqual, Aggregation, BLOB_SCHEMA, BOOLEAN_SCHEMA, Between, BooleanField, ChoiceField, CollectionIdsProperty, CollectionProperty, ContainsValues, DATE_SCHEMA, DATVERSE_ERROR_CODES, DataverseClient, DataverseHttpError, DataverseIntersectTable, DataverseTable, DateField, DateTimeField, DoesNotContainValues, DynamicMultiChoiceField, ETAG, EntityQueryBuilder, EqualBusinessId, EqualUserId, EqualUserLanguage, EqualUserOrUserHierarchy, EqualUserOrUserHierarchyAndTeams, EqualUserOrUserTeams, FetchXmlAggregateQuery, FieldBase, FieldRef, FileField, FilterCollector, FilterExpr, FormattedField, GUID_SCHEMA, GroupByExpr, ImageField, In, InFiscalPeriod, InFiscalPeriodAndYear, InFiscalYear, InOrAfterFiscalPeriodAndYear, InOrBeforeFiscalPeriodAndYear, JsonField, Last7Days, LastFiscalPeriod, LastFiscalYear, LastMonth, LastWeek, LastXDays, LastXFiscalPeriods, LastXFiscalYears, LastXHours, LastXMonths, LastXWeeks, LastXYears, LastYear, ListField, LookupIdProperty, LookupProperty, MultiChoiceField, MutationPersistenceError, NUMBER_SCHEMA, Next7Days, NextFiscalPeriod, NextFiscalYear, NextMonth, NextWeek, NextXDays, NextXFiscalPeriods, NextXFiscalYears, NextXHours, NextXMonths, NextXWeeks, NextXYears, NextYear, NotBetween, NotEqualBusinessId, NotEqualUserId, NotIn, NotUnder, NumberField, ODataApplyQuery, OlderThanXDays, OlderThanXHours, OlderThanXMinutes, OlderThanXMonths, OlderThanXWeeks, OlderThanXYears, On, OnOrAfter, OnOrBefore, OrderSpec, PrimaryKeyField, RetrieveAadUserRoles, RetrieveChoices, RetrieveTotalRecordCount, SKIP, STRING_SCHEMA, StringField, SyncEngine, ThisFiscalPeriod, ThisFiscalYear, ThisMonth, ThisWeek, ThisYear, Today, Tomorrow, Under, UnderOrEqual, WhoAmI, Yesterday, all, and, any, arrayOf, asc, attachETag, average, base64ImageToURL, boolean, buildLambdaProxy, buildTableQueryAst, checkSchema, choice, collection, collectionIds, composeRecordSchema, contains, count, createdBy, createdOn, date, datetime, desc, endsWith, eq, expand, fetchOdata, fetchXml, file, formatted, ge, getEtag, getImageUrl, getName, groupby, gt, image, interpretError, isActive, isConcurrencyError, isDeterministicFailure, isInactive, isKeyViolation, isMetaKey, isMetaOnly, isNonEmptyString, isNotNull, isNull, json, keys, lazyOf, le, list, lookup, lookupId, lt, mapChoices, max, mergeRecords, min, modifiedOn, multiChoice, ne, not, nullableOf, number, optionalOf, or, orderby, parseDateOnly, plainClone, primaryKey, requiredOf, rxGUID, select, serializeError, serializeFetchXml, serializeODataAggregate, serializeODataSelect, standardParse, standardSafeParse, startsWith, stateCode, string, sum, toBase64, toDateOnly, toODataFilterNode, toODataPath, toTimestampValue, valuesEqual, versionNumber, wrapString, xml };
