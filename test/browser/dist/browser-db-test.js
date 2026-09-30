@@ -1373,9 +1373,7 @@
     const query = new ODataQuery(table);
     query.select();
     for (const [key, prop] of Object.entries(table.fields)) {
-      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
-        query.expand(key, (q) => q.select());
-      }
+      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) ;
     }
     if (options?.filter) query.filter(options.filter);
     if (options?.top !== void 0) query.top(options.top);
@@ -3667,7 +3665,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-30T12:05:02.541Z"}
+      meta.textContent = `build ${"2026-09-30T12:12:03.576Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3760,7 +3758,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-30T12:05:02.541Z",
+          build: "2026-09-30T12:12:03.576Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3779,7 +3777,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-30T12:05:02.541Z"}\``,
+        `Build: \`${"2026-09-30T12:12:03.576Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

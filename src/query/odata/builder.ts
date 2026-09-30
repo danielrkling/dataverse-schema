@@ -664,7 +664,7 @@ export function buildTableQueryAst<T extends GenericProperties>(
   // related data (users narrow via pickProperties to keep expands out).
   for (const [key, prop] of Object.entries(table.fields) as [string, any][]) {
     if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
-      query.expand(key as any,q=>q.select())
+      // query.expand(key as any,q=>q.select())
     }
   }
 
