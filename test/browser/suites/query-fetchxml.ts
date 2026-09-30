@@ -57,6 +57,7 @@ export const fetchxmlSuite: Suite = {
             .distinct()
             .execute()
           const labels = new Set(rows.map((r) => r.c))
+          console.log(rows,labels)
           assertEquals(labels.size, rows.length, "no duplicates returned")
           //@ts-expect-error
           for (const want of ["A", "B", "C"]) assert(labels.has(want), `missing choice ${want}`)

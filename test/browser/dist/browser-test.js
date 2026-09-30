@@ -3879,7 +3879,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-30T12:11:56.059Z"}
+      meta.textContent = `build ${"2026-09-30T12:36:13.787Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3972,7 +3972,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-30T12:11:56.059Z",
+          build: "2026-09-30T12:36:13.787Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3991,7 +3991,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-30T12:11:56.059Z"}\``,
+        `Build: \`${"2026-09-30T12:36:13.787Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4588,6 +4588,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ c: f.choice })).filter(scoped).distinct().execute();
             const labels = new Set(rows.map((r) => r.c));
+            console.log(rows, labels);
             assertEquals(labels.size, rows.length, "no duplicates returned");
             for (const want of ["A", "B", "C"]) assert(labels.has(want), `missing choice ${want}`);
           }
