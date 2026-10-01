@@ -1152,7 +1152,9 @@
       const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
       const result = sub?.(child);
       const q = result ?? child;
-      this.#expands.push({ navigation: prop, key, query: q.toAst() });
+      const ast = q.toAst();
+      const isEmptyExpand = (ast.select?.length ?? 0) === 0 && (ast.filters?.length ?? 0) === 0 && (ast.orderby?.length ?? 0) === 0 && (ast.expands?.length ?? 0) === 0 && ast.top === void 0;
+      this.#expands.push({ navigation: prop, key, query: isEmptyExpand ? void 0 : ast });
       const childSelectedKeys = q._getSelectedKeys();
       const childExpandMeta = q._expandMeta;
       const subQueryProvided = !!sub;
@@ -3717,7 +3719,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-01T19:27:06.934Z"}
+      meta.textContent = `build ${"2026-10-01T19:37:13.514Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3810,7 +3812,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-01T19:27:06.934Z",
+          build: "2026-10-01T19:37:13.514Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3829,7 +3831,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-01T19:27:06.934Z"}\``,
+        `Build: \`${"2026-10-01T19:37:13.514Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

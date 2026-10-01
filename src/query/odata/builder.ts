@@ -305,7 +305,12 @@ class ODataQuery<T extends GenericProperties> {
     const result = sub?.(child)
     const q = result ?? child
 
-    this.#expands.push({ navigation: prop, key, query: q.toAst() })
+    // An expand without any options must serialize as a bare navigation name —
+    // Dataverse rejects `nav()` with empty parens ("Missing expand option").
+    const ast = q.toAst()
+    const isEmptyExpand = (ast.select?.length ?? 0) === 0 && (ast.filters?.length ?? 0) === 0
+      && (ast.orderby?.length ?? 0) === 0 && (ast.expands?.length ?? 0) === 0 && ast.top === undefined
+    this.#expands.push({ navigation: prop, key, query: isEmptyExpand ? undefined : ast })
 
     // Track expand metadata for partial transforms
     const childSelectedKeys = q._getSelectedKeys()

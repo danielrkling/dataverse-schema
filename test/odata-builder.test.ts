@@ -100,9 +100,9 @@ test("expand with sub-select renders nested query for collections", () => {
   expect(q.toString()).toBe("$select=name&$expand=account_contacts($select=fullname)")
 })
 
-test("expand without subquery renders empty expand options", () => {
+test("expand without subquery renders a bare navigation name (Dataverse rejects empty parens)", () => {
   const q = fetchOdata(Account).select("name").expand("primaryContact")
-  expect(q.toString()).toBe("$select=name&$expand=primarycontactid()")
+  expect(q.toString()).toBe("$select=name&$expand=primarycontactid")
 })
 
 test("expand supports filters and orderby in the sub-query", () => {

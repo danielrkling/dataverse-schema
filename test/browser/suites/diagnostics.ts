@@ -11,6 +11,9 @@ type Rows = Record<string, any>[]
  * then ends as "skipped" with the observed payload (or the server error) embedded
  * in its skip detail — so the run output shows exact live behavior without
  * polluting pass/fail counts.
+ *
+ * NOTE: read `ctx.state` INSIDE each test fn — `suite.tests(ctx)` runs before
+ * `setup()`, so values captured at test-list build time are undefined.
  */
 export const diagnosticsSuite: Suite = {
   name: "diagnostics",
@@ -31,55 +34,48 @@ export const diagnosticsSuite: Suite = {
     const nav = "nnsyc200_Test_Lookup"
     const navValue = "_nnsyc200_test_lookup_value"
     const collection = ctx.cfg.collectionNav
-    const child = ctx.state.child as string
-    const parent = ctx.state.parent as string
 
-    const probe = async (name: string, query: string, keysPredicate?: (row: any) => void): Promise<never> => {
+    const probe = async (name: string, query: string): Promise<never> => {
       let payload: Rows | { error: string }
       try {
         payload = await ctx.client.getRecords(entity as never, { query })
       } catch (e) {
         payload = { error: e instanceof Error ? e.message : String(e) }
       }
-      let derived = ""
-      try {
-        keysPredicate?.(payload)
-      } catch (e) {
-        derived = `\nkeys-check failed: ${e instanceof Error ? e.message : String(e)}`
-      }
-      // Include the transformed view of the payload as our table would see it
-      const diagnostics = (
-        ctx.tables.TestTable as any
-      ).transformValueFromDataverse
       let transformed = ""
       try {
-        if (Array.isArray(payload)) transformed = `\ntransformed: ${JSON.stringify(await Promise.all(payload.map((v) => diagnostics.call(ctx.tables.TestTable, v))))}`
+        if (Array.isArray(payload)) {
+          const rows = await Promise.all(payload.map((v) => ctx.tables.TestTable.transformValueFromDataverse(v)))
+          transformed = `\ntransformed: ${JSON.stringify(rows, null, 2)}`
+        } else {
+          transformed = `\ntransformed: (error payload, skipped)`
+        }
       } catch (e) {
         transformed = `\ntransform THREW: ${e instanceof Error ? e.message : String(e)}`
       }
-      skip(`PROBE ${name}\nquery: ${query}\npayload: ${JSON.stringify(payload, null, 2)}${derived}${transformed}`)
+      skip(`PROBE ${name}\nquery: ${query}\npayload: ${JSON.stringify(payload, null, 2)}${transformed}`)
     }
 
     return [
       {
         name: "P1: $select includes _lookup_value (no expand)",
         fn: () => probe("P1",
-          `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${child}`),
+          `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
         name: "P2: expand lookup WITHOUT _value in $select — is _value returned anyway?",
         fn: () => probe("P2",
-          `$select=nnsyc200_name,nnsyc200_int&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${child}`),
+          `$select=nnsyc200_name,nnsyc200_int&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
         name: "P3: expand lookup WITH _value in $select (same-key suspect)",
         fn: () => probe("P3",
-          `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${child}`),
+          `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
-        name: "P4: lookup expand with EMPTY options (nav())",
+        name: "P4: bare lookup expand (no options, no parens)",
         fn: () => probe("P4",
-          `$select=nnsyc200_name&$expand=${nav}()&$filter=${pk} eq ${child}`),
+          `$select=nnsyc200_name&$expand=${nav}&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
         name: "P5: collection expand with $select + $orderby + $top at top level",
@@ -89,41 +85,90 @@ export const diagnosticsSuite: Suite = {
       {
         name: "P6: collection expand with $select + $filter at top level (no orderby/top)",
         fn: () => probe("P6",
-          `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${parent}`),
+          `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${ctx.state.parent}`),
       },
       {
         name: "P7: bare collection expand (no options)",
         fn: () => probe("P7",
-          `$select=nnsyc200_name&$expand=${collection}&$filter=${pk} eq ${parent}`),
+          `$select=nnsyc200_name&$expand=${collection}&$filter=${pk} eq ${ctx.state.parent}`),
       },
       {
         name: "P8: lookup expand nested inside lookup expand (both with $select)",
         fn: () => probe("P8",
-          `$select=nnsyc200_name&$expand=${nav}($select=nnsyc200_name,${pk}; $expand=${nav}($select=nnsyc200_name,${pk}))&$filter=${pk} eq ${child}`),
+          `$select=nnsyc200_name&$expand=${nav}($select=nnsyc200_name,${pk}; $expand=${nav}($select=nnsyc200_name,${pk}))&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
         name: "P9: 1:N expand nested inside 1:N expand",
         fn: () => probe("P9",
-          `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name; $expand=${collection}($select=nnsyc200_name))&$filter=${pk} eq ${parent}`),
+          `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name; $expand=${collection}($select=nnsyc200_name))&$filter=${pk} eq ${ctx.state.parent}`),
       },
       {
         name: "P10: lookup + collection to same related entity at top level",
         fn: () => probe("P10",
-          `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,${pk}),${collection}($select=nnsyc200_name,${pk})&$filter=${pk} eq ${child}`),
+          `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,${pk}),${collection}($select=nnsyc200_name,${pk})&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
-        name: "P11: table.getRecords auto-expanded query (exact failing shape)",
+        name: "P11: table.getRecords auto-expanded query (no options)",
         fn: async () => {
-          const ast = buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)
-          const query = serializeODataSelect(ast)
-          // Note: orderby conversion mirrors what the transform test uses.
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
           const payload = (await ctx.client.getRecords(entity as never, { query })) as Rows
           const keysOfFirst = payload[0] ? Object.keys(payload[0]) : []
-          skip(`PROBE P11\nquery: ${query}\nfirst-row keys: ${JSON.stringify(keysOfFirst)}\nfirst-row lookup keys: ${JSON.stringify(keysOfFirst.filter(k => k.includes("lookup")))}`)
+          skip(`PROBE P11\nquery: ${query}\nfirst-row keys: ${JSON.stringify(keysOfFirst)}\nlookup-related keys: ${JSON.stringify(keysOfFirst.filter(k => k.toLowerCase().includes("lookup")))}`)
         },
       },
       {
-        name: "P12: detached child (lookup) — raw keys + transformed view",
+        name: "P13: table.getRecords auto-expanded query + $filter + $orderby + $top (exact failing test shape)",
+        fn: async () => {
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
+            + `&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`
+            + `&$orderby=nnsyc200_name asc&$top=10`
+          const payload = (await ctx.client.getRecords(entity as never, { query })) as Rows
+          const childRow = payload.find((r) => r[pk] === ctx.state.child)
+          skip(`PROBE P13\nquery: ${query}\nchild-row found: ${!!childRow}\nchild-row transform: ${JSON.stringify(childRow ? await ctx.tables.TestTable.transformValueFromDataverse(childRow) : null, null, 2)}`)
+        },
+      },
+      {
+        name: "P14: auto-expanded query + $filter only",
+        fn: async () => {
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
+            + `&$filter=${pk} eq ${ctx.state.child}`
+          let payload: Rows | { error: string }
+          try {
+            payload = await ctx.client.getRecords(entity as never, { query })
+          } catch (e) {
+            payload = { error: e instanceof Error ? e.message : String(e) }
+          }
+          skip(`PROBE P14\nquery: ${query}\npayload: ${JSON.stringify(payload, null, 2)}`)
+        },
+      },
+      {
+        name: "P15: auto-expanded query + $top only",
+        fn: async () => {
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)) + `&$top=10`
+          let payload: Rows | { error: string }
+          try {
+            payload = await ctx.client.getRecords(entity as never, { query })
+          } catch (e) {
+            payload = { error: e instanceof Error ? e.message : String(e) }
+          }
+          skip(`PROBE P15\nquery: ${query}\npayload: ${JSON.stringify(payload, null, 2)}`)
+        },
+      },
+      {
+        name: "P16: auto-expanded query + $orderby only",
+        fn: async () => {
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)) + `&$orderby=nnsyc200_name asc`
+          let payload: Rows | { error: string }
+          try {
+            payload = await ctx.client.getRecords(entity as never, { query })
+          } catch (e) {
+            payload = { error: e instanceof Error ? e.message : String(e) }
+          }
+          skip(`PROBE P16\nquery: ${query}\npayload: ${JSON.stringify(payload, null, 2)}`)
+        },
+      },
+      {
+        name: "P12: detached child (no lookup) — raw keys + transformed view",
         fn: () => probe("P12",
           `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${ctx.state.detached}`),
       },

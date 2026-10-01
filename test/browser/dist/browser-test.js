@@ -1357,7 +1357,9 @@
       const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
       const result = sub?.(child);
       const q = result ?? child;
-      this.#expands.push({ navigation: prop, key, query: q.toAst() });
+      const ast = q.toAst();
+      const isEmptyExpand = (ast.select?.length ?? 0) === 0 && (ast.filters?.length ?? 0) === 0 && (ast.orderby?.length ?? 0) === 0 && (ast.expands?.length ?? 0) === 0 && ast.top === void 0;
+      this.#expands.push({ navigation: prop, key, query: isEmptyExpand ? void 0 : ast });
       const childSelectedKeys = q._getSelectedKeys();
       const childExpandMeta = q._expandMeta;
       const subQueryProvided = !!sub;
@@ -3931,7 +3933,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-01T19:27:05.222Z"}
+      meta.textContent = `build ${"2026-10-01T19:37:11.776Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4024,7 +4026,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-01T19:27:05.222Z",
+          build: "2026-10-01T19:37:11.776Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4043,7 +4045,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-01T19:27:05.222Z"}\``,
+        `Build: \`${"2026-10-01T19:37:11.776Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -5099,62 +5101,58 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const nav = "nnsyc200_Test_Lookup";
       const navValue = "_nnsyc200_test_lookup_value";
       const collection = ctx.cfg.collectionNav;
-      const child = ctx.state.child;
-      const parent = ctx.state.parent;
-      const probe = async (name, query, keysPredicate) => {
+      const probe = async (name, query) => {
         let payload;
         try {
           payload = await ctx.client.getRecords(entity, { query });
         } catch (e) {
           payload = { error: e instanceof Error ? e.message : String(e) };
         }
-        let derived = "";
-        try {
-          keysPredicate?.(payload);
-        } catch (e) {
-          derived = `
-keys-check failed: ${e instanceof Error ? e.message : String(e)}`;
-        }
-        const diagnostics = ctx.tables.TestTable.transformValueFromDataverse;
         let transformed = "";
         try {
-          if (Array.isArray(payload)) transformed = `
-transformed: ${JSON.stringify(await Promise.all(payload.map((v) => diagnostics.call(ctx.tables.TestTable, v))))}`;
+          if (Array.isArray(payload)) {
+            const rows = await Promise.all(payload.map((v) => ctx.tables.TestTable.transformValueFromDataverse(v)));
+            transformed = `
+transformed: ${JSON.stringify(rows, null, 2)}`;
+          } else {
+            transformed = `
+transformed: (error payload, skipped)`;
+          }
         } catch (e) {
           transformed = `
 transform THREW: ${e instanceof Error ? e.message : String(e)}`;
         }
         skip(`PROBE ${name}
 query: ${query}
-payload: ${JSON.stringify(payload, null, 2)}${derived}${transformed}`);
+payload: ${JSON.stringify(payload, null, 2)}${transformed}`);
       };
       return [
         {
           name: "P1: $select includes _lookup_value (no expand)",
           fn: () => probe(
             "P1",
-            `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${child}`
+            `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {
           name: "P2: expand lookup WITHOUT _value in $select — is _value returned anyway?",
           fn: () => probe(
             "P2",
-            `$select=nnsyc200_name,nnsyc200_int&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${child}`
+            `$select=nnsyc200_name,nnsyc200_int&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {
           name: "P3: expand lookup WITH _value in $select (same-key suspect)",
           fn: () => probe(
             "P3",
-            `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${child}`
+            `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {
-          name: "P4: lookup expand with EMPTY options (nav())",
+          name: "P4: bare lookup expand (no options, no parens)",
           fn: () => probe(
             "P4",
-            `$select=nnsyc200_name&$expand=${nav}()&$filter=${pk} eq ${child}`
+            `$select=nnsyc200_name&$expand=${nav}&$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {
@@ -5168,52 +5166,108 @@ payload: ${JSON.stringify(payload, null, 2)}${derived}${transformed}`);
           name: "P6: collection expand with $select + $filter at top level (no orderby/top)",
           fn: () => probe(
             "P6",
-            `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${parent}`
+            `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name,nnsyc200_int,${pk})&$filter=${pk} eq ${ctx.state.parent}`
           )
         },
         {
           name: "P7: bare collection expand (no options)",
           fn: () => probe(
             "P7",
-            `$select=nnsyc200_name&$expand=${collection}&$filter=${pk} eq ${parent}`
+            `$select=nnsyc200_name&$expand=${collection}&$filter=${pk} eq ${ctx.state.parent}`
           )
         },
         {
           name: "P8: lookup expand nested inside lookup expand (both with $select)",
           fn: () => probe(
             "P8",
-            `$select=nnsyc200_name&$expand=${nav}($select=nnsyc200_name,${pk}; $expand=${nav}($select=nnsyc200_name,${pk}))&$filter=${pk} eq ${child}`
+            `$select=nnsyc200_name&$expand=${nav}($select=nnsyc200_name,${pk}; $expand=${nav}($select=nnsyc200_name,${pk}))&$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {
           name: "P9: 1:N expand nested inside 1:N expand",
           fn: () => probe(
             "P9",
-            `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name; $expand=${collection}($select=nnsyc200_name))&$filter=${pk} eq ${parent}`
+            `$select=nnsyc200_name&$expand=${collection}($select=nnsyc200_name; $expand=${collection}($select=nnsyc200_name))&$filter=${pk} eq ${ctx.state.parent}`
           )
         },
         {
           name: "P10: lookup + collection to same related entity at top level",
           fn: () => probe(
             "P10",
-            `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,${pk}),${collection}($select=nnsyc200_name,${pk})&$filter=${pk} eq ${child}`
+            `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,${pk}),${collection}($select=nnsyc200_name,${pk})&$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {
-          name: "P11: table.getRecords auto-expanded query (exact failing shape)",
+          name: "P11: table.getRecords auto-expanded query (no options)",
           fn: async () => {
-            const ast = buildTableQueryAst(ctx.tables.TestTable, void 0, true);
-            const query = serializeODataSelect(ast);
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true));
             const payload = await ctx.client.getRecords(entity, { query });
             const keysOfFirst = payload[0] ? Object.keys(payload[0]) : [];
             skip(`PROBE P11
 query: ${query}
 first-row keys: ${JSON.stringify(keysOfFirst)}
-first-row lookup keys: ${JSON.stringify(keysOfFirst.filter((k) => k.includes("lookup")))}`);
+lookup-related keys: ${JSON.stringify(keysOfFirst.filter((k) => k.toLowerCase().includes("lookup")))}`);
           }
         },
         {
-          name: "P12: detached child (lookup) — raw keys + transformed view",
+          name: "P13: table.getRecords auto-expanded query + $filter + $orderby + $top (exact failing test shape)",
+          fn: async () => {
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')&$orderby=nnsyc200_name asc&$top=10`;
+            const payload = await ctx.client.getRecords(entity, { query });
+            const childRow = payload.find((r) => r[pk] === ctx.state.child);
+            skip(`PROBE P13
+query: ${query}
+child-row found: ${!!childRow}
+child-row transform: ${JSON.stringify(childRow ? await ctx.tables.TestTable.transformValueFromDataverse(childRow) : null, null, 2)}`);
+          }
+        },
+        {
+          name: "P14: auto-expanded query + $filter only",
+          fn: async () => {
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$filter=${pk} eq ${ctx.state.child}`;
+            let payload;
+            try {
+              payload = await ctx.client.getRecords(entity, { query });
+            } catch (e) {
+              payload = { error: e instanceof Error ? e.message : String(e) };
+            }
+            skip(`PROBE P14
+query: ${query}
+payload: ${JSON.stringify(payload, null, 2)}`);
+          }
+        },
+        {
+          name: "P15: auto-expanded query + $top only",
+          fn: async () => {
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$top=10`;
+            let payload;
+            try {
+              payload = await ctx.client.getRecords(entity, { query });
+            } catch (e) {
+              payload = { error: e instanceof Error ? e.message : String(e) };
+            }
+            skip(`PROBE P15
+query: ${query}
+payload: ${JSON.stringify(payload, null, 2)}`);
+          }
+        },
+        {
+          name: "P16: auto-expanded query + $orderby only",
+          fn: async () => {
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$orderby=nnsyc200_name asc`;
+            let payload;
+            try {
+              payload = await ctx.client.getRecords(entity, { query });
+            } catch (e) {
+              payload = { error: e instanceof Error ? e.message : String(e) };
+            }
+            skip(`PROBE P16
+query: ${query}
+payload: ${JSON.stringify(payload, null, 2)}`);
+          }
+        },
+        {
+          name: "P12: detached child (no lookup) — raw keys + transformed view",
           fn: () => probe(
             "P12",
             `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${ctx.state.detached}`
