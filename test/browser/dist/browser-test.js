@@ -1633,22 +1633,46 @@
     const query = new ODataQuery(table);
     query.select();
     if (expandNavigation) {
-      const walk = (target, current, inCollection, seen) => {
+      const seenRel = /* @__PURE__ */ new Set();
+      const skipIt = (prop, inExpansion) => {
+        if (prop.kind !== "navigation") return true;
+        const isCollection = prop.type === "collection";
+        if (prop.type !== "lookup" && !isCollection) return true;
+        if (isCollection && inExpansion) return true;
+        if (seenRel.has(String(prop.logicalName))) return true;
+        return false;
+      };
+      const register = (current, inExpansion) => {
+        for (const prop of Object.values(current.fields)) {
+          if (skipIt(prop, inExpansion)) continue;
+          seenRel.add(String(prop.logicalName));
+          register(prop.table, true);
+        }
+      };
+      register(table, false);
+      const pickKeys = (t) => {
+        const keys = [];
+        for (const [key, prop] of Object.entries(t.fields)) {
+          if (prop.kind === "value") keys.push(key);
+          else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
+        }
+        return keys;
+      };
+      const walk = (target, current, inExpansion, expanded) => {
         for (const [key, prop] of Object.entries(current.fields)) {
           if (prop.kind !== "navigation") continue;
           const isCollection = prop.type === "collection";
-          if (prop.type !== "lookup" && !isCollection) continue;
-          if (isCollection && inCollection) continue;
-          if (seen.has(prop.table)) continue;
-          const nextSeen = new Set(seen);
-          nextSeen.add(prop.table);
+          if (prop.type !== "lookup" && !isCollection || isCollection && inExpansion) continue;
+          if (expanded.has(String(prop.logicalName))) continue;
+          expanded.add(String(prop.logicalName));
           target.expand(key, (sub) => {
-            sub.select();
-            walk(sub, prop.table, isCollection, nextSeen);
+            sub.select(...pickKeys(prop.table));
+            walk(sub, prop.table, true, expanded);
           });
         }
       };
       walk(query, table, false, /* @__PURE__ */ new Set());
+      query.select(...pickKeys(table));
     }
     if (options?.filter) query.filter(options.filter);
     if (options?.top !== void 0) query.top(options.top);
@@ -2176,6 +2200,15 @@
         result[pk.key] = recordId;
       }
       result[ETAG] = value["@odata.etag"];
+      for (const [key, property] of Object.entries(this.fields)) {
+        if (property.type !== "lookupId" || result[key] != null) continue;
+        const navEntry = Object.entries(this.fields).find(
+          ([, f]) => f.kind === "navigation" && f.type === "lookup" && String(f.logicalName) === String(property.logicalName)
+        );
+        if (!navEntry) continue;
+        const navValue = result[navEntry[0]];
+        if (navValue) result[key] = navEntry[1].table.getPrimaryId(navValue);
+      }
       return result;
     }
     async transformValueToDataverse(value, ctx) {
@@ -3894,7 +3927,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-01T14:06:01.325Z"}
+      meta.textContent = `build ${"2026-10-01T18:52:40.807Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3987,7 +4020,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-01T14:06:01.325Z",
+          build: "2026-10-01T18:52:40.807Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4006,7 +4039,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-01T14:06:01.325Z"}\``,
+        `Build: \`${"2026-10-01T18:52:40.807Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

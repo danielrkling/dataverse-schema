@@ -244,8 +244,10 @@ test("default table query auto-expands navigation properties when requested", ()
 
   const ast = buildTableQueryAst(Parent, undefined, true)
   expect(ast.select!.length).toBeGreaterThan(0)
-  // Each navigation property (lookup + collection) is expanded by default.
+  // Each top-level navigation property is expanded… and nested lookups inside
+  // the collection expand are expanded too.
   expect(ast.expands!.map(e => e.navigation)).toEqual(["parent_children"])
+  expect(ast.expands![0].query!.expands!.map(e => e.navigation)).toEqual(["parent_link"])
 
   // Without the flag the query stays flat (used for create/update representations).
   const flat = buildTableQueryAst(Parent)
@@ -287,16 +289,15 @@ test("buildTableQueryAst auto-expansion nests lookups but never collections, and
   // Leaf's expansion contains no further expands (no lookup navs).
   expect(lookupExpand.query!.expands![0].query!.expands ?? []).toHaveLength(0)
 
-  // Collection branch: Mid is expanded, its only nested-allowed nav (lookup) is expanded;
-  // the nested self-collection is not.
+  // Collection branch: the mid_owner lookup was already expanded in the lookup
+  // branch — a relationship expands at most once per query, so no nested expands.
   const collectionExpand = ast.expands!.find(e => e.navigation === "top_mids")!
-  expect(collectionExpand.query!.expands!.map(e => e.navigation)).toEqual(["mid_owner"])
+  expect(collectionExpand.query?.expands ?? []).toHaveLength(0)
 
-  // Self-collection branch is walked one level deep; its lookup expand (top_mid → Mid
-  // → mid_owner) is present, and the self-reference is cut by the cycle guard.
+  // Self-collection branch: the top_mid lookup was already expanded in the
+  // first branch, so nothing nests here (once-per-query relationship guard).
   const selfExpand = ast.expands!.find(e => e.navigation === "top_self")!
-  expect(selfExpand.query!.expands!.map(e => e.navigation)).toEqual(["top_mid"])
-  expect(selfExpand.query!.expands![0].query!.expands!.map(e => e.navigation)).toEqual(["mid_owner"])
+  expect(selfExpand.query?.expands ?? []).toHaveLength(0)
 })
 
 test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () => {

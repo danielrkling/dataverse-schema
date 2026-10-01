@@ -664,32 +664,61 @@ export function buildTableQueryAst<T extends GenericProperties>(
   // Auto-expand navigation properties so read results include their related
   // data. Each expand gets a sub-select listing every value/lookupId column of
   // the related table ("all fields on the table"), and lookup expansions nest
-  // recursively. Dataverse does not support expanding a collection inside a
-  // collection, so collections are expanded at the top level only. Users
-  // narrow via pickProperties to keep expands out.
+  // recursively. Two Web API restrictions shape this:
+  // 1. A one-to-many (collection) expand is only valid at the top level —
+  //    nested one-to-many expansions are rejected.
+  // 2. A relationship may appear at most once per query: selecting the lookup's
+  //    `_value` while also expanding that same nav throws
+  //    "An item with the same key has already been added". Expanded navs take
+  //    priority; the paired lookupId column is dropped from $select and its
+  //    value is recovered from the expanded record at transform time
+  //    (see transformValueFromDataverse).
+  // Users narrow via pickProperties to keep expands out.
   if (expandNavigation) {
-    const walk = (
-      target: ODataQuery<any>,
-      current: DataverseTable<any>,
-      inCollection: boolean,
-      seen: Set<unknown>,
-    ): void => {
+    const seenRel = new Set<string>()
+    const skipIt = (prop: any, inExpansion: boolean): boolean => {
+      if (prop.kind !== "navigation") return true
+      const isCollection = prop.type === "collection"
+      if (prop.type !== "lookup" && !isCollection) return true
+      // Dataverse rejects a one-to-many expand nested inside another expansion.
+      if (isCollection && inExpansion) return true
+      // A relationship is expanded at most once per query.
+      if (seenRel.has(String(prop.logicalName))) return true
+      return false
+    }
+    // Pre-pass: register every relationship that will be expanded so `_select`
+    // keys can consistently drop the paired `_value` column of expanded lookups.
+    const register = (current: DataverseTable<any>, inExpansion: boolean): void => {
+      for (const prop of Object.values(current.fields) as any[]) {
+        if (skipIt(prop, inExpansion)) continue
+        seenRel.add(String(prop.logicalName))
+        register(prop.table, true)
+      }
+    }
+    register(table as DataverseTable<any>, false)
+    const pickKeys = (t: DataverseTable<any>): string[] => {
+      const keys: string[] = []
+      for (const [key, prop] of Object.entries(t.fields) as [string, any][]) {
+        if (prop.kind === "value") keys.push(key)
+        else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key)
+      }
+      return keys
+    }
+    const walk = (target: ODataQuery<any>, current: DataverseTable<any>, inExpansion: boolean, expanded: Set<string>): void => {
       for (const [key, prop] of Object.entries(current.fields) as [string, any][]) {
         if (prop.kind !== "navigation") continue
         const isCollection = prop.type === "collection"
-        if (prop.type !== "lookup" && !isCollection) continue
-        // Dataverse rejects a collection expand nested inside another collection expand.
-        if (isCollection && inCollection) continue
-        // Avoid self/circular expansion (e.g. self-referencing hierarchies).
-        if (seen.has(prop.table)) continue
-        const nextSeen = new Set(seen); nextSeen.add(prop.table)
+        if ((prop.type !== "lookup" && !isCollection) || (isCollection && inExpansion)) continue
+        if (expanded.has(String(prop.logicalName))) continue
+        expanded.add(String(prop.logicalName))
         target.expand(key as any, (sub: any) => {
-          sub.select()
-          walk(sub, prop.table, isCollection, nextSeen)
+          sub.select(...pickKeys(prop.table))
+          walk(sub, prop.table, true, expanded)
         })
       }
     }
     walk(query as any, table as DataverseTable<any>, false, new Set())
+    query.select(...pickKeys(table as DataverseTable<T>) as any)
   }
 
   if (options?.filter) query.filter(options.filter as any)

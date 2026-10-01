@@ -684,6 +684,18 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
       result[pk.key] = recordId;
     }
     result[ETAG] = value["@odata.etag"];
+    // lookupId recovery: when the paired lookup nav was auto-expanded in place
+    // of the raw `_id_value` column (see buildTableQueryAst), the id is still
+    // readable from the expanded related record's primary key.
+    for (const [key, property] of Object.entries(this.fields) as [string, any][]) {
+      if (property.type !== "lookupId" || result[key] != null) continue;
+      const navEntry = Object.entries(this.fields).find(
+        ([, f]: [string, any]) => f.kind === "navigation" && f.type === "lookup" && String(f.logicalName) === String(property.logicalName),
+      );
+      if (!navEntry) continue;
+      const navValue = result[navEntry[0]];
+      if (navValue) result[key] = (navEntry[1] as any).table.getPrimaryId(navValue);
+    }
     return result as Infer<TProperties>;
   }
 
