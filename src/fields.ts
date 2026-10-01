@@ -969,6 +969,11 @@ export class LookupIdProperty<Nullable extends boolean = true> extends FieldBase
     }
     return `${this.table.entitySetName}(${value})`;
   }
+
+  transformValueFromDataverse(value: unknown): FieldValue<GUID, Nullable> {
+    if (value == null) return this.nullToRead();
+    return value as FieldValue<GUID, Nullable>;
+  }
 }
 
 export class CollectionProperty<
