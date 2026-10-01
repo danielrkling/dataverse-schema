@@ -122,10 +122,55 @@ export const diagnosticsSuite: Suite = {
           const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
             + `&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`
             + `&$orderby=nnsyc200_name asc&$top=10`
-          const payload = (await ctx.client.getRecords(entity as never, { query })) as Rows
-          const childRow = payload.find((r) => r[pk] === ctx.state.child)
-          skip(`PROBE P13\nquery: ${query}\nchild-row found: ${!!childRow}\nchild-row transform: ${JSON.stringify(childRow ? await ctx.tables.TestTable.transformValueFromDataverse(childRow) : null, null, 2)}`)
+          let payload: Rows | { error: string }
+          try {
+            payload = await ctx.client.getRecords(entity as never, { query })
+          } catch (e) {
+            payload = { error: e instanceof Error ? e.message : String(e) }
+          }
+          const childRow = Array.isArray(payload) ? payload.find((r) => r[pk] === ctx.state.child) : null
+          skip(`PROBE P13\nquery: ${query}\nchild-row found: ${!!childRow}\nraw child-row: ${JSON.stringify(childRow, null, 2)}`)
         },
+      },
+      {
+        name: "P17: auto-expanded query, lookup expansion ONLY (no collection expand)",
+        fn: async () => {
+          const ast = buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)
+          const query = serializeODataSelect({ ...ast, expands: ast.expands!.filter(e => e.navigation.toLowerCase() !== ctx.cfg.collectionNav.toLowerCase()) })
+            + `&$filter=${pk} eq ${ctx.state.child}`
+          let payload: Rows | { error: string }
+          try {
+            payload = await ctx.client.getRecords(entity as never, { query })
+          } catch (e) {
+            payload = { error: e instanceof Error ? e.message : String(e) }
+          }
+          skip(`PROBE P17\nquery: ${query}\npayload: ${JSON.stringify(payload, null, 2)}`)
+        },
+      },
+      {
+        name: "P18: auto-expanded query, collection expansion ONLY (no lookup expand)",
+        fn: async () => {
+          const ast = buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)
+          const query = serializeODataSelect({ ...ast, expands: ast.expands!.filter(e => e.navigation !== nav) })
+          const finalQuery = `${query}&$filter=${pk} eq ${ctx.state.child}`
+          let payload: Rows | { error: string }
+          try {
+            payload = await ctx.client.getRecords(entity as never, { query: finalQuery })
+          } catch (e) {
+            payload = { error: e instanceof Error ? e.message : String(e) }
+          }
+          skip(`PROBE P18\nquery: ${finalQuery}\npayload: ${JSON.stringify(payload, null, 2)}`)
+        },
+      },
+      {
+        name: "P19: bare lookup expand by ID (getRecord shape) + $filter via id",
+        fn: () => probe("P19",
+          `$select=nnsyc200_name,${navValue}&$expand=${nav}&$filter=${pk} eq ${ctx.state.child}`),
+      },
+      {
+        name: "P20: full-field $select (no expand) — modifiedon/statecode present baseline",
+        fn: () => probe("P20",
+          `&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
         name: "P14: auto-expanded query + $filter only",
