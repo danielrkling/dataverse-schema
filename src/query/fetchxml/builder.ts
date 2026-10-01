@@ -225,7 +225,12 @@ async function transformRowWithAliases(
             } else if (info.name in v) {
                 result[alias] = info.field ? await info.field.transformFromDataverse(raw, ctx) : raw;
             } else {
-                result[alias] = info.getDefault();
+                // Alias absent from the payload (e.g. an aggregate row without this
+                // column): resolve via the field transform — nullable fields read as
+                // `null`, not the field default.
+                result[alias] = info.field
+                    ? await info.field.transformFromDataverse(raw ?? null, ctx)
+                    : raw ?? info.getDefault();
             }
         }
         result[ETAG] = v["@odata.etag"];

@@ -657,15 +657,39 @@ export type ODataTableQueryOptions<T extends GenericProperties = GenericProperti
 export function buildTableQueryAst<T extends GenericProperties>(
   table: DataverseTable<T>,
   options?: ODataTableQueryOptions<T>,
+  expandNavigation = false,
 ): ODataSelectAst {
   const query = new ODataQuery(table)
   query.select()
-  // Auto-expand navigation properties so transformed records include their
-  // related data (users narrow via pickProperties to keep expands out).
-  for (const [key, prop] of Object.entries(table.fields) as [string, any][]) {
-    if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) {
-      // query.expand(key as any,q=>q.select())
+  // Auto-expand navigation properties so read results include their related
+  // data. Each expand gets a sub-select listing every value/lookupId column of
+  // the related table ("all fields on the table"), and lookup expansions nest
+  // recursively. Dataverse does not support expanding a collection inside a
+  // collection, so collections are expanded at the top level only. Users
+  // narrow via pickProperties to keep expands out.
+  if (expandNavigation) {
+    const walk = (
+      target: ODataQuery<any>,
+      current: DataverseTable<any>,
+      inCollection: boolean,
+      seen: Set<unknown>,
+    ): void => {
+      for (const [key, prop] of Object.entries(current.fields) as [string, any][]) {
+        if (prop.kind !== "navigation") continue
+        const isCollection = prop.type === "collection"
+        if (prop.type !== "lookup" && !isCollection) continue
+        // Dataverse rejects a collection expand nested inside another collection expand.
+        if (isCollection && inCollection) continue
+        // Avoid self/circular expansion (e.g. self-referencing hierarchies).
+        if (seen.has(prop.table)) continue
+        const nextSeen = new Set(seen); nextSeen.add(prop.table)
+        target.expand(key as any, (sub: any) => {
+          sub.select()
+          walk(sub, prop.table, isCollection, nextSeen)
+        })
+      }
     }
+    walk(query as any, table as DataverseTable<any>, false, new Set())
   }
 
   if (options?.filter) query.filter(options.filter as any)

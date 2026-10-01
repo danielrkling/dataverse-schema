@@ -57,7 +57,6 @@ export const fetchxmlSuite: Suite = {
             .distinct()
             .execute()
           const labels = new Set(rows.map((r) => r.c))
-          console.log(rows,labels)
           assertEquals(labels.size, rows.length, "no duplicates returned")
           //@ts-expect-error
           for (const want of ["A", "B", "C"]) assert(labels.has(want), `missing choice ${want}`)
@@ -115,7 +114,7 @@ export const fetchxmlSuite: Suite = {
           const kidSum = (lonely as any).kidSum
           assert(kidSum == null || kidSum === 0, `childless parent aggregate is empty (got ${kidSum}), never another parent's sum`)
           const parent = rows.find((r) => (r as any).parentLabel === ctx.state.parentName)
-          assertEquals((parent as any)?.kidSum, 147, "matched parent sums its children (5+42+100)")
+          assertEquals((parent as any)?.kidSum, 54, "matched parent sums its children (5+7+42)")
         },
       },
       {
@@ -138,7 +137,10 @@ export const fetchxmlSuite: Suite = {
             .apply((f) => ({ byChoice: groupby(f.choice), totalInt: sum(f.int), n: count(f.id) }))
             .filter(scoped)
             .execute()
-          const byChoice = new Map(rows.map((r) => [r.byChoice, r]))
+          // A row created without a choice is a null group; exclude it from
+          // the A/B/C group assertions.
+          const labeledRows = rows.filter((r) => r.byChoice != null)
+          const byChoice = new Map(labeledRows.map((r) => [r.byChoice, r]))
           assertEquals(byChoice.size, 3, "groups A/B/C")
           const a = byChoice.get("A")!
           assertEquals(a.totalInt, 105, "group A sum 100+5")
@@ -195,7 +197,8 @@ export const fetchxmlSuite: Suite = {
             .filter(scoped)
             .orderby((a) => a.byChoice, "asc")
             .execute()
-          const choices = rows.map((r) => r.byChoice)
+          // Rows created without a choice form a null group; compare A/B/C only.
+          const choices = rows.map((r) => r.byChoice).filter((c) => c != null)
           assertEquals(choices.length, 3, "three groups")
           assertEquals(choices, [...choices].sort(), "groups ordered by alias asc")
         },

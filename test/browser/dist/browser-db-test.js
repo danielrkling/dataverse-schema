@@ -1369,11 +1369,26 @@
     }
     return proxy;
   }
-  function buildTableQueryAst(table, options) {
+  function buildTableQueryAst(table, options, expandNavigation = false) {
     const query = new ODataQuery(table);
     query.select();
-    for (const [key, prop] of Object.entries(table.fields)) {
-      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) ;
+    if (expandNavigation) {
+      const walk = (target, current, inCollection, seen) => {
+        for (const [key, prop] of Object.entries(current.fields)) {
+          if (prop.kind !== "navigation") continue;
+          const isCollection = prop.type === "collection";
+          if (prop.type !== "lookup" && !isCollection) continue;
+          if (isCollection && inCollection) continue;
+          if (seen.has(prop.table)) continue;
+          const nextSeen = new Set(seen);
+          nextSeen.add(prop.table);
+          target.expand(key, (sub) => {
+            sub.select();
+            walk(sub, prop.table, isCollection, nextSeen);
+          });
+        }
+      };
+      walk(query, table, false, /* @__PURE__ */ new Set());
     }
     if (options?.filter) query.filter(options.filter);
     if (options?.top !== void 0) query.top(options.top);
@@ -1452,7 +1467,7 @@
     async getRecord(id, options) {
       return this.client.getRecord(this.entitySetName, id, {
         ...options,
-        query: tableQuery(this)
+        query: tableQuery(this, void 0, true)
       }).then((v) => this.transformValueFromDataverse(v)).catch((err) => {
         if (err instanceof DataverseHttpError && err.status === 404) return null;
         throw err;
@@ -1476,7 +1491,7 @@
     async getRecords(queryOptions, options) {
       return this.client.getRecords(this.entitySetName, {
         ...options,
-        query: tableQuery(this, queryOptions)
+        query: tableQuery(this, queryOptions, true)
       }).then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
     }
     /**
@@ -1498,7 +1513,7 @@
         this.entitySetName,
         {
           ...options,
-          query: tableQuery(this, queryOptions)
+          query: tableQuery(this, queryOptions, true)
         }
       )) {
         yield await this.transformValueFromDataverse(record);
@@ -1524,7 +1539,7 @@
         this.entitySetName,
         {
           ...options,
-          query: tableQuery(this, queryOptions)
+          query: tableQuery(this, queryOptions, true)
         }
       )) {
         yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
@@ -1998,8 +2013,8 @@
       Object.entries(fields).map(([key, field]) => [key, field.schema])
     ));
   }
-  function tableQuery(table, options) {
-    return serializeODataSelect(buildTableQueryAst(table, options));
+  function tableQuery(table, options, expandNavigation = false) {
+    return serializeODataSelect(buildTableQueryAst(table, options, expandNavigation));
   }
 
   function isValidDate(value) {
@@ -3665,7 +3680,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-30T12:36:22.176Z"}
+      meta.textContent = `build ${"2026-10-01T14:06:02.899Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3758,7 +3773,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-30T12:36:22.176Z",
+          build: "2026-10-01T14:06:02.899Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3777,7 +3792,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-30T12:36:22.176Z"}\``,
+        `Build: \`${"2026-10-01T14:06:02.899Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

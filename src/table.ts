@@ -144,7 +144,7 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
     return this.client
       .getRecord(this.entitySetName, id, {
         ...options,
-        query: tableQuery(this as unknown as DataverseTable<GenericProperties>),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, undefined, true),
       })
       .then((v) => this.transformValueFromDataverse(v))
       .catch((err: unknown) => {
@@ -178,7 +178,7 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
     return this.client
       .getRecords(this.entitySetName, {
         ...options,
-        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions, true),
       })
       .then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
   }
@@ -205,7 +205,7 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
       this.entitySetName,
       {
         ...options,
-        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions, true),
       },
     )) {
       yield await this.transformValueFromDataverse(record);
@@ -235,7 +235,7 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
       this.entitySetName,
       {
         ...options,
-        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions),
+        query: tableQuery(this as unknown as DataverseTable<GenericProperties>, queryOptions, true),
       },
     )) {
       yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
@@ -813,8 +813,9 @@ function composeFieldSchemas<TProperties extends GenericProperties>(
 function tableQuery(
   table: DataverseTable<any>,
   options?: ODataTableQueryOptions<any>,
+  expandNavigation = false,
 ): string {
-  return serializeODataSelect(buildTableQueryAst(table, options));
+  return serializeODataSelect(buildTableQueryAst(table, options, expandNavigation));
 }
 
 

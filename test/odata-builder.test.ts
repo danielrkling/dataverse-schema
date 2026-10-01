@@ -221,7 +221,7 @@ test("unknown orderby field throws", () => {
 
 // --- buildTableQueryAst (default table query) ---
 
-test("default table query auto-expands navigation properties", () => {
+test("default table query auto-expands navigation properties when requested", () => {
   const Task = new DataverseTable({
     client, entitySetName: "tasks", logicalName: "task",
     fields: { id: primaryKey("taskid"), subject: string("subject") },
@@ -242,10 +242,61 @@ test("default table query auto-expands navigation properties", () => {
     },
   })
 
-  const ast = buildTableQueryAst(Parent)
+  const ast = buildTableQueryAst(Parent, undefined, true)
   expect(ast.select!.length).toBeGreaterThan(0)
   // Each navigation property (lookup + collection) is expanded by default.
   expect(ast.expands!.map(e => e.navigation)).toEqual(["parent_children"])
+
+  // Without the flag the query stays flat (used for create/update representations).
+  const flat = buildTableQueryAst(Parent)
+  expect(flat.expands ?? []).toHaveLength(0)
+})
+
+test("buildTableQueryAst auto-expansion nests lookups but never collections, and stops at cycles", () => {
+  const Leaf: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "leaves", logicalName: "leaf",
+    fields: { id: primaryKey("leafid"), name: string("name") },
+  })
+  // Mid has a lookup to Leaf — nested inside both a lookup and a collection expand.
+  const Mid: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "mids", logicalName: "mid",
+    fields: {
+      id: primaryKey("midid"),
+      name: string("name"),
+      owner: lookup("mid_owner", () => Leaf),
+      kids: collection("mid_kids", () => Mid as any), // self-collection: skipped inside collection expand
+    },
+  })
+  const Top: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "tops", logicalName: "top",
+    fields: {
+      id: primaryKey("topid"),
+      midLookup: lookup("top_mid", () => Mid as any),
+      mids: collection("top_mids", () => Mid as any),
+      selfRef: collection("top_self", () => Top as any), // self-collection: cycle-stopped via own sub-walk
+    },
+  })
+
+  const ast = buildTableQueryAst(Top, undefined, true)
+  expect(ast.expands!.map(e => e.navigation)).toEqual(["top_mid", "top_mids", "top_self"])
+
+  // Lookup branch: Mid is expanded with a sub-select and a nested lookup expand to Leaf;
+  // its self-collection is skipped.
+  const lookupExpand = ast.expands!.find(e => e.navigation === "top_mid")!
+  expect(lookupExpand.query!.expands!.map(e => e.navigation)).toEqual(["mid_owner"])
+  // Leaf's expansion contains no further expands (no lookup navs).
+  expect(lookupExpand.query!.expands![0].query!.expands ?? []).toHaveLength(0)
+
+  // Collection branch: Mid is expanded, its only nested-allowed nav (lookup) is expanded;
+  // the nested self-collection is not.
+  const collectionExpand = ast.expands!.find(e => e.navigation === "top_mids")!
+  expect(collectionExpand.query!.expands!.map(e => e.navigation)).toEqual(["mid_owner"])
+
+  // Self-collection branch is walked one level deep; its lookup expand (top_mid → Mid
+  // → mid_owner) is present, and the self-reference is cut by the cycle guard.
+  const selfExpand = ast.expands!.find(e => e.navigation === "top_self")!
+  expect(selfExpand.query!.expands!.map(e => e.navigation)).toEqual(["top_mid"])
+  expect(selfExpand.query!.expands![0].query!.expands!.map(e => e.navigation)).toEqual(["mid_owner"])
 })
 
 test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () => {

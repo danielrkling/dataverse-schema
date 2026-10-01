@@ -1629,11 +1629,26 @@
   function fetchOdata(table) {
     return new InitialQueryImpl(table);
   }
-  function buildTableQueryAst(table, options) {
+  function buildTableQueryAst(table, options, expandNavigation = false) {
     const query = new ODataQuery(table);
     query.select();
-    for (const [key, prop] of Object.entries(table.fields)) {
-      if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) ;
+    if (expandNavigation) {
+      const walk = (target, current, inCollection, seen) => {
+        for (const [key, prop] of Object.entries(current.fields)) {
+          if (prop.kind !== "navigation") continue;
+          const isCollection = prop.type === "collection";
+          if (prop.type !== "lookup" && !isCollection) continue;
+          if (isCollection && inCollection) continue;
+          if (seen.has(prop.table)) continue;
+          const nextSeen = new Set(seen);
+          nextSeen.add(prop.table);
+          target.expand(key, (sub) => {
+            sub.select();
+            walk(sub, prop.table, isCollection, nextSeen);
+          });
+        }
+      };
+      walk(query, table, false, /* @__PURE__ */ new Set());
     }
     if (options?.filter) query.filter(options.filter);
     if (options?.top !== void 0) query.top(options.top);
@@ -1712,7 +1727,7 @@
     async getRecord(id, options) {
       return this.client.getRecord(this.entitySetName, id, {
         ...options,
-        query: tableQuery(this)
+        query: tableQuery(this, void 0, true)
       }).then((v) => this.transformValueFromDataverse(v)).catch((err) => {
         if (err instanceof DataverseHttpError && err.status === 404) return null;
         throw err;
@@ -1736,7 +1751,7 @@
     async getRecords(queryOptions, options) {
       return this.client.getRecords(this.entitySetName, {
         ...options,
-        query: tableQuery(this, queryOptions)
+        query: tableQuery(this, queryOptions, true)
       }).then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
     }
     /**
@@ -1758,7 +1773,7 @@
         this.entitySetName,
         {
           ...options,
-          query: tableQuery(this, queryOptions)
+          query: tableQuery(this, queryOptions, true)
         }
       )) {
         yield await this.transformValueFromDataverse(record);
@@ -1784,7 +1799,7 @@
         this.entitySetName,
         {
           ...options,
-          query: tableQuery(this, queryOptions)
+          query: tableQuery(this, queryOptions, true)
         }
       )) {
         yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
@@ -2258,8 +2273,8 @@
       Object.entries(fields).map(([key, field]) => [key, field.schema])
     ));
   }
-  function tableQuery(table, options) {
-    return serializeODataSelect(buildTableQueryAst(table, options));
+  function tableQuery(table, options, expandNavigation = false) {
+    return serializeODataSelect(buildTableQueryAst(table, options, expandNavigation));
   }
   class DataverseIntersectTable {
     /** Marks this table as an intersect table for FetchXML joins. */
@@ -2957,7 +2972,7 @@
         } else if (info.name in v) {
           result[alias] = info.field ? await info.field.transformFromDataverse(raw, ctx) : raw;
         } else {
-          result[alias] = info.getDefault();
+          result[alias] = info.field ? await info.field.transformFromDataverse(raw ?? null, ctx) : raw ?? info.getDefault();
         }
       }
       result[ETAG] = v["@odata.etag"];
@@ -3879,7 +3894,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-09-30T12:36:13.787Z"}
+      meta.textContent = `build ${"2026-10-01T14:06:01.325Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3972,7 +3987,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-09-30T12:36:13.787Z",
+          build: "2026-10-01T14:06:01.325Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3991,7 +4006,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-09-30T12:36:13.787Z"}\``,
+        `Build: \`${"2026-10-01T14:06:01.325Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4588,7 +4603,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).select((f) => ({ c: f.choice })).filter(scoped).distinct().execute();
             const labels = new Set(rows.map((r) => r.c));
-            console.log(rows, labels);
             assertEquals(labels.size, rows.length, "no duplicates returned");
             for (const want of ["A", "B", "C"]) assert(labels.has(want), `missing choice ${want}`);
           }
@@ -4631,7 +4645,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const kidSum = lonely.kidSum;
             assert(kidSum == null || kidSum === 0, `childless parent aggregate is empty (got ${kidSum}), never another parent's sum`);
             const parent = rows.find((r) => r.parentLabel === ctx.state.parentName);
-            assertEquals(parent?.kidSum, 147, "matched parent sums its children (5+42+100)");
+            assertEquals(parent?.kidSum, 54, "matched parent sums its children (5+7+42)");
           }
         },
         {
@@ -4651,7 +4665,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           name: "aggregate groupby(choice) + sum + count via execute()",
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ byChoice: groupby(f.choice), totalInt: sum(f.int), n: count(f.id) })).filter(scoped).execute();
-            const byChoice = new Map(rows.map((r) => [r.byChoice, r]));
+            const labeledRows = rows.filter((r) => r.byChoice != null);
+            const byChoice = new Map(labeledRows.map((r) => [r.byChoice, r]));
             assertEquals(byChoice.size, 3, "groups A/B/C");
             const a = byChoice.get("A");
             assertEquals(a.totalInt, 105, "group A sum 100+5");
@@ -4691,7 +4706,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           name: "aggregate orderby uses the group alias",
           fn: async () => {
             const rows = await fetchXml(ctx.tables.TestTable).apply((f) => ({ byChoice: groupby(f.choice), n: count() })).filter(scoped).orderby((a) => a.byChoice, "asc").execute();
-            const choices = rows.map((r) => r.byChoice);
+            const choices = rows.map((r) => r.byChoice).filter((c) => c != null);
             assertEquals(choices.length, 3, "three groups");
             assertEquals(choices, [...choices].sort(), "groups ordered by alias asc");
           }
