@@ -8,6 +8,7 @@ import { filesSuite } from "./files-images"
 import { functionsSuite } from "./functions-actions"
 import { bulkSuite } from "./bulk"
 import { errorsSuite } from "./errors"
+import { diagnosticsSuite } from "./diagnostics"
 
 export const suites: Suite[] = [
   generalSuite,
@@ -19,4 +20,5 @@ export const suites: Suite[] = [
   functionsSuite,
   bulkSuite,
   errorsSuite,
+  diagnosticsSuite,
 ]
