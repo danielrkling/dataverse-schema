@@ -2080,10 +2080,49 @@ function all(proxy, condition) {
 function fetchOdata(table) {
 	return new InitialQueryImpl(table);
 }
-function buildTableQueryAst(table, options) {
+function buildTableQueryAst(table, options, expandNavigation = false) {
 	const query = new ODataQuery(table);
 	query.select();
-	for (const [key, prop] of Object.entries(table.fields)) if (prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")) query.expand(key);
+	if (expandNavigation) {
+		const seenRel = /* @__PURE__ */ new Set();
+		const skipIt = (prop, inExpansion) => {
+			if (prop.kind !== "navigation") return true;
+			const isCollection = prop.type === "collection";
+			if (prop.type !== "lookup" && !isCollection) return true;
+			if (isCollection && inExpansion) return true;
+			if (seenRel.has(String(prop.logicalName))) return true;
+			return false;
+		};
+		const register = (current, inExpansion) => {
+			for (const prop of Object.values(current.fields)) {
+				if (skipIt(prop, inExpansion)) continue;
+				seenRel.add(String(prop.logicalName));
+				register(prop.table, true);
+			}
+		};
+		register(table, false);
+		const pickKeys = (t) => {
+			const keys = [];
+			for (const [key, prop] of Object.entries(t.fields)) if (prop.kind === "value") keys.push(key);
+			else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
+			return keys;
+		};
+		const walk = (target, current, inExpansion, expanded) => {
+			for (const [key, prop] of Object.entries(current.fields)) {
+				if (prop.kind !== "navigation") continue;
+				const isCollection = prop.type === "collection";
+				if (prop.type !== "lookup" && !isCollection || isCollection && inExpansion) continue;
+				if (expanded.has(String(prop.logicalName))) continue;
+				expanded.add(String(prop.logicalName));
+				target.expand(key, (sub) => {
+					sub.select(...pickKeys(prop.table));
+					walk(sub, prop.table, true, expanded);
+				});
+			}
+		};
+		walk(query, table, false, /* @__PURE__ */ new Set());
+		query.select(...pickKeys(table));
+	}
 	if (options?.filter) query.filter(options.filter);
 	if (options?.top !== void 0) query.top(options.top);
 	if (typeof options?.orderby === "string") for (const value of options.orderby.split(",")) {
@@ -2185,7 +2224,7 @@ var DataverseTable = class DataverseTable {
 	async getRecord(id, options) {
 		return this.client.getRecord(this.entitySetName, id, {
 			...options,
-			query: tableQuery(this)
+			query: tableQuery(this, void 0, true)
 		}).then((v) => this.transformValueFromDataverse(v)).catch((err) => {
 			if (err instanceof DataverseHttpError && err.status === 404) return null;
 			throw err;
@@ -2209,7 +2248,7 @@ var DataverseTable = class DataverseTable {
 	async getRecords(queryOptions, options) {
 		return this.client.getRecords(this.entitySetName, {
 			...options,
-			query: tableQuery(this, queryOptions)
+			query: tableQuery(this, queryOptions, true)
 		}).then((values) => Promise.all(values.map((v) => this.transformValueFromDataverse(v))));
 	}
 	/**
@@ -2229,7 +2268,7 @@ var DataverseTable = class DataverseTable {
 	async *iterateRecords(queryOptions, options) {
 		for await (const record of this.client.iterateRecords(this.entitySetName, {
 			...options,
-			query: tableQuery(this, queryOptions)
+			query: tableQuery(this, queryOptions, true)
 		})) yield await this.transformValueFromDataverse(record);
 	}
 	/**
@@ -2250,7 +2289,7 @@ var DataverseTable = class DataverseTable {
 	async *iteratePages(queryOptions, options) {
 		for await (const page of this.client.iteratePages(this.entitySetName, {
 			...options,
-			query: tableQuery(this, queryOptions)
+			query: tableQuery(this, queryOptions, true)
 		})) yield await Promise.all(page.map((v) => this.transformValueFromDataverse(v)));
 	}
 	/**
@@ -2584,6 +2623,13 @@ var DataverseTable = class DataverseTable {
 		}
 		if (!(pk.key in result) && recordId !== void 0) result[pk.key] = recordId;
 		result[ETAG] = value["@odata.etag"];
+		for (const [key, property] of Object.entries(this.fields)) {
+			if (property.type !== "lookupId" || result[key] != null) continue;
+			const navEntry = Object.entries(this.fields).find(([, f]) => f.kind === "navigation" && f.type === "lookup" && String(f.logicalName) === String(property.logicalName));
+			if (!navEntry) continue;
+			const navValue = result[navEntry[0]];
+			if (navValue) result[key] = navEntry[1].table.getPrimaryId(navValue);
+		}
 		return result;
 	}
 	async transformValueToDataverse(value, ctx) {
@@ -2689,8 +2735,8 @@ var DataverseTable = class DataverseTable {
 function composeFieldSchemas(fields) {
 	return composeRecordSchema(Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.schema])));
 }
-function tableQuery(table, options) {
-	return serializeODataSelect(buildTableQueryAst(table, options));
+function tableQuery(table, options, expandNavigation = false) {
+	return serializeODataSelect(buildTableQueryAst(table, options, expandNavigation));
 }
 /**
 * Represents a Dataverse many-to-many intersect (association) table.
@@ -3359,6 +3405,10 @@ var LookupIdProperty = class extends FieldBase {
 		if (typeof value !== "string" || value.length === 0) throw new Error("Lookup IDs must be non-empty strings");
 		return `${this.table.entitySetName}(${value})`;
 	}
+	transformValueFromDataverse(value) {
+		if (value == null) return this.nullToRead();
+		return value;
+	}
 };
 var CollectionProperty = class extends FieldBase {
 	kind = "navigation";
@@ -3732,7 +3782,7 @@ async function transformRowWithAliases(table, aliasInfo, v) {
 			if (info.isOuter && raw == null && !(info.name in v)) result[alias] = info.field ? void 0 : raw;
 			else if (info.isOuter && raw == null) result[alias] = info.getDefault();
 			else if (info.name in v) result[alias] = info.field ? await info.field.transformFromDataverse(raw, ctx) : raw;
-			else result[alias] = info.getDefault();
+			else result[alias] = info.field ? await info.field.transformFromDataverse(raw ?? null, ctx) : raw ?? info.getDefault();
 		}
 		result[ETAG] = v["@odata.etag"];
 		return result;

@@ -405,7 +405,7 @@ type ODataTableQueryOptions<T extends GenericProperties = GenericProperties> = {
   orderby?: Partial<Record<keyof T & string, "asc" | "desc">> | string;
   top?: number;
 };
-declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions<T>): ODataSelectAst;
+declare function buildTableQueryAst<T extends GenericProperties>(table: DataverseTable<T>, options?: ODataTableQueryOptions<T>, expandNavigation?: boolean): ODataSelectAst;
 //#endregion
 //#region src/schema.d.ts
 /**
@@ -1394,6 +1394,7 @@ declare class LookupIdProperty<Nullable extends boolean = true> extends FieldBas
     id: PrimaryKeyField;
   }>;
   transformValueToDataverse(value: any): string | null;
+  transformValueFromDataverse(value: unknown): FieldValue<GUID, Nullable>;
 }
 declare class CollectionProperty<TProperties extends GenericProperties> extends FieldBase<Infer<TProperties>[]> {
   #private;
