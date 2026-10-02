@@ -1,6 +1,6 @@
 # Auto-expand navigation properties — status & handoff
 
-Last updated: 2026-10-02 (silent omissions → throws; unit tests + browser harness updated, NOT yet re-run in-org).
+Last updated: 2026-10-02 (evening, after run build `2026-10-02T12:49:51.835Z`, window 12:51:12 → 12:52:22: 59 passed / 5 failed / 21 skipped).
 
 ## Goal
 
@@ -120,21 +120,20 @@ test's detail; "Copy Markdown results" exports them.
 1. **P13's mixing (both sides of a self relationship)** — RESOLVED by throwing (see above);
    the next run just needs to confirm `TestTableLookupSide` / `TestTableCollectionSide`
    reads come back sane (P17/P18 are pointed at them).
-2. Where the "An item with the same key has already been added" error comes from — user
-   reported it on `updateRecord persists changes`, bulk "seeded bulk rows are all
-   present", and updateMultiple — needs reproduction; P3 disproved the _value+expand
-   theory. Candidates: PATCH/POST (`return=representation`)?? `UpdateMultiple` Targets?
-   The both-sides-self query? See P14–P16 & P17–P20 history in the probe suite.
-3. Whether the ORIGINAL "$select/$filter/$orderby … top level while doing $expand on
-   nested one to many relationships" error is reproducible — P5/P6/P9 did not reproduce it
-   (all accepted). Possibly only via a sub-select including specific system columns, or via
-   a nested expand with different query option combinations (untested variants: orderby/top
-   INSIDE the collection sub-expand).
+2. ~~Where the "An item with the same key has already been added" error comes from~~
+   RESOLVED (2026-10-02): it was the both-sides-of-self auto-expanded query (P13 shape).
+   All three tests that previously reported it pass now that reads use narrowed tables.
+   Not the PATCH/`return=representation`/`UpdateMultiple` path, which was already flat.
+3. ~~Whether the ORIGINAL "$select/$filter/$orderby … top level while doing $expand on
+   nested one to many relationships" error is reproducible~~ — still unreproduced across
+   P5/P6/P9/P13/P14–P19 (every variant accepted). Treat as a phantom org error for now;
+   auto-expansion doesn't emit those shapes anyway (collections only expand at top level,
+   and nesting now throws).
 4. File/image columns inside expand sub-selects (`nnsyc200_file_name`, `nnsyc200_image`)
-   — not yet live-verified end-to-end (they sit in the auto sub-select lists; watch the
-   transform of expanded rows for file/image fields: FileField/ImageField transforms may
-   need special handling for expanded payloads or should be excluded from expand
-   sub-selects).
+   — the org ACCEPTS them (P17 payload) but reading a file/image on an *expanded* row is
+   still unverified end-to-end. The `files-images` suite now reads via `TestTableFlat`; add
+   an expanded-row case (e.g. seed the parent with a file, read it through
+   `TestTableLookupSide.getRecord(child)`) to check FileField/ImageField transforms.
 
 ## PENDING WORK IN FLIGHT (was mid-edit when session ended)
 
@@ -142,6 +141,38 @@ RESOLVED 2026-10-02 — see "Throw policy" above. User chose: throw globally on 
 expand, including the cross-branch dedupe. Implemented, unit tests updated (425 pass),
 typecheck clean, browser-test bundle rebuilt. Still needs one in-org run to confirm the
 narrowed-table variants behave (the harness changes have NOT been exercised live).
+
+## Run results 2026-10-02T12:49 (build 12:49:51)
+
+59 passed, 5 failed, 21 skipped. All 5 failures were harness gaps, not library bugs:
+
+- `files-images` ×3 (`getRecord`) and `errors` ×1 (`getRecord`) still used the un-narrowed
+  `ctx.tables.TestTable` → the new throw fired. Fixed: they now use `TestTableFlat`
+  (missed on the first pass because the earlier grep only covered `getRecords`/`iterateRecords`).
+- `bulk / deleteMultiple` threw `new Error("skip: …")`, which the reporter counts as FAILED —
+  only `skip()` from `harness/assert` (a `SkipError`) marks a test skipped. Fixed. (Pre-existing.)
+
+Notable results:
+
+- **"An item with the same key has already been added" is GONE.** `updateRecord persists changes`,
+  `seeded bulk rows are all present` and `updateMultiple applies to every row` all passed once the
+  reads stopped issuing the both-sides-of-self query. Strongest evidence yet that open question #2
+  was caused by that query shape (P13), not by PATCH/`return=representation`/`UpdateMultiple`.
+- **P10 re-confirmed the cross-wiring**: with both sides expanded the lookup came back as a stub
+  (`__DisplayName__`, `IsReferencedQueryCall: true`, `nnsyc200_name: null`) while the real parent
+  appeared under the collection key. Throwing is the right call.
+- **P17 (lookup side) and P18 (collection side) both behave sanely**, and the auto-expanded
+  lookup-side query works with `$filter`/`$orderby`/`$top` (P13) and with `$filter`/`$top`/
+  `$orderby` alone (P14–P16). The earlier "$select/$filter/$orderby only at top level" org error
+  did not reproduce in any variant.
+- **File/image columns inside expand sub-selects are accepted**: P17's expand sub-select lists
+  `nnsyc200_file_name` and `nnsyc200_image` and the org returned them without complaint. The
+  end-to-end read-back of a file/image on an *expanded* row is still unverified (open question #4).
+- `query-odata` did not appear in the report at all → the three new auto-expansion tests (lookup
+  side, collection side, both-sides-throw) have NOT been run live yet. Highest-priority next run.
+- Probe hygiene fixed: probes now narrow the table to the columns the org actually returned before
+  transforming (raw probes select a few columns, so transforming with the full table tripped
+  `modifiedon`-is-non-nullable — noise, not a bug), and P20's malformed `&$filter=…` (400) is fixed.
 
 ## Test-suite state
 

@@ -3986,7 +3986,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T12:49:51.835Z"}
+      meta.textContent = `build ${"2026-10-02T12:56:54.237Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4079,7 +4079,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T12:49:51.835Z",
+          build: "2026-10-02T12:56:54.237Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4098,7 +4098,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T12:49:51.835Z"}\``,
+        `Build: \`${"2026-10-02T12:56:54.237Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4945,7 +4945,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "file reads back as FileRef with the uploaded name",
         fn: async () => {
-          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assert(r, "row missing");
           assertEquals(r.file?.name ?? null, "smoke.txt", "uploaded filename");
         }
@@ -4953,7 +4953,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "image reads back as ImageRef with a data URL",
         fn: async () => {
-          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assert(r, "row missing");
           const img = r.image;
           assert(img && typeof img.url === "string", "image ref present");
@@ -4980,7 +4980,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           await ctx.tables.TestTable.deleteFile(ctx.state.row, "file");
           await ctx.tables.TestTable.deleteImage(ctx.state.row, "image");
-          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assert(r, "row missing");
           assertEquals(r.file, null, "file cleared");
           assertEquals(r.image, null, "image cleared");
@@ -5080,7 +5080,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             } catch (e) {
               const msg = messageOf(e);
               if (msg.includes("has not yet been implemented") || msg.includes("405")) {
-                throw new Error("skip: this org has not enabled DeleteMultiple");
+                skip("this org has not enabled DeleteMultiple");
               }
               throw e;
             }
@@ -5100,7 +5100,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "getRecord on a missing id returns null",
         fn: async () => {
-          const r = await ctx.tables.TestTable.getRecord(MISSING);
+          const r = await ctx.tables.TestTableFlat.getRecord(MISSING);
           assertEquals(r, null, "missing record maps to null");
         }
       },
@@ -5173,6 +5173,21 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const nav = "nnsyc200_Test_Lookup";
       const navValue = "_nnsyc200_test_lookup_value";
       const collection = ctx.cfg.collectionNav;
+      const narrowToPayload = (rows) => {
+        const fields = ctx.tables.TestTable.fields;
+        const dvNameToKey = /* @__PURE__ */ new Map();
+        for (const [key, prop] of Object.entries(fields)) {
+          dvNameToKey.set(prop.fromDataverseName ?? prop.logicalName, key);
+        }
+        const keys = /* @__PURE__ */ new Set();
+        for (const row of rows) {
+          for (const dvName of Object.keys(row ?? {})) {
+            const key = dvNameToKey.get(dvName);
+            if (key) keys.add(key);
+          }
+        }
+        return ctx.tables.TestTable.pickProperties(...keys);
+      };
       const probe = async (name, query) => {
         let payload;
         try {
@@ -5183,7 +5198,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         let transformed = "";
         try {
           if (Array.isArray(payload)) {
-            const rows = await Promise.all(payload.map((v) => ctx.tables.TestTable.transformValueFromDataverse(v)));
+            const table = narrowToPayload(payload);
+            const rows = await Promise.all(payload.map((v) => table.transformValueFromDataverse(v)));
             transformed = `
 transformed: ${JSON.stringify(rows, null, 2)}`;
           } else {
@@ -5336,10 +5352,10 @@ payload: ${JSON.stringify(payload, null, 2)}`);
           )
         },
         {
-          name: "P20: full-field $select (no expand) — modifiedon/statecode present baseline",
+          name: "P20: no $select, no expand — all columns returned (modifiedon/statecode baseline)",
           fn: () => probe(
             "P20",
-            `&$filter=${pk} eq ${ctx.state.child}`
+            `$filter=${pk} eq ${ctx.state.child}`
           )
         },
         {

@@ -22,7 +22,7 @@ export const filesSuite: Suite = {
     {
       name: "file reads back as FileRef with the uploaded name",
       fn: async () => {
-        const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assert(r, "row missing")
         assertEquals(r.file?.name ?? null, "smoke.txt", "uploaded filename")
       },
@@ -30,7 +30,7 @@ export const filesSuite: Suite = {
     {
       name: "image reads back as ImageRef with a data URL",
       fn: async () => {
-        const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assert(r, "row missing")
         const img = r.image
         assert(img && typeof img.url === "string", "image ref present")
@@ -57,7 +57,7 @@ export const filesSuite: Suite = {
       fn: async () => {
         await ctx.tables.TestTable.deleteFile(ctx.state.row, "file")
         await ctx.tables.TestTable.deleteImage(ctx.state.row, "image")
-        const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assert(r, "row missing")
         assertEquals(r.file, null, "file cleared")
         assertEquals(r.image, null, "image cleared")

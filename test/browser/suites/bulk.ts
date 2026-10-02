@@ -1,7 +1,7 @@
 import { fetchOdata, count, GUID } from "../../../src"
 import { Suite } from "../harness/runner"
 import { seedRow } from "../harness/seed"
-import { assert, assertEquals } from "../harness/assert"
+import { assert, assertEquals, skip } from "../harness/assert"
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : JSON.stringify(e)
@@ -56,7 +56,8 @@ export const bulkSuite: Suite = {
           } catch (e) {
             const msg = messageOf(e)
             if (msg.includes("has not yet been implemented") || msg.includes("405")) {
-              throw new Error("skip: this org has not enabled DeleteMultiple")
+              // SkipError marks the test as skipped rather than failed.
+              skip("this org has not enabled DeleteMultiple")
             }
             throw e
           }

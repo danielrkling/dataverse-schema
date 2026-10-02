@@ -12,7 +12,7 @@ export const errorsSuite: Suite = {
     {
       name: "getRecord on a missing id returns null",
       fn: async () => {
-        const r = await ctx.tables.TestTable.getRecord(MISSING)
+        const r = await ctx.tables.TestTableFlat.getRecord(MISSING)
         assertEquals(r, null, "missing record maps to null")
       },
     },

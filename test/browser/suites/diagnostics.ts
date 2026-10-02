@@ -35,6 +35,26 @@ export const diagnosticsSuite: Suite = {
     const navValue = "_nnsyc200_test_lookup_value"
     const collection = ctx.cfg.collectionNav
 
+    // Probes select a handful of columns, so transforming with the full table
+    // would trip the non-nullable system fields (modifiedon etc. are absent from
+    // the payload). Narrow the table to the columns the org actually returned so
+    // the transformed view in the probe output is meaningful.
+    const narrowToPayload = (rows: Rows) => {
+      const fields = ctx.tables.TestTable.fields as Record<string, any>
+      const dvNameToKey = new Map<string, string>()
+      for (const [key, prop] of Object.entries(fields)) {
+        dvNameToKey.set(prop.fromDataverseName ?? prop.logicalName, key)
+      }
+      const keys = new Set<string>()
+      for (const row of rows) {
+        for (const dvName of Object.keys(row ?? {})) {
+          const key = dvNameToKey.get(dvName)
+          if (key) keys.add(key)
+        }
+      }
+      return (ctx.tables.TestTable as any).pickProperties(...keys) as typeof ctx.tables.TestTable
+    }
+
     const probe = async (name: string, query: string): Promise<never> => {
       let payload: Rows | { error: string }
       try {
@@ -45,7 +65,8 @@ export const diagnosticsSuite: Suite = {
       let transformed = ""
       try {
         if (Array.isArray(payload)) {
-          const rows = await Promise.all(payload.map((v) => ctx.tables.TestTable.transformValueFromDataverse(v)))
+          const table = narrowToPayload(payload)
+          const rows = await Promise.all(payload.map((v) => table.transformValueFromDataverse(v)))
           transformed = `\ntransformed: ${JSON.stringify(rows, null, 2)}`
         } else {
           transformed = `\ntransformed: (error payload, skipped)`
@@ -165,9 +186,9 @@ export const diagnosticsSuite: Suite = {
           `$select=nnsyc200_name,${navValue}&$expand=${nav}&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
-        name: "P20: full-field $select (no expand) — modifiedon/statecode present baseline",
+        name: "P20: no $select, no expand — all columns returned (modifiedon/statecode baseline)",
         fn: () => probe("P20",
-          `&$filter=${pk} eq ${ctx.state.child}`),
+          `$filter=${pk} eq ${ctx.state.child}`),
       },
       {
         name: "P14: auto-expanded query + $filter only",
