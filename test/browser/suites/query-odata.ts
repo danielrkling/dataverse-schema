@@ -252,7 +252,10 @@ export const odataSuite: Suite = {
           assertEquals(a.totalInt, 106, "group A sum 100+5+1")
           assertEquals(a.lo, 1, "group A min")
           assertEquals(a.hi, 100, "group A max")
-          assert(Math.abs(a.avg - 106 / 3) < 0.01, `group A average, got ${a.avg}`)
+          // 106/3 = 35.33, but $apply average preserves the source column's type and
+          // nnsyc200_int is a Whole Number, so the org returns a truncated integer
+          // (same as the FetchXML aggregate suite documents).
+          assertEquals(a.avg, Math.trunc(106 / 3), `group A average truncated to a whole number, got ${a.avg}`)
 
           assertEquals(byChoice.get("B")!.totalInt, 42, "group B sum")
           assertEquals(byChoice.get("C")!.totalInt, 7, "group C sum")

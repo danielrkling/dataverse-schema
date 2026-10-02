@@ -1,6 +1,6 @@
 # Auto-expand navigation properties — status & handoff
 
-Last updated: 2026-10-02 (after run build `2026-10-02T12:56:54.237Z`, window 13:01:09 → 13:01:38: 63 passed / 0 failed / 22 skipped — all suites green).
+Last updated: 2026-10-02 (after run build `2026-10-02T13:22:56.834Z`, window 13:42:39 → 13:43:22: 78 passed / 1 failed / 3 skipped — only a stale average expectation left, fixed).
 
 ## Goal
 
@@ -215,6 +215,26 @@ Its 6 failures, triaged:
 Probes added: **P21** (`$apply=groupby(...)` — what does the org name the group column?) and
 **P23** (`all()` over an empty collection). Both answer questions this run surfaced; results
 pending.
+
+## Run results 2026-10-02T13:22 (build 13:22:56)
+
+**78 passed, 1 failed, 3 skipped.** All five of last run's stale expectations are fixed and
+verified live. The one remaining failure was again an expectation, not a bug:
+
+- `apply groupby(choice) …` — "group A average, got 35" (expected 106/3 ≈ 35.33). Dataverse's
+  `$apply average` preserves the source column's type, and `nnsyc200_int` is a Whole Number, so
+  the org returns a **truncated integer**. The FetchXML aggregate suite already documents this
+  ("Dataverse truncates int avg"); the OData test now asserts `Math.trunc(106 / 3)` with a
+  comment. Both suites now agree.
+
+**The `$apply` group-key alias fix is CONFIRMED live**: the test got past "groups A/B/C" and
+resolved `byChoice.get("A")` with the right count/sum/min/max, which only works via the new
+fallback to the grouped property name. Probe P21 is therefore redundant — safe to drop.
+
+`diagnostics` was NOT selected for this run, so P21/P23 results are still pending. P21 is
+answered by the groupby test above; **P23 (`all()` over an empty collection) is the only
+genuinely open probe question** — run the diagnostics suite to settle whether this org's `all()`
+is non-vacuous (the current test only asserts the parent is excluded, so it passes either way).
 
 ## Test-suite state
 

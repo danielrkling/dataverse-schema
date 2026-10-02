@@ -4021,7 +4021,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T13:22:56.834Z"}
+      meta.textContent = `build ${"2026-10-02T13:45:24.418Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4114,7 +4114,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T13:22:56.834Z",
+          build: "2026-10-02T13:45:24.418Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4133,7 +4133,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T13:22:56.834Z"}\``,
+        `Build: \`${"2026-10-02T13:45:24.418Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4677,7 +4677,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             assertEquals(a.totalInt, 106, "group A sum 100+5+1");
             assertEquals(a.lo, 1, "group A min");
             assertEquals(a.hi, 100, "group A max");
-            assert(Math.abs(a.avg - 106 / 3) < 0.01, `group A average, got ${a.avg}`);
+            assertEquals(a.avg, Math.trunc(106 / 3), `group A average truncated to a whole number, got ${a.avg}`);
             assertEquals(byChoice.get("B").totalInt, 42, "group B sum");
             assertEquals(byChoice.get("C").totalInt, 7, "group C sum");
           }
