@@ -1,6 +1,6 @@
 # Auto-expand navigation properties — status & handoff
 
-Last updated: 2026-10-02 (evening, after run build `2026-10-02T12:49:51.835Z`, window 12:51:12 → 12:52:22: 59 passed / 5 failed / 21 skipped).
+Last updated: 2026-10-02 (after run build `2026-10-02T12:56:54.237Z`, window 13:01:09 → 13:01:38: 63 passed / 0 failed / 22 skipped — all suites green).
 
 ## Goal
 
@@ -174,6 +174,30 @@ Notable results:
   transforming (raw probes select a few columns, so transforming with the full table tripped
   `modifiedon`-is-non-nullable — noise, not a bug), and P20's malformed `&$filter=…` (400) is fixed.
 
+## Run results 2026-10-02T12:56 (build 12:56:54)
+
+**63 passed, 0 failed, 22 skipped — everything green.** Both prior failure classes were
+harness bugs and are fixed (files-images/errors now read via `TestTableFlat`; bulk's
+"skip: DeleteMultiple not enabled" now uses `skip()` so it reports as skipped, not failed).
+
+BUT the report was missing a whole suite: **`query-odata` never ran** — and it silently had
+not been running for a while. Root cause found and fixed:
+
+- `odataSuite.tests()` computed `const allIds = [ctx.state.parent, ...ctx.state.seeds.map(…)]`
+  at list-build time. `suite.tests(ctx)` runs BEFORE `setup()`, so `ctx.state` is `{}` →
+  `TypeError: Cannot read properties of undefined (reading 'map')`.
+- `Runner.run` caught that, substituted `cases = []`, and the suite emitted **zero results** —
+  so it did not appear in the markdown/JSON export at all. Not a failure, not a skip: absent.
+- Fixes: `allIds()` is now computed inside the test fns (matching the documented protocol),
+  AND `Runner.run` now emits an explicit `suite test list failed to build` skip entry so this
+  can never be silent again. Added `test/browser-suites.test.ts` (428 tests total) which builds
+  every suite's case list against an empty `ctx.state` and fails if any suite throws or yields
+  zero tests — it caught this bug and covers all 10 suites.
+
+Consequence: the three new auto-expansion tests (lookup side, collection side, both-sides-throw)
+have STILL never executed live. `query-odata` now builds 17 tests; next run is their first
+real execution.
+
 ## Test-suite state
 
 - test/odata-builder.test.ts — bare expand (no parens), nested auto-expansion matrix (now a
@@ -185,8 +209,12 @@ Notable results:
   corrected 147 → 54 = 5+7+42 per current seeds).
 - createRecord reverted to NOT fill field defaults (user's explicit choice: don't include
   absent values when sending).
-- All unit tests: 425 pass; typecheck/test:types clean. Browser-test bundle rebuilt
-  (`test/browser/dist/browser-test.js`, 213 kB) but not yet run in-org.
+- All unit tests: 428 pass; typecheck/test:types clean. Browser-test bundle rebuilt
+  (`test/browser/dist/browser-test.js`) — not yet re-run after the query-odata fix.
+- **Harness pitfall, now enforced**: `suite.tests(ctx)` runs BEFORE `setup()`; never read
+  `ctx.state` while building the case list. A throw there silently removed the whole suite
+  from the report (this bit `query-odata`). Guarded by `test/browser-suites.test.ts` + an
+  explicit skip entry from the Runner.
 
 ## Org/harness refs
 

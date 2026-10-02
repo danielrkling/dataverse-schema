@@ -3841,6 +3841,21 @@
             return [];
           }
         })();
+        if (setupError && cases.length === 0) {
+          const result = {
+            suite: suite.name,
+            suiteTitle: suite.title,
+            name: "suite test list failed to build",
+            status: "skip",
+            durationMs: 0,
+            error: `${messageOf$1(setupError)}
+${stackOf(setupError)}
+(does tests() read ctx.state? setup() runs later)`
+          };
+          results.push(result);
+          events.onTestEnd?.(result);
+          continue;
+        }
         if (!setupError && suite.setup) {
           try {
             await suite.setup(ctx);
@@ -3986,7 +4001,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T12:56:54.237Z"}
+      meta.textContent = `build ${"2026-10-02T13:08:51.096Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4079,7 +4094,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T12:56:54.237Z",
+          build: "2026-10-02T13:08:51.096Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4098,7 +4113,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T12:56:54.237Z"}\``,
+        `Build: \`${"2026-10-02T13:08:51.096Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4483,7 +4498,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     },
     tests: (ctx) => {
-      const allIds = [ctx.state.parent, ...ctx.state.seeds.map((s) => s.id)];
+      const allIds = () => [ctx.state.parent, ...ctx.state.seeds.map((s) => s.id)];
       const scope = `startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`;
       return [
         {
@@ -4499,7 +4514,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           fn: async () => {
             const rows = await fetchOdata(ctx.tables.TestTable).select("id").filter((f) => eq(f.statusCode, "Active")).filter(scope).execute();
             assertEquals(rows.length, 5, "all seeded rows are Active");
-            for (const id of allIds) assert(rows.some((r) => r.id === id), `missing ${id}`);
+            for (const id of allIds()) assert(rows.some((r) => r.id === id), `missing ${id}`);
           }
         },
         {
@@ -4551,7 +4566,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               for (const r of page) seen.add(r.id);
             }
             assertEquals(seen.size, 5, `paged through all seeded rows`);
-            for (const id of allIds) assert(seen.has(id), `row ${id} missing from pagination`);
+            for (const id of allIds()) assert(seen.has(id), `row ${id} missing from pagination`);
           }
         },
         {
@@ -4560,7 +4575,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const withBigChild = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => any(f.children, (c) => gt(c.int, 6))).execute();
             assertEquals(withBigChild.map((r) => r.id), [ctx.state.parent], "only parent has a child with int > 6");
             const allSmallChildren = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => all(f.children, (c) => lt(c.int, 40))).execute();
-            const smallIds = [...allIds].filter((id) => id !== ctx.state.parent);
+            const smallIds = allIds().filter((id) => id !== ctx.state.parent);
             assertEquals([...allSmallChildren].map((r) => r.id).sort(), smallIds.sort(), "vacuous all() matches childless rows; parent excluded (child int 42)");
           }
         },

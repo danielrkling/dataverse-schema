@@ -28,7 +28,9 @@ export const odataSuite: Suite = {
     }
   },
   tests: (ctx) => {
-    const allIds: string[] = [ctx.state.parent, ...ctx.state.seeds.map((s: Seed) => s.id)]
+    // NOTE: `suite.tests(ctx)` runs BEFORE `setup()`, so ctx.state is empty here.
+    // Anything derived from seeded state must be computed inside the test fn.
+    const allIds = (): string[] => [ctx.state.parent, ...(ctx.state.seeds as Seed[]).map((s: Seed) => s.id)]
     const scope = `startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`
     return [
       {
@@ -48,7 +50,7 @@ export const odataSuite: Suite = {
             .filter(scope)
             .execute()
           assertEquals(rows.length, 5, "all seeded rows are Active")
-          for (const id of allIds) assert(rows.some((r) => r.id === id), `missing ${id}`)
+          for (const id of allIds()) assert(rows.some((r) => r.id === id), `missing ${id}`)
         },
       },
       {
@@ -122,7 +124,7 @@ export const odataSuite: Suite = {
             for (const r of page) seen.add(r.id!)
           }
           assertEquals(seen.size, 5, `paged through all seeded rows`)
-          for (const id of allIds) assert(seen.has(id), `row ${id} missing from pagination`)
+          for (const id of allIds()) assert(seen.has(id), `row ${id} missing from pagination`)
         },
       },
       {
@@ -140,7 +142,7 @@ export const odataSuite: Suite = {
             .filter(scope)
             .filter((f) => all(f.children, (c) => lt(c.int, 40)))
             .execute()
-          const smallIds = [...allIds].filter((id) => id !== ctx.state.parent)
+          const smallIds = allIds().filter((id) => id !== ctx.state.parent)
           assertEquals([...allSmallChildren].map((r) => r.id).sort(), smallIds.sort(), "vacuous all() matches childless rows; parent excluded (child int 42)")
         },
       },

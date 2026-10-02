@@ -75,6 +75,24 @@ export class Runner {
         }
       })()
 
+      // A suite whose `tests()` throws would otherwise produce ZERO results and
+      // silently vanish from the run report. Surface it as one skipped entry so
+      // the failure is visible — this has happened before: `tests()` must not read
+      // ctx.state (still empty; setup() runs after the case list is built).
+      if (setupError && cases.length === 0) {
+        const result: TestResult = {
+          suite: suite.name,
+          suiteTitle: suite.title,
+          name: "suite test list failed to build",
+          status: "skip",
+          durationMs: 0,
+          error: `${messageOf(setupError)}\n${stackOf(setupError)}\n(does tests() read ctx.state? setup() runs later)`,
+        }
+        results.push(result)
+        events.onTestEnd?.(result)
+        continue
+      }
+
       if (!setupError && suite.setup) {
         try {
           await suite.setup(ctx)

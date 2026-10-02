@@ -3627,6 +3627,21 @@
             return [];
           }
         })();
+        if (setupError && cases.length === 0) {
+          const result = {
+            suite: suite.name,
+            suiteTitle: suite.title,
+            name: "suite test list failed to build",
+            status: "skip",
+            durationMs: 0,
+            error: `${messageOf(setupError)}
+${stackOf(setupError)}
+(does tests() read ctx.state? setup() runs later)`
+          };
+          results.push(result);
+          events.onTestEnd?.(result);
+          continue;
+        }
         if (!setupError && suite.setup) {
           try {
             await suite.setup(ctx);
@@ -3772,7 +3787,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T12:56:56.753Z"}
+      meta.textContent = `build ${"2026-10-02T13:08:53.252Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3865,7 +3880,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T12:56:56.753Z",
+          build: "2026-10-02T13:08:53.252Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3884,7 +3899,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T12:56:56.753Z"}\``,
+        `Build: \`${"2026-10-02T13:08:53.252Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
