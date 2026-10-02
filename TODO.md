@@ -1,6 +1,8 @@
 # Auto-expand navigation properties — status & handoff
 
-Last updated: 2026-10-02 (after run build `2026-10-02T13:22:56.834Z`, window 13:42:39 → 13:43:22: 78 passed / 1 failed / 3 skipped — only a stale average expectation left, fixed).
+Last updated: 2026-10-02 (after run build `2026-10-02T13:45:24.418Z`: **79 passed / 0 failed /
+25 skipped — green**. Since then: relationship-walk simplification — owner-scoped rel keys fix a
+false-positive throw; the `register` pre-pass is gone. Awaiting one more in-org run.)
 
 ## Goal
 
@@ -41,9 +43,10 @@ omitting an expand:
    `… Self-referencing relationships cannot be expanded from both sides of one request — the Web API cross-wires the lookup and its inverse collection. …`
 
 Error messages name the field (`logicalName.field`) and the expand trail (`a.b → c.d`).
-Rel keys are `<relatedEntitySet>:<logicalName>` for normal relationships and
-`self:<entitySet>` for self-referencing ones, so same-named lookups on *different* related
-tables no longer false-collide (the old key was the bare logical name).
+Rel keys are `<ownerEntitySet>:<logicalName>` for normal relationships and `self:<entitySet>`
+for self-referencing ones. **Owner-scoped, not target-scoped**: keying by the related table
+made `customer.owner` and `invoice.owner` (both → systemuser) look like one relationship and
+throw — a false positive on a very common shape. Fixed, with a regression test.
 
 ### Consequence to be aware of
 
@@ -236,6 +239,50 @@ answered by the groupby test above; **P23 (`all()` over an empty collection) is 
 genuinely open probe question** — run the diagnostics suite to settle whether this org's `all()`
 is non-vacuous (the current test only asserts the parent is excluded, so it passes either way).
 
+## Run results 2026-10-02T13:45 (build 13:45:24) — GREEN
+
+**79 passed, 0 failed, 25 skipped.** Every remaining open question is now closed.
+
+Probe results:
+
+- **P21** (my `$apply` probe) 400'd: `'(' expected at position 35`. My hand-written probe used
+  `aggregate=$count as n`, but this org's grammar after `groupby((prop),` expects `aggregate(` —
+  i.e. the **library's** serialization is the correct one, and my probe query was wrong. The
+  underlying question ("what does the org name the group column?") is answered by the passing
+  groupby test: it returns `nnsyc200_choice`, hence the alias fallback. Probe deleted.
+- **P23** answered: `all()` over an EMPTY collection is **false** in this org — the childless rows
+  (probe-child, probe-detached) were excluded while the parent, whose single child (int 5) satisfies
+  `< 40`, was returned. So this org's `all()` is **non-vacuous**, contrary to OData spec. The
+  `any/all` test can now assert the exact result (`[]`) instead of a weak "parent is excluded",
+  and the README documents the gotcha with the `not(any(...))` workaround.
+
+## Walk simplification 2026-10-02 (post-review)
+
+Reviewed the `expandNavigation` walk for over-specific/complicated checks. Net −7 lines, and one
+real bug fixed.
+
+1. **Bug: relationship identity was target-scoped** — `relKeyOf` used `<relatedEntitySet>:<name>`,
+   so `customer.owner` and `invoice.owner` (both → systemuser) hashed to the same key and the query
+   threw "already expanded as top level" on a totally valid schema. A relationship is identified by
+   **(owner, logical name)**; the target is redundant. Now `${current.entitySetName}:${name}`, with
+   `self:<entitySet>` still collapsing self-referencing relationships (unavoidable — the two sides
+   carry different logical names). Regression test added.
+2. **Removed the `register` pre-pass** (~10 lines + a second recursive walk to reason about). It
+   existed only to know which `_value` columns to drop before selecting. `claimed` now serves both
+   roles: the walk registers each relationship as it expands, and `pickKeys` runs AFTER the
+   sub-walk (`walk(sub, …)` then `sub.select(…)`). Safe because the once-per-query rule throws on
+   any duplicate, so "reachable" and "expanded" are the same set — and because keys are now
+   owner-scoped, a table's own `_value` pairing can't be affected by deeper tables.
+3. **Dropped the `where` helper** — the trail-qualified label (`customer.invoices → invoice.owner`)
+   already carries the position, so both messages lost a redundant clause and got shorter.
+
+Still kept deliberately (both are Web API facts, not guesswork):
+- nested one-to-many expands throw — hard API limit.
+- one expand per relationship — P13 proved the org cross-wires duplicates; the user chose loud
+  failures over silent omissions.
+- self-relationship `_value` retention in `$select` — P3 proved it's legal (the alternative,
+  dropping it and relying on the pk-recovery path, would also work for self but isn't verified).
+
 ## Test-suite state
 
 - test/odata-builder.test.ts — bare expand (no parens), nested auto-expansion matrix (now a
@@ -253,6 +300,10 @@ is non-vacuous (the current test only asserts the parent is excluded, so it pass
   group column). `apply()` therefore maps the group value onto the caller's alias at transform
   time. Corollary: `$orderby` on a group alias is NOT expressible — skip it, use FetchXML
   aggregates for ordered results.
+- **`all()` is non-vacuous in Dataverse** (empty related collection → false, not true). Documented
+  in the README; don't assume OData spec semantics when filtering with `all()`.
+- `$apply` aggregate syntax this org requires is `groupby((prop),aggregate($count as n, prop with sum as total))`
+  — note `aggregate(` **without** `=`. Hand-written probes must copy the library's serializer.
 - **Harness pitfall, now enforced**: `suite.tests(ctx)` runs BEFORE `setup()`; never read
   `ctx.state` while building the case list. A throw there silently removed the whole suite
   from the report (this bit `query-odata`). Guarded by `test/browser-suites.test.ts` + an

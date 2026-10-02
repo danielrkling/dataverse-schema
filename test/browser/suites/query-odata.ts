@@ -147,12 +147,12 @@ export const odataSuite: Suite = {
             .filter(scope)
             .filter((f) => all(f.children, (c) => lt(c.int, 40)))
             .execute()
-          // The parent has a child with int 42, so all(< 40) must be false for it.
-          // What this org does with an EMPTY child collection is NOT vacuously true
-          // (probe P23), so childless rows come back excluded too — assert the
-          // discriminating part only, and don't encode vacuous-truth semantics.
-          const ids = allSmallChildren.map((r) => r.id)
-          assert(!ids.includes(ctx.state.parent), `parent excluded by all() (got ${JSON.stringify(ids)})`)
+          // Two independent reasons nothing matches, both confirmed live:
+          //  - the parent has a child with int 42, so all(< 40) is false for it;
+          //  - this org's `all()` is NOT vacuously true over an EMPTY collection
+          //    (probe P23: childless rows are excluded), so the childless seeds
+          //    don't match either — unlike OData spec, where all() would be true.
+          assertEquals(allSmallChildren.map((r) => r.id), [], "all(<40) matches neither the parent nor childless rows")
         },
       },
       {

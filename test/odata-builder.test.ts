@@ -301,8 +301,8 @@ test("buildTableQueryAst auto-expansion throws when a collection is nested insid
   })
 
   expect(() => buildTableQueryAst(Top, undefined, true)).toThrow(
-    `Cannot auto-expand "mid.kids": the Dataverse Web API only supports one-to-many ` +
-    `$expand at the top level of a query, not nested inside another $expand under "top.midLookup"`,
+    `Cannot auto-expand "top.midLookup → mid.kids": the Dataverse Web API only supports one-to-many ` +
+    `$expand at the top level of a query, not nested inside another $expand`,
   )
 
   // Dropping the top-level nav that leads to it makes the same table usable again.
@@ -335,9 +335,38 @@ test("buildTableQueryAst auto-expansion throws when a relationship is reachable 
   })
 
   expect(() => buildTableQueryAst(Top, undefined, true)).toThrow(
-    `Cannot auto-expand "mid.owner" under "top.mids": this expands the same relationship as an expand already issued from "top.midLookup"`,
+    `Cannot auto-expand "top.mids → mid.owner": this expands the same relationship as the expand at "top.midLookup → mid.owner"`,
   )
   expect(() => buildTableQueryAst(Top, undefined, true)).toThrow("A relationship can only be expanded once per query")
+})
+
+test("buildTableQueryAst treats same-named lookups on DIFFERENT tables as different relationships", () => {
+  // A relationship is identified by (owner, logical name) — many tables each have
+  // an `owner` lookup to the same user table, and expanding both in one query is
+  // fine. Keying by the related table instead would throw here.
+  const User: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "systemusers", logicalName: "systemuser",
+    fields: { id: primaryKey("systemuserid"), name: string("fullname") },
+  })
+  const Invoice: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "invoices", logicalName: "invoice",
+    fields: { id: primaryKey("invoiceid"), owner: lookup("ownerid", () => User) },
+  })
+  const Customer: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "customers", logicalName: "customer",
+    fields: {
+      id: primaryKey("customerid"),
+      owner: lookup("ownerid", () => User),
+      invoices: lookup("_invoices_value", () => Invoice),
+    },
+  })
+
+  const ast = buildTableQueryAst(Customer, undefined, true)
+  expect(ast.expands!.map(e => e.navigation)).toEqual(["ownerid", "_invoices_value"])
+  // Both nested expands survive, and each related table's paired `_value` is dropped.
+  const invoices = ast.expands!.find(e => e.navigation === "_invoices_value")!
+  expect(invoices.query!.expands!.map(e => e.navigation)).toEqual(["ownerid"])
+  expect(invoices.query!.select).not.toContain("_ownerid_value")
 })
 
 test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () => {
@@ -396,7 +425,7 @@ test("buildTableQueryAst throws when both sides of a self-referencing relationsh
   })
 
   expect(() => buildTableQueryAst(T, undefined, true)).toThrow(
-    `Cannot auto-expand "selftable.kids" at the top level of the query: this expands the same relationship as an expand already issued from the top level.`,
+    `Cannot auto-expand "selftable.kids": this expands the same relationship as the expand at "selftable.parentNav"`,
   )
   expect(() => buildTableQueryAst(T, undefined, true)).toThrow(
     "Self-referencing relationships cannot be expanded from both sides of one request",

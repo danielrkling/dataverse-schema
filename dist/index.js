@@ -1744,7 +1744,15 @@ var ODataApplyQuery = class {
 	}
 	async _transformRow(v) {
 		const r = { ...v };
-		for (const [alias, field] of Object.entries(this._aliasFields)) if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias]);
+		for (const [alias, field] of Object.entries(this._aliasFields)) {
+			if (!field) continue;
+			if (alias in r) {
+				r[alias] = await field.transformFromDataverse(r[alias]);
+				continue;
+			}
+			const grouped = field.toString();
+			if (typeof grouped === "string" && grouped in r) r[alias] = await field.transformFromDataverse(r[grouped]);
+		}
 		r[ETAG] = v["@odata.etag"];
 		delete r["@odata.etag"];
 		return r;
@@ -1811,10 +1819,12 @@ var ODataQuery = class ODataQuery {
 		if (this.#subQueryMode === "collection" && isCollection) throw new Error("expand() within a collection expand only supports lookup navigation properties");
 		const child = new ODataQuery(prop.table, isCollection ? "collection" : "lookup");
 		const q = sub?.(child) ?? child;
+		const ast = q.toAst();
+		const isEmptyExpand = (ast.select?.length ?? 0) === 0 && (ast.filters?.length ?? 0) === 0 && (ast.orderby?.length ?? 0) === 0 && (ast.expands?.length ?? 0) === 0 && ast.top === void 0;
 		this.#expands.push({
 			navigation: prop,
 			key,
-			query: q.toAst()
+			query: isEmptyExpand ? void 0 : ast
 		});
 		const childSelectedKeys = q._getSelectedKeys();
 		const childExpandMeta = q._expandMeta;
@@ -2084,43 +2094,41 @@ function buildTableQueryAst(table, options, expandNavigation = false) {
 	const query = new ODataQuery(table);
 	query.select();
 	if (expandNavigation) {
-		const seenRel = /* @__PURE__ */ new Set();
-		const skipIt = (prop, inExpansion) => {
-			if (prop.kind !== "navigation") return true;
-			const isCollection = prop.type === "collection";
-			if (prop.type !== "lookup" && !isCollection) return true;
-			if (isCollection && inExpansion) return true;
-			if (seenRel.has(String(prop.logicalName))) return true;
-			return false;
-		};
-		const register = (current, inExpansion) => {
-			for (const prop of Object.values(current.fields)) {
-				if (skipIt(prop, inExpansion)) continue;
-				seenRel.add(String(prop.logicalName));
-				register(prop.table, true);
-			}
-		};
-		register(table, false);
+		const claimed = /* @__PURE__ */ new Map();
+		const relKeyOf = (prop, current) => prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : `${current.entitySetName}:${prop.logicalName}`;
 		const pickKeys = (t) => {
 			const keys = [];
-			for (const [key, prop] of Object.entries(t.fields)) if (prop.kind === "value") keys.push(key);
-			else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
+			for (const [key, prop] of Object.entries(t.fields)) {
+				if (prop.kind === "value") {
+					keys.push(key);
+					continue;
+				}
+				if (prop.type !== "lookupId") continue;
+				if (t.entitySetName === prop.table?.entitySetName || !claimed.has(relKeyOf(prop, t))) keys.push(key);
+			}
 			return keys;
 		};
-		const walk = (target, current, inExpansion, expanded) => {
+		const walk = (target, current, inExpansion, trail) => {
 			for (const [key, prop] of Object.entries(current.fields)) {
 				if (prop.kind !== "navigation") continue;
 				const isCollection = prop.type === "collection";
-				if (prop.type !== "lookup" && !isCollection || isCollection && inExpansion) continue;
-				if (expanded.has(String(prop.logicalName))) continue;
-				expanded.add(String(prop.logicalName));
+				if (prop.type !== "lookup" && !isCollection) continue;
+				const at = trail ? `${trail} → ${current.logicalName}.${key}` : `${current.logicalName}.${key}`;
+				if (isCollection && inExpansion) throw new Error(`Cannot auto-expand "${at}": the Dataverse Web API only supports one-to-many $expand at the top level of a query, not nested inside another $expand. Narrow the query with pickProperties("${key}") to leave it out.`);
+				const relKey = relKeyOf(prop, current);
+				const claimedBy = claimed.get(relKey);
+				if (claimedBy !== void 0) {
+					const why = relKey.startsWith("self:") ? "Self-referencing relationships cannot be expanded from both sides of one request — the Web API cross-wires the lookup and its inverse collection." : `A relationship can only be expanded once per query.`;
+					throw new Error(`Cannot auto-expand "${at}": this expands the same relationship as the expand at "${claimedBy}". ${why} Narrow the query with pickProperties() so only one of them is expanded.`);
+				}
+				claimed.set(relKey, at);
 				target.expand(key, (sub) => {
+					walk(sub, prop.table, true, at);
 					sub.select(...pickKeys(prop.table));
-					walk(sub, prop.table, true, expanded);
 				});
 			}
 		};
-		walk(query, table, false, /* @__PURE__ */ new Set());
+		walk(query, table, false, "");
 		query.select(...pickKeys(table));
 	}
 	if (options?.filter) query.filter(options.filter);

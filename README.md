@@ -187,6 +187,11 @@ query builder **throws**:
 | The same relationship reachable from two branches | A relationship may be expanded only once per query | `pickProperties` to keep one branch |
 | Both sides of a self-referencing relationship (e.g. `parentaccountid` and its inverse `contacts`) | The Web API cross-wires the two expansions — the lookup comes back `null` and the related record lands under the collection key | Declare/narrow to one side |
 
+A relationship is identified by its **owner table + logical name**, so two different tables that each
+have an `owner` lookup expand fine in the same query. The only ambiguous case is self-referencing
+relationships, whose two sides carry different logical names and can't be told apart from the schema
+alone — those are always rejected together.
+
 ```typescript
 // ✅ value-only read — no navigation properties, nothing to expand
 const people = await Person.getRecords({ filter: "age gt 20" });
@@ -267,6 +272,11 @@ Logical: `and`, `or`, `not`
 Aggregation: `groupby`, `average`, `sum`, `min`, `max`, `count`
 
 Lambda: `any`, `all`
+
+> **`all()` is not vacuously true in Dataverse.** Over an empty related collection it evaluates to
+> false, so parent rows with no related rows are *excluded* rather than matched (this differs from
+> OData spec, where `all()` over an empty collection is true). If you want "no related rows" to
+> match, filter with `not(any(...))` instead.
 
 CRM Query Functions: `Above`, `Below`, `Between`, `In`, `Today`, `Yesterday`, `Tomorrow`, `Last7Days`, `Next7Days`, `ThisMonth`, `LastMonth`, `NextMonth`, `ThisWeek`, `LastWeek`, `NextWeek`, `ThisYear`, `LastYear`, `NextYear`, `On`, `OnOrAfter`, `OnOrBefore`, `LastXDays`, `NextXDays`, `LastXHours`, `OlderThanXDays`, `OlderThanXHours`, `OlderThanXMinutes`, `OlderThanXMonths`, `OlderThanXWeeks`, `OlderThanXYears`, and many more.
 

@@ -1643,9 +1643,8 @@
     const query = new ODataQuery(table);
     query.select();
     if (expandNavigation) {
-      const seenRel = /* @__PURE__ */ new Set();
-      const relKeyOf = (prop, current) => prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : `${prop.table?.entitySetName}:${prop.logicalName}`;
-      const isExpandable = (prop) => prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection");
+      const claimed = /* @__PURE__ */ new Map();
+      const relKeyOf = (prop, current) => prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : `${current.entitySetName}:${prop.logicalName}`;
       const pickKeys = (t) => {
         const keys = [];
         for (const [key, prop] of Object.entries(t.fields)) {
@@ -1655,50 +1654,37 @@
           }
           if (prop.type !== "lookupId") continue;
           const isSelf = t.entitySetName === prop.table?.entitySetName;
-          if (isSelf || !seenRel.has(relKeyOf(prop, t))) keys.push(key);
+          if (isSelf || !claimed.has(relKeyOf(prop, t))) keys.push(key);
         }
         return keys;
       };
-      const register = (current) => {
-        for (const prop of Object.values(current.fields)) {
-          if (!isExpandable(prop)) continue;
-          const relKey = relKeyOf(prop, current);
-          if (seenRel.has(relKey)) continue;
-          seenRel.add(relKey);
-          register(prop.table);
-        }
-      };
-      register(table);
-      const claimed = /* @__PURE__ */ new Map();
       const walk = (target, current, inExpansion, trail) => {
-        const where = trail.length > 0 ? `under "${trail.join(" → ")}"` : "at the top level of the query";
         for (const [key, prop] of Object.entries(current.fields)) {
           if (prop.kind !== "navigation") continue;
           const isCollection = prop.type === "collection";
           if (prop.type !== "lookup" && !isCollection) continue;
-          const label = `${current.logicalName}.${key}`;
+          const at = trail ? `${trail} → ${current.logicalName}.${key}` : `${current.logicalName}.${key}`;
           if (isCollection && inExpansion) {
             throw new Error(
-              `Cannot auto-expand "${label}": the Dataverse Web API only supports one-to-many $expand at the top level of a query, not nested inside another $expand ${where}. Narrow the query with pickProperties("${key}") to leave it out.`
+              `Cannot auto-expand "${at}": the Dataverse Web API only supports one-to-many $expand at the top level of a query, not nested inside another $expand. Narrow the query with pickProperties("${key}") to leave it out.`
             );
           }
           const relKey = relKeyOf(prop, current);
           const claimedBy = claimed.get(relKey);
           if (claimedBy !== void 0) {
             const why = relKey.startsWith("self:") ? `Self-referencing relationships cannot be expanded from both sides of one request — the Web API cross-wires the lookup and its inverse collection.` : `A relationship can only be expanded once per query.`;
-            const via = claimedBy.length > 0 ? `"${claimedBy.join(" → ")}"` : "the top level";
             throw new Error(
-              `Cannot auto-expand "${label}" ${where}: this expands the same relationship as an expand already issued from ${via}. ${why} Narrow the query with pickProperties() so only one of them is expanded.`
+              `Cannot auto-expand "${at}": this expands the same relationship as the expand at "${claimedBy}". ${why} Narrow the query with pickProperties() so only one of them is expanded.`
             );
           }
-          claimed.set(relKey, trail);
+          claimed.set(relKey, at);
           target.expand(key, (sub) => {
+            walk(sub, prop.table, true, at);
             sub.select(...pickKeys(prop.table));
-            walk(sub, prop.table, true, [...trail, label]);
           });
         }
       };
-      walk(query, table, false, []);
+      walk(query, table, false, "");
       query.select(...pickKeys(table));
     }
     if (options?.filter) query.filter(options.filter);
@@ -4021,7 +4007,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T13:45:24.418Z"}
+      meta.textContent = `build ${"2026-10-02T14:12:20.452Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4114,7 +4100,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T13:45:24.418Z",
+          build: "2026-10-02T14:12:20.452Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4133,7 +4119,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T13:45:24.418Z"}\``,
+        `Build: \`${"2026-10-02T14:12:20.452Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4596,8 +4582,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const withBigChild = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => any(f.children, (c) => gt(c.int, 6))).execute();
             assertEquals(withBigChild.map((r) => r.id), [ctx.state.parent], "only parent has a child with int > 6");
             const allSmallChildren = await fetchOdata(ctx.tables.TestTable).select("id").filter(scope).filter((f) => all(f.children, (c) => lt(c.int, 40))).execute();
-            const ids = allSmallChildren.map((r) => r.id);
-            assert(!ids.includes(ctx.state.parent), `parent excluded by all() (got ${JSON.stringify(ids)})`);
+            assertEquals(allSmallChildren.map((r) => r.id), [], "all(<40) matches neither the parent nor childless rows");
           }
         },
         {
@@ -5457,13 +5442,11 @@ payload: ${JSON.stringify(payload, null, 2)}`);
           )
         },
         {
-          name: "P21: $apply groupby — what does the org name the group column?",
-          fn: () => probe(
-            "P21",
-            `$apply=groupby((nnsyc200_choice),aggregate=$count as n,nnsyc200_int with sum as total)&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')&$top=20`
-          )
-        },
-        {
+          // ANSWERED 2026-10-02: this org's `all()` is NOT vacuously true — the
+          // childless rows (probe-child, probe-detached) are EXCLUDED while the
+          // parent, whose single child (int 5) satisfies `< 40`, is returned.
+          // So `all()` needs `any()`-style guards for "no related rows" cases.
+          // Keep the probe as the record of that org behaviour.
           name: "P23: all() over an EMPTY collection — vacuously true?",
           fn: () => probe(
             "P23",

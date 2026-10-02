@@ -236,11 +236,11 @@ export const diagnosticsSuite: Suite = {
           `$select=nnsyc200_name,nnsyc200_int,${navValue}&$filter=${pk} eq ${ctx.state.detached}`),
       },
       {
-        name: "P21: $apply groupby — what does the org name the group column?",
-        fn: () => probe("P21",
-          `$apply=groupby((nnsyc200_choice),aggregate=$count as n,nnsyc200_int with sum as total)&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')&$top=20`),
-      },
-      {
+        // ANSWERED 2026-10-02: this org's `all()` is NOT vacuously true — the
+        // childless rows (probe-child, probe-detached) are EXCLUDED while the
+        // parent, whose single child (int 5) satisfies `< 40`, is returned.
+        // So `all()` needs `any()`-style guards for "no related rows" cases.
+        // Keep the probe as the record of that org behaviour.
         name: "P23: all() over an EMPTY collection — vacuously true?",
         fn: () => probe("P23",
           `$select=${pk}&$filter=startswith(nnsyc200_name,'${ctx.fx.scopePrefix}') and ${collection}/all(x: x/nnsyc200_int lt 40)&$top=20`),
