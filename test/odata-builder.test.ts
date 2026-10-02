@@ -133,6 +133,27 @@ test("apply result can filter, orderby alias and top", () => {
   expect(q.toString()).toBe("$filter=revenue gt 1&$apply=aggregate($count as n,revenue with sum as total)&$orderby=n desc&$top=3")
 })
 
+test("apply results read back under the caller's alias even though the org names the group key by property", async () => {
+  // Dataverse cannot rename a `$apply` group key, so `groupby(f.status)` comes back
+  // as `statuscode` — the aggregate row must still surface under `byStatus`.
+  ;(client as any).iteratePages = async function* () {
+    yield [
+      { statuscode: 1, n: 3, total: 30 },
+      { statuscode: 2, n: 1, total: 5 },
+    ]
+  }
+  const rows = await fetchOdata(Account)
+    .apply((f) => ({ byStatus: groupby(f.status), n: count(), total: sum(f.revenue) }))
+    .execute()
+
+  expect(rows).toHaveLength(2)
+  expect(rows[0].byStatus).toBe("Active")
+  expect(rows[0].n).toBe(3)
+  expect(rows[0].total).toBe(30)
+  expect(rows[1].byStatus).toBe("Inactive")
+  expect(rows[1].n).toBe(1)
+})
+
 test("apply exposes toAst with apply structure", () => {
   const q = fetchOdata(Account).apply(f => ({ byStatus: groupby(f.status) }))
   expect(q.toAst()).toEqual({

@@ -124,6 +124,24 @@ export function buildTables(client: DataverseClient, cfg: BrowserTestConfig) {
     fields: { ...baseFields, children: collection(cfg.collectionNav, () => TestTablePlain) },
   })
 
+  /**
+   * Both sides of the self relationship (N:1 + inverse 1:N) pointing at a plain
+   * related table — the ONLY shape that isolates the "self relationship expanded
+   * from both sides" error. `TestTable` can't do it: its lookup target declares a
+   * collection, so the nested-one-to-many error fires first.
+   */
+  const TestTableSelfBoth: DataverseTable<any> = new DataverseTable({
+    logicalName: cfg.logicalName,
+    entitySetName: cfg.entitySetName,
+    client,
+    fields: {
+      ...baseFields,
+      testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTablePlain),
+      testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTablePlain),
+      children: collection(cfg.collectionNav, () => TestTablePlain),
+    },
+  })
+
   return {
     client,
     TestTable0,
@@ -132,6 +150,7 @@ export function buildTables(client: DataverseClient, cfg: BrowserTestConfig) {
     TestTableFlat,
     TestTableLookupSide,
     TestTableCollectionSide,
+    TestTableSelfBoth,
   }
 }
 

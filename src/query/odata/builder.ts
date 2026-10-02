@@ -207,7 +207,18 @@ export class ODataApplyQuery<T extends GenericProperties, TResult extends Record
   private async _transformRow(v: any): Promise<TResult> {
     const r = { ...v }
     for (const [alias, field] of Object.entries(this._aliasFields)) {
-      if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias])
+      if (!field) continue
+      if (alias in r) {
+        r[alias] = await field.transformFromDataverse(r[alias])
+        continue
+      }
+      // Dataverse does not let a `$apply` group key be renamed, so `groupby(f.x)`
+      // comes back keyed by the grouped property's own name, not the caller's
+      // alias. Fall back to it so the aggregate row reads under the alias.
+      const grouped = field.toString()
+      if (typeof grouped === "string" && grouped in r) {
+        r[alias] = await field.transformFromDataverse(r[grouped])
+      }
     }
     r[ETAG] = v["@odata.etag"]
     delete r["@odata.etag"]

@@ -198,6 +198,24 @@ Consequence: the three new auto-expansion tests (lookup side, collection side, b
 have STILL never executed live. `query-odata` now builds 17 tests; next run is their first
 real execution.
 
+## Run results 2026-10-02T13:08 (build 13:08:51)
+
+`query-odata` finally RAN (the list-build fix worked): **74 passed, 6 failed, 22 skipped.**
+Its 6 failures, triaged:
+
+| Failure | Verdict | Fix |
+|---------|---------|-----|
+| `and / or / not composition` expected `[5, 42]` | stale expectation — int 42 is seed c3 whose choice is "B", so `not(eq(choice,"B"))` correctly drops it | expect `[5]`, with a comment |
+| `any/all lambdas` expected childless rows back from `all()` | org semantics: this org does NOT treat an empty collection as vacuously true (probe P23 added to confirm) | assert only the discriminating part (parent excluded); don't encode vacuous truth |
+| `getRecords auto-expands the lookup side` — "child row returned" | test bug: the test called `ctx.fx.name("c2")` again and the fixture counter had already consumed `c2-1`, so it filtered for `…-c2-2` | seed objects now carry their generated `name`; tests filter by that |
+| `getRecords throws when both sides …` | test bug: `TestTable`'s lookup target declares a collection, so the nested-collection guard fires before the self guard | added `TestTableSelfBoth` (both sides, plain related table) to isolate the self error; the test now asserts both guards separately |
+| `apply groupby(choice) …` — "groups A/B/C", got 1 | **REAL LIBRARY BUG**: Dataverse cannot rename a `$apply` group key, so the group column comes back as `nnsyc200_choice`, not the caller's alias. `byChoice` was `undefined` on every row, collapsing the `Map` to one entry | `ODataApplyQuery._transformRow` now falls back to the grouped property's own name when the alias is absent (unit-tested); probe P21 added to confirm the org's naming |
+| `apply groupby + $orderby on group alias` — org 400 | not a bug: the org rejects `$orderby` on a `$apply` group alias (it re-parses the alias as a group key). Not expressible in Dataverse | `skip()` with the reason instead of failing |
+
+Probes added: **P21** (`$apply=groupby(...)` — what does the org name the group column?) and
+**P23** (`all()` over an empty collection). Both answer questions this run surfaced; results
+pending.
+
 ## Test-suite state
 
 - test/odata-builder.test.ts — bare expand (no parens), nested auto-expansion matrix (now a
@@ -209,8 +227,12 @@ real execution.
   corrected 147 → 54 = 5+7+42 per current seeds).
 - createRecord reverted to NOT fill field defaults (user's explicit choice: don't include
   absent values when sending).
-- All unit tests: 428 pass; typecheck/test:types clean. Browser-test bundle rebuilt
-  (`test/browser/dist/browser-test.js`) — not yet re-run after the query-odata fix.
+- All unit tests: 429 pass; typecheck/test:types clean. Browser-test bundle rebuilt
+  (`test/browser/dist/browser-test.js`) — not yet re-run after the query-odata fixes.
+- **$apply group keys can't be aliased in Dataverse** (no `$apply` syntax for renaming the
+  group column). `apply()` therefore maps the group value onto the caller's alias at transform
+  time. Corollary: `$orderby` on a group alias is NOT expressible — skip it, use FetchXML
+  aggregates for ordered results.
 - **Harness pitfall, now enforced**: `suite.tests(ctx)` runs BEFORE `setup()`; never read
   `ctx.state` while building the case list. A throw there silently removed the whole suite
   from the report (this bit `query-odata`). Guarded by `test/browser-suites.test.ts` + an

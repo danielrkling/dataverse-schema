@@ -1076,7 +1076,15 @@
     async _transformRow(v) {
       const r = { ...v };
       for (const [alias, field] of Object.entries(this._aliasFields)) {
-        if (field && alias in r) r[alias] = await field.transformFromDataverse(r[alias]);
+        if (!field) continue;
+        if (alias in r) {
+          r[alias] = await field.transformFromDataverse(r[alias]);
+          continue;
+        }
+        const grouped = field.toString();
+        if (typeof grouped === "string" && grouped in r) {
+          r[alias] = await field.transformFromDataverse(r[grouped]);
+        }
       }
       r[ETAG] = v["@odata.etag"];
       delete r["@odata.etag"];
@@ -3503,6 +3511,17 @@
       client,
       fields: { ...baseFields, children: collection(cfg.collectionNav, () => TestTablePlain) }
     });
+    const TestTableSelfBoth = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: {
+        ...baseFields,
+        testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTablePlain),
+        testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTablePlain),
+        children: collection(cfg.collectionNav, () => TestTablePlain)
+      }
+    });
     return {
       client,
       TestTable0,
@@ -3510,7 +3529,8 @@
       TestTablePlain,
       TestTableFlat,
       TestTableLookupSide,
-      TestTableCollectionSide
+      TestTableCollectionSide,
+      TestTableSelfBoth
     };
   }
 
@@ -3787,7 +3807,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T13:08:53.252Z"}
+      meta.textContent = `build ${"2026-10-02T13:22:59.260Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3880,7 +3900,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T13:08:53.252Z",
+          build: "2026-10-02T13:22:59.260Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3899,7 +3919,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T13:08:53.252Z"}\``,
+        `Build: \`${"2026-10-02T13:22:59.260Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
