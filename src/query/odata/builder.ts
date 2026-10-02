@@ -672,37 +672,45 @@ export function buildTableQueryAst<T extends GenericProperties>(
   // recursively. Two Web API restrictions shape this:
   // 1. A one-to-many (collection) expand is only valid at the top level —
   //    nested one-to-many expansions are rejected.
-  // 2. A relationship may appear at most once per query: selecting the lookup's
-  //    `_value` while also expanding that same nav throws
-  //    "An item with the same key has already been added". Expanded navs take
-  //    priority; the paired lookupId column is dropped from $select and its
-  //    value is recovered from the expanded record at transform time
-  //    (see transformValueFromDataverse).
-  // Users narrow via pickProperties to keep expands out.
+  // 2. A relationship may appear at most once per query; expanding the same
+  //    relationship twice (two branches reaching it, or both sides of a
+  //    self-referencing relationship) returns cross-wired garbage.
+  //
+  // Both restrictions THROW rather than silently omitting the expand: an
+  // omitted expand means the returned record is missing data the caller asked
+  // for, and for self-referencing relationships the data that *is* returned is
+  // wrong. Narrow the query with pickProperties (or omitProperties) to opt out.
+  // Expanded navs take priority over the lookupId column of the same
+  // relationship: the paired `_value` is dropped from $select and its value is
+  // recovered from the expanded record at transform time
+  // (see transformValueFromDataverse).
   if (expandNavigation) {
     const seenRel = new Set<string>()
-    // Dedupe key for an expandable relationship. Self-referencing relationships
-    // (N:1 + its inverse 1:N on the same entity set) are keyed as one side: the
-    // org's expansion engine mixes the two directions when both are expanded in
-    // one request (P13/P10 probe evidence: lookup nav null, related record under
-    // the collection key). Lookup side takes priority (declaration order).
-    const relKeyOf = (prop: any, current: DataverseTable<any>): string => {
-      const rel = prop.table?.entitySetName === current.entitySetName
+    // Key identifying an expandable relationship, used both for the once-per-query
+    // rule and for pairing a lookupId column with its navigation property.
+    // Self-referencing relationships (N:1 + its inverse 1:N on the same entity
+    // set) share ONE key: the schema can't tell the two sides apart (they carry
+    // different logical names) and the org's expansion engine mixes the two
+    // directions when both are expanded in one request (P13/P10 probe evidence:
+    // lookup nav null, related record under the collection key). So auto-expanding
+    // both sides of a self relationship is an error, not something to pick a
+    // winner for.
+    const relKeyOf = (prop: any, current: DataverseTable<any>): string =>
+      prop.table?.entitySetName === current.entitySetName
         ? `self:${current.entitySetName}`
-        : String(prop.logicalName)
-      return isExpandable(prop) ? rel : String(prop.logicalName)
-    }
+        : `${prop.table?.entitySetName}:${prop.logicalName}`
     const isExpandable = (prop: any): boolean =>
       prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")
     const pickKeys = (t: DataverseTable<any>): string[] => {
       const keys: string[] = []
       for (const [key, prop] of Object.entries(t.fields) as [string, any][]) {
-        if (prop.kind === "value") keys.push(key)
-        else if (prop.type === "lookupId" && t.entitySetName === prop.table?.entitySetName) {
-          // Self relationship: `_value` stays in $select — live probe P3 proved
-          // _value + same-nav expand coexists legally.
-          keys.push(key)
-        } else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key)
+        if (prop.kind === "value") { keys.push(key); continue }
+        if (prop.type !== "lookupId") continue
+        // Self relationship: `_value` stays in $select — live probe P3 proved
+        // _value + same-nav expand coexists legally (and the throw above means we
+        // never expand both sides anyway).
+        const isSelf = t.entitySetName === prop.table?.entitySetName
+        if (isSelf || !seenRel.has(relKeyOf(prop, t))) keys.push(key)
       }
       return keys
     }
@@ -711,26 +719,56 @@ export function buildTableQueryAst<T extends GenericProperties>(
     const register = (current: DataverseTable<any>): void => {
       for (const prop of Object.values(current.fields) as any[]) {
         if (!isExpandable(prop)) continue
-        if (seenRel.has(relKeyOf(prop, current))) continue
-        seenRel.add(relKeyOf(prop, current))
+        const relKey = relKeyOf(prop, current)
+        if (seenRel.has(relKey)) continue
+        seenRel.add(relKey)
         register(prop.table)
       }
     }
     register(table as DataverseTable<any>)
-    const walk = (target: ODataQuery<any>, current: DataverseTable<any>, inExpansion: boolean, expanded: Set<string>): void => {
+    // relKey -> the expand trail ("table.field" labels) it was expanded under, for
+    // error messages. An empty trail means "at the top level of the query".
+    const claimed = new Map<string, string[]>()
+    const walk = (
+      target: ODataQuery<any>,
+      current: DataverseTable<any>,
+      inExpansion: boolean,
+      trail: string[],
+    ): void => {
+      const where = trail.length > 0 ? `under "${trail.join(" → ")}"` : "at the top level of the query"
       for (const [key, prop] of Object.entries(current.fields) as [string, any][]) {
         if (prop.kind !== "navigation") continue
         const isCollection = prop.type === "collection"
-        if ((prop.type !== "lookup" && !isCollection) || (isCollection && inExpansion)) continue
-        if (expanded.has(relKeyOf(prop, current))) continue
-        expanded.add(relKeyOf(prop, current))
+        if (prop.type !== "lookup" && !isCollection) continue
+        const label = `${current.logicalName}.${key}`
+        if (isCollection && inExpansion) {
+          throw new Error(
+            `Cannot auto-expand "${label}": the Dataverse Web API only supports one-to-many ` +
+            `$expand at the top level of a query, not nested inside another $expand ${where}. ` +
+            `Narrow the query with pickProperties("${key}") to leave it out.`,
+          )
+        }
+        const relKey = relKeyOf(prop, current)
+        const claimedBy = claimed.get(relKey)
+        if (claimedBy !== undefined) {
+          const why = relKey.startsWith("self:")
+            ? `Self-referencing relationships cannot be expanded from both sides of one request — ` +
+              `the Web API cross-wires the lookup and its inverse collection.`
+            : `A relationship can only be expanded once per query.`
+          const via = claimedBy.length > 0 ? `"${claimedBy.join(" → ")}"` : "the top level"
+          throw new Error(
+            `Cannot auto-expand "${label}" ${where}: this expands the same relationship as an expand ` +
+            `already issued from ${via}. ${why} Narrow the query with pickProperties() so only one of them is expanded.`,
+          )
+        }
+        claimed.set(relKey, trail)
         target.expand(key as any, (sub: any) => {
           sub.select(...pickKeys(prop.table))
-          walk(sub, prop.table, true, expanded)
+          walk(sub, prop.table, true, [...trail, label])
         })
       }
     }
-    walk(query as any, table as DataverseTable<any>, false, new Set())
+    walk(query as any, table as DataverseTable<any>, false, [])
     query.select(...pickKeys(table as DataverseTable<T>) as any)
   }
 

@@ -118,7 +118,7 @@ export const odataSuite: Suite = {
         name: "iteratePages follows nextLink pagination (pageSize 2)",
         fn: async () => {
           const seen = new Set<string>()
-          for await (const page of ctx.tables.TestTable.iteratePages({ filter: scope }, { pageSize: 2 })) {
+          for await (const page of ctx.tables.TestTableFlat.iteratePages({ filter: scope }, { pageSize: 2 })) {
             for (const r of page) seen.add(r.id!)
           }
           assertEquals(seen.size, 5, `paged through all seeded rows`)
@@ -145,28 +145,49 @@ export const odataSuite: Suite = {
         },
       },
       {
-        name: "getRecords auto-expands lookups and collections",
+        name: "getRecords auto-expands the lookup side of the self relationship",
         fn: async () => {
-          // Child rows: c1-c3 link to the parent via the lookup nav.
+          // Only the N:1 side is declared here — expanding both sides of a
+          // self-referencing relationship in one request makes the Web API
+          // cross-wire them, so auto-expansion refuses it (see the throw test
+          // below).
           const childName = ctx.fx.name("c2")
-          const childRows = await ctx.tables.TestTable.getRecords({
+          const childRows = await ctx.tables.TestTableLookupSide.getRecords({
             filter: `startswith(nnsyc200_name,'${childName}')`,
           })
           assert(childRows.length === 1, "child row returned")
           const nav = childRows[0].testLookupNav
           assert(nav && nav.id === ctx.state.parent, `lookup expanded to parent (got ${JSON.stringify(nav)})`)
           assertEquals(nav!.int, 100, "expanded lookup fields transformed")
-          assert(Array.isArray(childRows[0].children), "collection expanded to array")
-
-          // Parent row: its collection contains the 3 linked children.
-          const parentRows = await ctx.tables.TestTable0.getRecords({
+          // The lookupId of the expanded relationship is recovered from the nav.
+          assertEquals(childRows[0].testLookup, ctx.state.parent, "lookupId recovered from the expanded nav")
+        },
+      },
+      {
+        name: "getRecords auto-expands the collection side of the self relationship",
+        fn: async () => {
+          const parentRows = await ctx.tables.TestTableCollectionSide.getRecords({
             filter: `nnsyc200_test_tableid eq ${ctx.state.parent}`,
           })
+          assert(parentRows.length === 1, "parent row returned")
           const kids = parentRows[0].children ?? []
           assertEquals(kids.length, 3, "expanded collection returns linked children")
           for (const k of kids) {
             assert(typeof k.int === "number" && typeof k.name === "string", "expanded child transformed")
           }
+        },
+      },
+      {
+        name: "getRecords throws when both sides of a self relationship would expand",
+        fn: async () => {
+          let message = ""
+          try {
+            await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.parent}` })
+          } catch (e) {
+            message = e instanceof Error ? e.message : String(e)
+          }
+          assert(message.includes("selftable.kids") || message.includes("children"), `expected a self-relationship expand error, got: ${message}`)
+          assert(message.includes("Self-referencing relationships"), `expected the self-relationship explanation, got: ${message}`)
         },
       },
       {

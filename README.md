@@ -170,6 +170,41 @@ await Person.associateRecord("primaryAddressId", newId, addressId);
 await Person.dissociateRecord("primaryAddressId", newId);
 ```
 
+### Navigation Properties on Reads
+
+`getRecord`, `getRecords`, `iterateRecords` and `iteratePages` auto-expand every navigation
+property declared on the table, each with a sub-select listing all of the related table's value
+and lookup-ID columns. Lookups nest recursively; the lookup-ID column of an expanded lookup is
+dropped from `$select` and recovered from the expanded record. Writes (`createRecord`,
+`updateRecord`, `upsertRecord`) return flat representations.
+
+Two Web API limits mean some shapes cannot be expanded. Rather than silently dropping data, the
+query builder **throws**:
+
+| Shape | Why | Fix |
+|-------|-----|-----|
+| A collection expand nested inside another expand | One-to-many `$expand` is only legal at the top level | Narrow the table to drop one of the two navigation properties |
+| The same relationship reachable from two branches | A relationship may be expanded only once per query | `pickProperties` to keep one branch |
+| Both sides of a self-referencing relationship (e.g. `parentaccountid` and its inverse `contacts`) | The Web API cross-wires the two expansions — the lookup comes back `null` and the related record lands under the collection key | Declare/narrow to one side |
+
+```typescript
+// ✅ value-only read — no navigation properties, nothing to expand
+const people = await Person.getRecords({ filter: "age gt 20" });
+
+// ✅ plain lookups: expand and nest freely
+const orders = await Customer.getRecords();     // expands each lookup on Customer
+
+// ❌ throws: both sides of the Account self relationship (parentaccountid + contacts)
+await Account.getRecord(id);
+
+// ✅ read one side: narrow the tables on BOTH ends of the relationship
+const AccountLeaf = Account.omitProperties("contacts");            // related side: stops the walk
+const Accounts = Account.appendProperties({
+  parent: lookup("parentaccountid", () => AccountLeaf),            // drop `contacts`, keep `parent`
+});
+const a = await Accounts.getRecord(id);                            // expands parentaccountid only
+```
+
 ### Iterating Large Result Sets
 
 Both iterators lazily follow `@odata.nextLink`; a `break` stops further requests.

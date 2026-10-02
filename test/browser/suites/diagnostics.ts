@@ -108,18 +108,18 @@ export const diagnosticsSuite: Suite = {
           `$select=nnsyc200_name,${navValue}&$expand=${nav}($select=nnsyc200_name,${pk}),${collection}($select=nnsyc200_name,${pk})&$filter=${pk} eq ${ctx.state.child}`),
       },
       {
-        name: "P11: table.getRecords auto-expanded query (no options)",
+        name: "P11: table.getRecords auto-expanded query, lookup side (no options)",
         fn: async () => {
-          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide as any, undefined, true))
           const payload = (await ctx.client.getRecords(entity as never, { query })) as Rows
           const keysOfFirst = payload[0] ? Object.keys(payload[0]) : []
           skip(`PROBE P11\nquery: ${query}\nfirst-row keys: ${JSON.stringify(keysOfFirst)}\nlookup-related keys: ${JSON.stringify(keysOfFirst.filter(k => k.toLowerCase().includes("lookup")))}`)
         },
       },
       {
-        name: "P13: table.getRecords auto-expanded query + $filter + $orderby + $top (exact failing test shape)",
+        name: "P13: table.getRecords auto-expanded query + $filter + $orderby + $top",
         fn: async () => {
-          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide as any, undefined, true))
             + `&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`
             + `&$orderby=nnsyc200_name asc&$top=10`
           let payload: Rows | { error: string }
@@ -133,10 +133,9 @@ export const diagnosticsSuite: Suite = {
         },
       },
       {
-        name: "P17: auto-expanded query, lookup expansion ONLY (no collection expand)",
+        name: "P17: auto-expanded query (TestTableLookupSide) + $filter",
         fn: async () => {
-          const ast = buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)
-          const query = serializeODataSelect({ ...ast, expands: ast.expands!.filter(e => e.navigation.toLowerCase() !== ctx.cfg.collectionNav.toLowerCase()) })
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide as any, undefined, true))
             + `&$filter=${pk} eq ${ctx.state.child}`
           let payload: Rows | { error: string }
           try {
@@ -148,11 +147,9 @@ export const diagnosticsSuite: Suite = {
         },
       },
       {
-        name: "P18: auto-expanded query, collection expansion ONLY (no lookup expand)",
+        name: "P18: auto-expanded query (TestTableCollectionSide)",
         fn: async () => {
-          const ast = buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)
-          const query = serializeODataSelect({ ...ast, expands: ast.expands!.filter(e => e.navigation !== nav) })
-          const finalQuery = `${query}&$filter=${pk} eq ${ctx.state.child}`
+          const finalQuery = `${serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableCollectionSide as any, undefined, true))}&$filter=${pk} eq ${ctx.state.parent}`
           let payload: Rows | { error: string }
           try {
             payload = await ctx.client.getRecords(entity as never, { query: finalQuery })
@@ -175,7 +172,7 @@ export const diagnosticsSuite: Suite = {
       {
         name: "P14: auto-expanded query + $filter only",
         fn: async () => {
-          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true))
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide as any, undefined, true))
             + `&$filter=${pk} eq ${ctx.state.child}`
           let payload: Rows | { error: string }
           try {
@@ -189,7 +186,7 @@ export const diagnosticsSuite: Suite = {
       {
         name: "P15: auto-expanded query + $top only",
         fn: async () => {
-          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)) + `&$top=10`
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide as any, undefined, true)) + `&$top=10`
           let payload: Rows | { error: string }
           try {
             payload = await ctx.client.getRecords(entity as never, { query })
@@ -202,7 +199,7 @@ export const diagnosticsSuite: Suite = {
       {
         name: "P16: auto-expanded query + $orderby only",
         fn: async () => {
-          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable as any, undefined, true)) + `&$orderby=nnsyc200_name asc`
+          const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide as any, undefined, true)) + `&$orderby=nnsyc200_name asc`
           let payload: Rows | { error: string }
           try {
             payload = await ctx.client.getRecords(entity as never, { query })

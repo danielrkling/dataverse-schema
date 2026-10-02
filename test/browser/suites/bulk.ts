@@ -24,7 +24,7 @@ export const bulkSuite: Suite = {
       {
         name: "seeded bulk rows are all present",
         fn: async () => {
-          const rows = await ctx.tables.TestTable.getRecords({ filter: scope })
+          const rows = await ctx.tables.TestTableFlat.getRecords({ filter: scope })
           assertEquals(rows.length, BULK, "row count")
         },
       },
@@ -34,7 +34,7 @@ export const bulkSuite: Suite = {
           await ctx.tables.TestTable.updateMultiple(
             (ctx.state.rows as GUID[]).map((id) => ({ id, int: 555 })),
           )
-          const rows = await ctx.tables.TestTable.getRecords({ filter: scope })
+          const rows = await ctx.tables.TestTableFlat.getRecords({ filter: scope })
           for (const r of rows) assertEquals(r.int, 555, `bulk-updated int on ${r.id}`)
         },
       },
@@ -60,7 +60,7 @@ export const bulkSuite: Suite = {
             }
             throw e
           }
-          const rows = await ctx.tables.TestTable.getRecords({ filter: scope })
+          const rows = await ctx.tables.TestTableFlat.getRecords({ filter: scope })
           assertEquals(rows.length, 0, "all bulk rows deleted")
         },
       },

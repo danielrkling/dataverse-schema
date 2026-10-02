@@ -1,6 +1,6 @@
 # Auto-expand navigation properties — status & handoff
 
-Last updated: 2026-10-01 (evening, after the P-probe run build `2026-10-01T19:53:24.922Z`, run window 19:54:12 → 19:54:17).
+Last updated: 2026-10-02 (silent omissions → throws; unit tests + browser harness updated, NOT yet re-run in-org).
 
 ## Goal
 
@@ -15,18 +15,56 @@ create/update/upsert returned representations stay flat).
   1. **register pre-pass**: collects every relationship that will be expanded (remote from the query),
   2. **walk**: mutates the query, expanding each nav with a sub-`select()` listing every
      value/lookupId column of the related table.
-- Skip/silent-omission rules currently in place:
+- Skip/silent-omission rules currently in place — **all three now THROW** (user directive
+  2026-10-02, see "Throw policy" below):
   - Collections expand **at the top level only** (`inExpansion` blocks nested collections).
-  - A relationship expands **at most once per query** (`perLevel` set of relKeys; DFS order
-    = first reference wins; later branches referencing the same related table get nothing).
-  - **Self-referencing relationships** (related entity set == current entity set) dedupe as
-    a single key `self:<entitySetName>` → only ONE side expands (lookup nav wins by
-    declaration order); the inverse collection is silently skipped.
+  - A relationship expands **at most once per query** (`claimed` map of relKeys; DFS order).
+  - **Self-referencing relationships** (related entity set == current entity set) share ONE
+    relKey `self:<entitySetName>` — the schema can't tell the N:1 and its inverse 1:N apart
+    (different logical names), so expanding both sides is an error rather than a coin flip.
   - The paired `_value` column of an expanded lookup nav is dropped from `$select`
     **for non-self relationships only**; `table.transformValueFromDataverse` has a
     recovery step that backfills a `null` lookupId from the sibling expanded lookup
     record's pk. For self relationships `_value` STAYS in `$select` (probe P3 proved
     `_value` + same-nav expand coexists — see evidence).
+
+## Throw policy (shipped 2026-10-02)
+
+`buildTableQueryAst(table, options, expandNavigation = true)` now throws instead of silently
+omitting an expand:
+
+1. collection nested inside another expand →
+   `Cannot auto-expand "mid.kids": the Dataverse Web API only supports one-to-many $expand at the top level of a query, not nested inside another $expand under "top.midLookup". Narrow the query with pickProperties("kids") to leave it out.`
+2. relationship reachable from two branches →
+   `Cannot auto-expand "mid.owner" under "top.mids": this expands the same relationship as an expand already issued from "top.midLookup". A relationship can only be expanded once per query. …`
+3. both sides of a self relationship →
+   `… Self-referencing relationships cannot be expanded from both sides of one request — the Web API cross-wires the lookup and its inverse collection. …`
+
+Error messages name the field (`logicalName.field`) and the expand trail (`a.b → c.d`).
+Rel keys are `<relatedEntitySet>:<logicalName>` for normal relationships and
+`self:<entitySet>` for self-referencing ones, so same-named lookups on *different* related
+tables no longer false-collide (the old key was the bare logical name).
+
+### Consequence to be aware of
+
+Because a relationship can only be expanded once per query, a table that declares a lookup
+back to a parent whose own table has collections (the classic `contact.parentaccountid` →
+`account.contacts` shape) throws on every read until BOTH ends are narrowed. The fix is to
+narrow the *related* table too, not just the queried one — see the README section
+"Navigation Properties on Reads".
+
+### Harness tables added for this (test/browser/harness/tables.ts)
+
+`TestTable` still declares both sides (used for the new throw test + FetchXML/navigation
+suites). New variants:
+- `TestTablePlain` — related table with no navs at all (walk terminates there)
+- `TestTableFlat` — values + `testLookup` lookupId, no navs (general/bulk/crud/navigation reads)
+- `TestTableLookupSide` — N:1 side only, targets `TestTablePlain`
+- `TestTableCollectionSide` — inverse 1:N side only, targets `TestTablePlain`
+
+Suites updated to use them; `query-odata` now has three auto-expansion tests (lookup side,
+collection side, both-sides-throws). Diagnostics probes P11/P13/P14–P18 repointed to the
+narrowed variants (P11/P13/P14/P15/P16/P17 → lookup side, P18 → collection side).
 - `ODataQuery.expand(key)` without a sub-query now renders `$expand=nav` (bare, no parens).
 
 ## Field-layer fixes shipped (src/fields.ts)
@@ -79,9 +117,9 @@ test's detail; "Copy Markdown results" exports them.
 
 ## OPEN QUESTIONS — verify via the diagnostics suite (next run)
 
-1. **P13's mixing (both sides of a self relationship)** — CONCLUSION: same-self-pair in one
-   request is UNSAFE. Current build already collapses to one side (lookup wins). Verify P17
-   (lookup-only) & P18 (collection-only) both behave sanely.
+1. **P13's mixing (both sides of a self relationship)** — RESOLVED by throwing (see above);
+   the next run just needs to confirm `TestTableLookupSide` / `TestTableCollectionSide`
+   reads come back sane (P17/P18 are pointed at them).
 2. Where the "An item with the same key has already been added" error comes from — user
    reported it on `updateRecord persists changes`, bulk "seeded bulk rows are all
    present", and updateMultiple — needs reproduction; P3 disproved the _value+expand
@@ -100,33 +138,24 @@ test's detail; "Copy Markdown results" exports them.
 
 ## PENDING WORK IN FLIGHT (was mid-edit when session ended)
 
-User directive: for cases that don't work, THROW instead of silently omitting. Candidates
-to convert into throws in the expandNavigation walk:
-
-- collection expand nested inside an expansion,
-- the skipped second side of a self-referencing relationship,
-- (maybe) the cross-branch "already expanded" dedupe (silent no-op today).
-
-CAREFUL: the harness's self-shape (lookup + paired lookupId + inverse collection on the
-same entity set, see test/browser/harness/tables.ts) is exercised by general/crud/bulk
-suites with full-table getRecords — if both-sides-of-self throws, all those suites fail
-unless tests narrow via pickProperties or the throw is limited to… decide with the user
-whether the throw is global or only when BOTH sides appear in the field set. One viable
-compromise: throw only when BOTH sides are declared AND auto-expansion asks for both;
-testLookup+testLookupNav pairs are declared by the table author, so this is at author-time
-discoverable.
+RESOLVED 2026-10-02 — see "Throw policy" above. User chose: throw globally on any omitted
+expand, including the cross-branch dedupe. Implemented, unit tests updated (425 pass),
+typecheck clean, browser-test bundle rebuilt. Still needs one in-org run to confirm the
+narrowed-table variants behave (the harness changes have NOT been exercised live).
 
 ## Test-suite state
 
-- test/odata-builder.test.ts — has updated unit tests: bare expand (no parens), nested
-  auto-expansion matrix, lookupId-pair `_value` drop, self-relationship one-side rule
-  (incl. `_value` kept for self-rels).
+- test/odata-builder.test.ts — bare expand (no parens), nested auto-expansion matrix (now a
+  throw + a narrowed positive case), lookupId-pair `_value` drop, and the two new throw cases
+  (nested collection, cross-branch repeat, self both-sides → throw, plus pickProperties
+  narrowing for each self side).
 - test/browser/suites/query-fetchxml.ts — updated for new null-choice semantics
   (null group tolerated in distinct/groupby tests; `apply over outer join` expectation
   corrected 147 → 54 = 5+7+42 per current seeds).
 - createRecord reverted to NOT fill field defaults (user's explicit choice: don't include
   absent values when sending).
-- All unit tests: 424 pass; typecheck/test:types clean.
+- All unit tests: 425 pass; typecheck/test:types clean. Browser-test bundle rebuilt
+  (`test/browser/dist/browser-test.js`, 213 kB) but not yet run in-org.
 
 ## Org/harness refs
 

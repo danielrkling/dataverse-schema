@@ -47,7 +47,7 @@ export const navigationSuite: Suite = {
       name: "choice column round-trips label ↔ value",
       fn: async () => {
         await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { choice: "C" })
-        const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
+        const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.kid1)
         assertEquals(kid?.choice, "C", "choice persisted")
       },
     },
@@ -55,7 +55,7 @@ export const navigationSuite: Suite = {
       name: "associateRecord links a detached row through the lookup",
       fn: async () => {
         await ctx.tables.TestTable.associateRecord("testLookup", ctx.state.detached, ctx.state.parent)
-        const kid = await ctx.tables.TestTable.getRecord(ctx.state.detached)
+        const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.detached)
         assertEquals(kid?.testLookup, ctx.state.parent, "lookupId set by associate")
       },
     },
@@ -80,10 +80,10 @@ export const navigationSuite: Suite = {
           text: "nav-created-target",
           testLookupNav: { name: navName },
         })
-        const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
+        const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.kid1)
         assert(kid?.testLookup, "lookupId now points at the created record")
         if (kid.testLookup) ctx.fx.track(kid.testLookup)
-        const target = await ctx.tables.TestTable.getRecord(kid.testLookup)
+        const target = await ctx.tables.TestTableFlat.getRecord(kid.testLookup)
         assertEquals(target?.name, navName, "created record carries the given name")
       },
     },
@@ -91,7 +91,7 @@ export const navigationSuite: Suite = {
       name: "lookup navigation null clears the lookup",
       fn: async () => {
         await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { text: "nav-clear", testLookupNav: null })
-        const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1)
+        const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.kid1)
         assertEquals(kid?.testLookup, null, "lookup cleared")
       },
     },

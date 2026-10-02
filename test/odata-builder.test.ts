@@ -222,16 +222,15 @@ test("unknown orderby field throws", () => {
 // --- buildTableQueryAst (default table query) ---
 
 test("default table query auto-expands navigation properties when requested", () => {
-  const Task = new DataverseTable({
-    client, entitySetName: "tasks", logicalName: "task",
-    fields: { id: primaryKey("taskid"), subject: string("subject") },
+  const Leaf: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "leaves", logicalName: "leaf",
+    fields: { id: primaryKey("leafid"), name: string("name") },
   })
   const Child: DataverseTable<any> = new DataverseTable({
     client, entitySetName: "children", logicalName: "child",
     fields: {
       id: primaryKey("childid"),
-      parent: lookup("parent_link", () => Parent as any),
-      tasks: collection("child_tasks", () => Task),
+      owner: lookup("child_owner", () => Leaf),
     },
   })
   const Parent: DataverseTable<any> = new DataverseTable({
@@ -244,29 +243,65 @@ test("default table query auto-expands navigation properties when requested", ()
 
   const ast = buildTableQueryAst(Parent, undefined, true)
   expect(ast.select!.length).toBeGreaterThan(0)
-  // Each top-level navigation property is expanded… and nested lookups inside
-  // the collection expand are expanded too.
+  // Top-level navs are expanded, and nested lookups inside the collection
+  // expand are expanded too.
   expect(ast.expands!.map(e => e.navigation)).toEqual(["parent_children"])
-  expect(ast.expands![0].query!.expands!.map(e => e.navigation)).toEqual(["parent_link"])
+  expect(ast.expands![0].query!.expands!.map(e => e.navigation)).toEqual(["child_owner"])
+  // …and the leaf table has nothing left to expand.
+  expect(ast.expands![0].query!.expands![0].query!.expands ?? []).toHaveLength(0)
 
   // Without the flag the query stays flat (used for create/update representations).
   const flat = buildTableQueryAst(Parent)
   expect(flat.expands ?? []).toHaveLength(0)
 })
 
-test("buildTableQueryAst auto-expansion nests lookups but never collections, and stops at cycles", () => {
-  const Leaf: DataverseTable<any> = new DataverseTable({
-    client, entitySetName: "leaves", logicalName: "leaf",
-    fields: { id: primaryKey("leafid"), name: string("name") },
-  })
-  // Mid has a lookup to Leaf — nested inside both a lookup and a collection expand.
+test("buildTableQueryAst auto-expansion throws when a collection is nested inside an expand", () => {
+  // One-to-many $expand is only legal at the top level — silently omitting it
+  // would hand back records missing a navigation property the caller declared.
   const Mid: DataverseTable<any> = new DataverseTable({
     client, entitySetName: "mids", logicalName: "mid",
     fields: {
       id: primaryKey("midid"),
       name: string("name"),
       owner: lookup("mid_owner", () => Leaf),
-      kids: collection("mid_kids", () => Mid as any), // self-collection: skipped inside collection expand
+      kids: collection("mid_kids", () => Mid as any),
+    },
+  })
+  const Leaf: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "leaves", logicalName: "leaf",
+    fields: { id: primaryKey("leafid"), name: string("name") },
+  })
+  const Top: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "tops", logicalName: "top",
+    fields: {
+      id: primaryKey("topid"),
+      midLookup: lookup("top_mid", () => Mid as any),
+    },
+  })
+
+  expect(() => buildTableQueryAst(Top, undefined, true)).toThrow(
+    `Cannot auto-expand "mid.kids": the Dataverse Web API only supports one-to-many ` +
+    `$expand at the top level of a query, not nested inside another $expand under "top.midLookup"`,
+  )
+
+  // Dropping the top-level nav that leads to it makes the same table usable again.
+  const narrowed = buildTableQueryAst(Top.pickProperties("id") as any, undefined, true)
+  expect(narrowed.expands ?? []).toHaveLength(0)
+})
+
+test("buildTableQueryAst auto-expansion throws when a relationship is reachable from two branches", () => {
+  const Leaf: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "leaves", logicalName: "leaf",
+    fields: { id: primaryKey("leafid"), name: string("name") },
+  })
+  // Mid.owner is reachable from Top both directly (via the lookup) and through
+  // the collection — a relationship can only be expanded once per query.
+  const Mid: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "mids", logicalName: "mid",
+    fields: {
+      id: primaryKey("midid"),
+      name: string("name"),
+      owner: lookup("mid_owner", () => Leaf),
     },
   })
   const Top: DataverseTable<any> = new DataverseTable({
@@ -275,29 +310,13 @@ test("buildTableQueryAst auto-expansion nests lookups but never collections, and
       id: primaryKey("topid"),
       midLookup: lookup("top_mid", () => Mid as any),
       mids: collection("top_mids", () => Mid as any),
-      selfRef: collection("top_self", () => Top as any), // self-collection: cycle-stopped via own sub-walk
     },
   })
 
-  const ast = buildTableQueryAst(Top, undefined, true)
-  expect(ast.expands!.map(e => e.navigation)).toEqual(["top_mid", "top_mids", "top_self"])
-
-  // Lookup branch: Mid is expanded with a sub-select and a nested lookup expand to Leaf;
-  // its self-collection is skipped.
-  const lookupExpand = ast.expands!.find(e => e.navigation === "top_mid")!
-  expect(lookupExpand.query!.expands!.map(e => e.navigation)).toEqual(["mid_owner"])
-  // Leaf's expansion contains no further expands (no lookup navs).
-  expect(lookupExpand.query!.expands![0].query!.expands ?? []).toHaveLength(0)
-
-  // Collection branch: the mid_owner lookup was already expanded in the lookup
-  // branch — a relationship expands at most once per query, so no nested expands.
-  const collectionExpand = ast.expands!.find(e => e.navigation === "top_mids")!
-  expect(collectionExpand.query?.expands ?? []).toHaveLength(0)
-
-  // Self-collection branch: the top_mid lookup was already expanded in the
-  // first branch, so nothing nests here (once-per-query relationship guard).
-  const selfExpand = ast.expands!.find(e => e.navigation === "top_self")!
-  expect(selfExpand.query?.expands ?? []).toHaveLength(0)
+  expect(() => buildTableQueryAst(Top, undefined, true)).toThrow(
+    `Cannot auto-expand "mid.owner" under "top.mids": this expands the same relationship as an expand already issued from "top.midLookup"`,
+  )
+  expect(() => buildTableQueryAst(Top, undefined, true)).toThrow("A relationship can only be expanded once per query")
 })
 
 test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () => {
@@ -335,10 +354,11 @@ test("buildTableQueryAst drops lookupId columns paired with expanded lookups", (
   expect(ast.select).toContain("rootid")
 })
 
-test("buildTableQueryAst expands only one side of a self-referencing relationship", () => {
+test("buildTableQueryAst throws when both sides of a self-referencing relationship would expand", () => {
   // Mirrors the live-org evidence: N:1 and its inverse 1:N on the same entity set —
   // expanding both made Dataverse mix the expansions (nav returned null, the
-  // related record showed up under the collection key instead).
+  // related record showed up under the collection key instead). Since the schema
+  // can't tell the two sides apart, auto-expansion refuses the whole query.
   const Self = new DataverseTable({
     client, entitySetName: "selftables", logicalName: "selftable",
     fields: { id: primaryKey("sid"), name: string("name") },
@@ -354,11 +374,22 @@ test("buildTableQueryAst expands only one side of a self-referencing relationshi
     },
   })
 
-  const ast = buildTableQueryAst(T, undefined, true)
-  // The lookup side wins; the inverse collection of the self relationship is skipped.
-  expect(ast.expands!.map(e => e.navigation)).toEqual(["self_lookup"])
+  expect(() => buildTableQueryAst(T, undefined, true)).toThrow(
+    `Cannot auto-expand "selftable.kids" at the top level of the query: this expands the same relationship as an expand already issued from the top level.`,
+  )
+  expect(() => buildTableQueryAst(T, undefined, true)).toThrow(
+    "Self-referencing relationships cannot be expanded from both sides of one request",
+  )
 
+  // Narrowing to one side works — the lookup side here.
+  const lookupOnly = buildTableQueryAst(T.pickProperties("id", "name", "parentNav", "parentId") as any, undefined, true)
+  expect(lookupOnly.expands!.map(e => e.navigation)).toEqual(["self_lookup"])
   // `_value` stays in $select — live probe P3 proved _value + same-nav expand is legal.
-  expect(ast.select).toContain("_self_lookup_value")
-  expect(ast.select).toContain("selfid")
+  expect(lookupOnly.select).toContain("_self_lookup_value")
+  expect(lookupOnly.select).toContain("selfid")
+
+  // …and so does the inverse collection side.
+  const collectionOnly = buildTableQueryAst(T.pickProperties("id", "name", "kids") as any, undefined, true)
+  expect(collectionOnly.expands!.map(e => e.navigation)).toEqual(["selftables_kids"])
+  expect(collectionOnly.select).toContain("selfid")
 })

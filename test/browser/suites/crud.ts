@@ -12,7 +12,7 @@ export const crudSuite: Suite = {
     {
       name: "getRecord transforms all field kinds",
       fn: async () => {
-        const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assert(r, "record not found")
         assertEquals(r.id, ctx.state.row, "primary key")
         assertEquals(r.int, 10, "int")
@@ -27,7 +27,7 @@ export const crudSuite: Suite = {
       name: "readonly formula column is skipped on update",
       fn: async () => {
         await ctx.tables.TestTable.updateRecord(ctx.state.row, { formula: "SHOULD_NOT_APPLY", int: 99 })
-        const r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assert(r, "row missing after update")
         assertEquals(r.int, 99, "writable int applied")
         assert(r.formula !== "SHOULD_NOT_APPLY", `readonly formula must not be written, got ${JSON.stringify(r.formula)}`)
@@ -41,7 +41,7 @@ export const crudSuite: Suite = {
           int: 11,
         })).id
         ctx.fx.track(id)
-        const r = await ctx.tables.TestTable.getRecord(id)
+        const r = await ctx.tables.TestTableFlat.getRecord(id)
         assertEquals(r?.int, 11, "created via upsert")
       },
     },
@@ -59,10 +59,10 @@ export const crudSuite: Suite = {
       name: "activateRecord / deactivateRecord round-trip statecode",
       fn: async () => {
         await ctx.tables.TestTable.deactivateRecord(ctx.state.row)
-        let r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        let r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assertEquals(r?.stateCode, 1, "deactivated")
         await ctx.tables.TestTable.activateRecord(ctx.state.row)
-        r = await ctx.tables.TestTable.getRecord(ctx.state.row)
+        r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row)
         assertEquals(r?.stateCode, 0, "reactivated")
       },
     },
@@ -76,7 +76,7 @@ export const crudSuite: Suite = {
           const msg = e instanceof Error ? e.message : JSON.stringify(e)
           if (!msg.includes("404")) throw e
         }
-        const r = await ctx.tables.TestTable.getRecord(id)
+        const r = await ctx.tables.TestTableFlat.getRecord(id)
         assertEquals(r, null, "deleted record is gone")
       },
     },
@@ -86,7 +86,7 @@ export const crudSuite: Suite = {
         if (!ctx.cfg.altKeyAttribute) throw new Error("skip: set altKeyAttribute in config")
         const unique = ctx.fx.name("altkey")
         const created = await seedRow(ctx, { altKey: unique })
-        const found = await ctx.tables.TestTable.getRecord(`${ctx.cfg.altKeyAttribute}='${unique}'`)
+        const found = await ctx.tables.TestTableFlat.getRecord(`${ctx.cfg.altKeyAttribute}='${unique}'`)
         assert(found, "record not found via alternate key")
         assertEquals(found.id, created, "alternate key resolves to the created record")
       },

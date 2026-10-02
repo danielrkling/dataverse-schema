@@ -41,7 +41,7 @@ export const generalSuite: Suite = {
     {
       name: "getRecords filter/orderby/top (OData, transformed)",
       fn: async () => {
-        const rows = await ctx.tables.TestTable.getRecords({
+        const rows = await ctx.tables.TestTableFlat.getRecords({
           filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`,
           orderby: "nnsyc200_name asc",
           top: 10,
@@ -170,7 +170,7 @@ export const generalSuite: Suite = {
       name: "updateRecord persists changes",
       fn: async () => {
         await ctx.tables.TestTable.updateRecord(ctx.state.child, { int: 42 })
-        const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.child}` })
+        const rows = await ctx.tables.TestTableFlat.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.child}` })
         assert(rows[0] && rows[0].int === 42, "updateRecord int not persisted")
       },
     },

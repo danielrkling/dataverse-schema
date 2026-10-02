@@ -1636,44 +1636,61 @@
     query.select();
     if (expandNavigation) {
       const seenRel = /* @__PURE__ */ new Set();
-      const relKeyOf = (prop, current) => {
-        const rel = prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : String(prop.logicalName);
-        return isExpandable(prop) ? rel : String(prop.logicalName);
-      };
+      const relKeyOf = (prop, current) => prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : `${prop.table?.entitySetName}:${prop.logicalName}`;
       const isExpandable = (prop) => prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection");
       const pickKeys = (t) => {
         const keys = [];
         for (const [key, prop] of Object.entries(t.fields)) {
-          if (prop.kind === "value") keys.push(key);
-          else if (prop.type === "lookupId" && t.entitySetName === prop.table?.entitySetName) {
+          if (prop.kind === "value") {
             keys.push(key);
-          } else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
+            continue;
+          }
+          if (prop.type !== "lookupId") continue;
+          const isSelf = t.entitySetName === prop.table?.entitySetName;
+          if (isSelf || !seenRel.has(relKeyOf(prop, t))) keys.push(key);
         }
         return keys;
       };
       const register = (current) => {
         for (const prop of Object.values(current.fields)) {
           if (!isExpandable(prop)) continue;
-          if (seenRel.has(relKeyOf(prop, current))) continue;
-          seenRel.add(relKeyOf(prop, current));
+          const relKey = relKeyOf(prop, current);
+          if (seenRel.has(relKey)) continue;
+          seenRel.add(relKey);
           register(prop.table);
         }
       };
       register(table);
-      const walk = (target, current, inExpansion, expanded) => {
+      const claimed = /* @__PURE__ */ new Map();
+      const walk = (target, current, inExpansion, trail) => {
+        const where = trail.length > 0 ? `under "${trail.join(" → ")}"` : "at the top level of the query";
         for (const [key, prop] of Object.entries(current.fields)) {
           if (prop.kind !== "navigation") continue;
           const isCollection = prop.type === "collection";
-          if (prop.type !== "lookup" && !isCollection || isCollection && inExpansion) continue;
-          if (expanded.has(relKeyOf(prop, current))) continue;
-          expanded.add(relKeyOf(prop, current));
+          if (prop.type !== "lookup" && !isCollection) continue;
+          const label = `${current.logicalName}.${key}`;
+          if (isCollection && inExpansion) {
+            throw new Error(
+              `Cannot auto-expand "${label}": the Dataverse Web API only supports one-to-many $expand at the top level of a query, not nested inside another $expand ${where}. Narrow the query with pickProperties("${key}") to leave it out.`
+            );
+          }
+          const relKey = relKeyOf(prop, current);
+          const claimedBy = claimed.get(relKey);
+          if (claimedBy !== void 0) {
+            const why = relKey.startsWith("self:") ? `Self-referencing relationships cannot be expanded from both sides of one request — the Web API cross-wires the lookup and its inverse collection.` : `A relationship can only be expanded once per query.`;
+            const via = claimedBy.length > 0 ? `"${claimedBy.join(" → ")}"` : "the top level";
+            throw new Error(
+              `Cannot auto-expand "${label}" ${where}: this expands the same relationship as an expand already issued from ${via}. ${why} Narrow the query with pickProperties() so only one of them is expanded.`
+            );
+          }
+          claimed.set(relKey, trail);
           target.expand(key, (sub) => {
             sub.select(...pickKeys(prop.table));
-            walk(sub, prop.table, true, expanded);
+            walk(sub, prop.table, true, [...trail, label]);
           });
         }
       };
-      walk(query, table, false, /* @__PURE__ */ new Set());
+      walk(query, table, false, []);
       query.select(...pickKeys(table));
     }
     if (options?.filter) query.filter(options.filter);
@@ -3664,7 +3681,43 @@
         children: collection(cfg.collectionNav, () => TestTable0)
       }
     });
-    return { client, TestTable0, TestTable };
+    const TestTablePlain = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: { ...baseFields }
+    });
+    const TestTableFlat = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: { ...baseFields, testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0) }
+    });
+    const TestTableLookupSide = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: {
+        ...baseFields,
+        testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTablePlain),
+        testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTablePlain)
+      }
+    });
+    const TestTableCollectionSide = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: { ...baseFields, children: collection(cfg.collectionNav, () => TestTablePlain) }
+    });
+    return {
+      client,
+      TestTable0,
+      TestTable,
+      TestTablePlain,
+      TestTableFlat,
+      TestTableLookupSide,
+      TestTableCollectionSide
+    };
   }
 
   class FixtureTracker {
@@ -3933,7 +3986,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-01T20:05:51.970Z"}
+      meta.textContent = `build ${"2026-10-02T12:49:51.835Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4026,7 +4079,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-01T20:05:51.970Z",
+          build: "2026-10-02T12:49:51.835Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4045,7 +4098,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-01T20:05:51.970Z"}\``,
+        `Build: \`${"2026-10-02T12:49:51.835Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4153,7 +4206,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "getRecords filter/orderby/top (OData, transformed)",
         fn: async () => {
-          const rows = await ctx.tables.TestTable.getRecords({
+          const rows = await ctx.tables.TestTableFlat.getRecords({
             filter: `nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')`,
             orderby: "nnsyc200_name asc",
             top: 10
@@ -4261,7 +4314,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "updateRecord persists changes",
         fn: async () => {
           await ctx.tables.TestTable.updateRecord(ctx.state.child, { int: 42 });
-          const rows = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.child}` });
+          const rows = await ctx.tables.TestTableFlat.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.child}` });
           assert(rows[0] && rows[0].int === 42, "updateRecord int not persisted");
         }
       },
@@ -4325,7 +4378,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "getRecord transforms all field kinds",
         fn: async () => {
-          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assert(r, "record not found");
           assertEquals(r.id, ctx.state.row, "primary key");
           assertEquals(r.int, 10, "int");
@@ -4340,7 +4393,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "readonly formula column is skipped on update",
         fn: async () => {
           await ctx.tables.TestTable.updateRecord(ctx.state.row, { formula: "SHOULD_NOT_APPLY", int: 99 });
-          const r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          const r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assert(r, "row missing after update");
           assertEquals(r.int, 99, "writable int applied");
           assert(r.formula !== "SHOULD_NOT_APPLY", `readonly formula must not be written, got ${JSON.stringify(r.formula)}`);
@@ -4354,7 +4407,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             int: 11
           })).id;
           ctx.fx.track(id);
-          const r = await ctx.tables.TestTable.getRecord(id);
+          const r = await ctx.tables.TestTableFlat.getRecord(id);
           assertEquals(r?.int, 11, "created via upsert");
         }
       },
@@ -4372,10 +4425,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "activateRecord / deactivateRecord round-trip statecode",
         fn: async () => {
           await ctx.tables.TestTable.deactivateRecord(ctx.state.row);
-          let r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          let r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assertEquals(r?.stateCode, 1, "deactivated");
           await ctx.tables.TestTable.activateRecord(ctx.state.row);
-          r = await ctx.tables.TestTable.getRecord(ctx.state.row);
+          r = await ctx.tables.TestTableFlat.getRecord(ctx.state.row);
           assertEquals(r?.stateCode, 0, "reactivated");
         }
       },
@@ -4389,7 +4442,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const msg = e instanceof Error ? e.message : JSON.stringify(e);
             if (!msg.includes("404")) throw e;
           }
-          const r = await ctx.tables.TestTable.getRecord(id);
+          const r = await ctx.tables.TestTableFlat.getRecord(id);
           assertEquals(r, null, "deleted record is gone");
         }
       },
@@ -4399,7 +4452,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (!ctx.cfg.altKeyAttribute) throw new Error("skip: set altKeyAttribute in config");
           const unique = ctx.fx.name("altkey");
           const created = await seedRow(ctx, { altKey: unique });
-          const found = await ctx.tables.TestTable.getRecord(`${ctx.cfg.altKeyAttribute}='${unique}'`);
+          const found = await ctx.tables.TestTableFlat.getRecord(`${ctx.cfg.altKeyAttribute}='${unique}'`);
           assert(found, "record not found via alternate key");
           assertEquals(found.id, created, "alternate key resolves to the created record");
         }
@@ -4494,7 +4547,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           name: "iteratePages follows nextLink pagination (pageSize 2)",
           fn: async () => {
             const seen = /* @__PURE__ */ new Set();
-            for await (const page of ctx.tables.TestTable.iteratePages({ filter: scope }, { pageSize: 2 })) {
+            for await (const page of ctx.tables.TestTableFlat.iteratePages({ filter: scope }, { pageSize: 2 })) {
               for (const r of page) seen.add(r.id);
             }
             assertEquals(seen.size, 5, `paged through all seeded rows`);
@@ -4512,25 +4565,44 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           }
         },
         {
-          name: "getRecords auto-expands lookups and collections",
+          name: "getRecords auto-expands the lookup side of the self relationship",
           fn: async () => {
             const childName = ctx.fx.name("c2");
-            const childRows = await ctx.tables.TestTable.getRecords({
+            const childRows = await ctx.tables.TestTableLookupSide.getRecords({
               filter: `startswith(nnsyc200_name,'${childName}')`
             });
             assert(childRows.length === 1, "child row returned");
             const nav = childRows[0].testLookupNav;
             assert(nav && nav.id === ctx.state.parent, `lookup expanded to parent (got ${JSON.stringify(nav)})`);
             assertEquals(nav.int, 100, "expanded lookup fields transformed");
-            assert(Array.isArray(childRows[0].children), "collection expanded to array");
-            const parentRows = await ctx.tables.TestTable0.getRecords({
+            assertEquals(childRows[0].testLookup, ctx.state.parent, "lookupId recovered from the expanded nav");
+          }
+        },
+        {
+          name: "getRecords auto-expands the collection side of the self relationship",
+          fn: async () => {
+            const parentRows = await ctx.tables.TestTableCollectionSide.getRecords({
               filter: `nnsyc200_test_tableid eq ${ctx.state.parent}`
             });
+            assert(parentRows.length === 1, "parent row returned");
             const kids = parentRows[0].children ?? [];
             assertEquals(kids.length, 3, "expanded collection returns linked children");
             for (const k of kids) {
               assert(typeof k.int === "number" && typeof k.name === "string", "expanded child transformed");
             }
+          }
+        },
+        {
+          name: "getRecords throws when both sides of a self relationship would expand",
+          fn: async () => {
+            let message = "";
+            try {
+              await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_test_tableid eq ${ctx.state.parent}` });
+            } catch (e) {
+              message = e instanceof Error ? e.message : String(e);
+            }
+            assert(message.includes("selftable.kids") || message.includes("children"), `expected a self-relationship expand error, got: ${message}`);
+            assert(message.includes("Self-referencing relationships"), `expected the self-relationship explanation, got: ${message}`);
           }
         },
         {
@@ -4807,7 +4879,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "choice column round-trips label ↔ value",
         fn: async () => {
           await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { choice: "C" });
-          const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1);
+          const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.kid1);
           assertEquals(kid?.choice, "C", "choice persisted");
         }
       },
@@ -4815,7 +4887,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "associateRecord links a detached row through the lookup",
         fn: async () => {
           await ctx.tables.TestTable.associateRecord("testLookup", ctx.state.detached, ctx.state.parent);
-          const kid = await ctx.tables.TestTable.getRecord(ctx.state.detached);
+          const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.detached);
           assertEquals(kid?.testLookup, ctx.state.parent, "lookupId set by associate");
         }
       },
@@ -4836,10 +4908,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             text: "nav-created-target",
             testLookupNav: { name: navName }
           });
-          const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1);
+          const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.kid1);
           assert(kid?.testLookup, "lookupId now points at the created record");
           if (kid.testLookup) ctx.fx.track(kid.testLookup);
-          const target = await ctx.tables.TestTable.getRecord(kid.testLookup);
+          const target = await ctx.tables.TestTableFlat.getRecord(kid.testLookup);
           assertEquals(target?.name, navName, "created record carries the given name");
         }
       },
@@ -4847,7 +4919,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "lookup navigation null clears the lookup",
         fn: async () => {
           await ctx.tables.TestTable.updateRecord(ctx.state.kid1, { text: "nav-clear", testLookupNav: null });
-          const kid = await ctx.tables.TestTable.getRecord(ctx.state.kid1);
+          const kid = await ctx.tables.TestTableFlat.getRecord(ctx.state.kid1);
           assertEquals(kid?.testLookup, null, "lookup cleared");
         }
       }
@@ -4979,7 +5051,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         {
           name: "seeded bulk rows are all present",
           fn: async () => {
-            const rows = await ctx.tables.TestTable.getRecords({ filter: scope });
+            const rows = await ctx.tables.TestTableFlat.getRecords({ filter: scope });
             assertEquals(rows.length, BULK, "row count");
           }
         },
@@ -4989,7 +5061,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             await ctx.tables.TestTable.updateMultiple(
               ctx.state.rows.map((id) => ({ id, int: 555 }))
             );
-            const rows = await ctx.tables.TestTable.getRecords({ filter: scope });
+            const rows = await ctx.tables.TestTableFlat.getRecords({ filter: scope });
             for (const r of rows) assertEquals(r.int, 555, `bulk-updated int on ${r.id}`);
           }
         },
@@ -5012,7 +5084,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               }
               throw e;
             }
-            const rows = await ctx.tables.TestTable.getRecords({ filter: scope });
+            const rows = await ctx.tables.TestTableFlat.getRecords({ filter: scope });
             assertEquals(rows.length, 0, "all bulk rows deleted");
           }
         }
@@ -5198,9 +5270,9 @@ payload: ${JSON.stringify(payload, null, 2)}${transformed}`);
           )
         },
         {
-          name: "P11: table.getRecords auto-expanded query (no options)",
+          name: "P11: table.getRecords auto-expanded query, lookup side (no options)",
           fn: async () => {
-            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true));
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide, void 0, true));
             const payload = await ctx.client.getRecords(entity, { query });
             const keysOfFirst = payload[0] ? Object.keys(payload[0]) : [];
             skip(`PROBE P11
@@ -5210,9 +5282,9 @@ lookup-related keys: ${JSON.stringify(keysOfFirst.filter((k) => k.toLowerCase().
           }
         },
         {
-          name: "P13: table.getRecords auto-expanded query + $filter + $orderby + $top (exact failing test shape)",
+          name: "P13: table.getRecords auto-expanded query + $filter + $orderby + $top",
           fn: async () => {
-            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')&$orderby=nnsyc200_name asc&$top=10`;
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide, void 0, true)) + `&$filter=nnsyc200_int gt 0 and startswith(nnsyc200_name,'${ctx.fx.scopePrefix}')&$orderby=nnsyc200_name asc&$top=10`;
             let payload;
             try {
               payload = await ctx.client.getRecords(entity, { query });
@@ -5227,10 +5299,9 @@ raw child-row: ${JSON.stringify(childRow, null, 2)}`);
           }
         },
         {
-          name: "P17: auto-expanded query, lookup expansion ONLY (no collection expand)",
+          name: "P17: auto-expanded query (TestTableLookupSide) + $filter",
           fn: async () => {
-            const ast = buildTableQueryAst(ctx.tables.TestTable, void 0, true);
-            const query = serializeODataSelect({ ...ast, expands: ast.expands.filter((e) => e.navigation.toLowerCase() !== ctx.cfg.collectionNav.toLowerCase()) }) + `&$filter=${pk} eq ${ctx.state.child}`;
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide, void 0, true)) + `&$filter=${pk} eq ${ctx.state.child}`;
             let payload;
             try {
               payload = await ctx.client.getRecords(entity, { query });
@@ -5243,11 +5314,9 @@ payload: ${JSON.stringify(payload, null, 2)}`);
           }
         },
         {
-          name: "P18: auto-expanded query, collection expansion ONLY (no lookup expand)",
+          name: "P18: auto-expanded query (TestTableCollectionSide)",
           fn: async () => {
-            const ast = buildTableQueryAst(ctx.tables.TestTable, void 0, true);
-            const query = serializeODataSelect({ ...ast, expands: ast.expands.filter((e) => e.navigation !== nav) });
-            const finalQuery = `${query}&$filter=${pk} eq ${ctx.state.child}`;
+            const finalQuery = `${serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableCollectionSide, void 0, true))}&$filter=${pk} eq ${ctx.state.parent}`;
             let payload;
             try {
               payload = await ctx.client.getRecords(entity, { query: finalQuery });
@@ -5276,7 +5345,7 @@ payload: ${JSON.stringify(payload, null, 2)}`);
         {
           name: "P14: auto-expanded query + $filter only",
           fn: async () => {
-            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$filter=${pk} eq ${ctx.state.child}`;
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide, void 0, true)) + `&$filter=${pk} eq ${ctx.state.child}`;
             let payload;
             try {
               payload = await ctx.client.getRecords(entity, { query });
@@ -5291,7 +5360,7 @@ payload: ${JSON.stringify(payload, null, 2)}`);
         {
           name: "P15: auto-expanded query + $top only",
           fn: async () => {
-            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$top=10`;
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide, void 0, true)) + `&$top=10`;
             let payload;
             try {
               payload = await ctx.client.getRecords(entity, { query });
@@ -5306,7 +5375,7 @@ payload: ${JSON.stringify(payload, null, 2)}`);
         {
           name: "P16: auto-expanded query + $orderby only",
           fn: async () => {
-            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTable, void 0, true)) + `&$orderby=nnsyc200_name asc`;
+            const query = serializeODataSelect(buildTableQueryAst(ctx.tables.TestTableLookupSide, void 0, true)) + `&$orderby=nnsyc200_name asc`;
             let payload;
             try {
               payload = await ctx.client.getRecords(entity, { query });

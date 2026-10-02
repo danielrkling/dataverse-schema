@@ -79,7 +79,60 @@ export function buildTables(client: DataverseClient, cfg: BrowserTestConfig) {
     },
   })
 
-  return { client, TestTable0, TestTable }
+  // --- Narrowed variants ---------------------------------------------------
+  //
+  // TestTable declares BOTH sides of the self-referencing relationship (the
+  // N:1 `testLookupNav` and its inverse 1:N `children`), which auto-expansion
+  // refuses (the Web API cross-wires the two — see TODO.md probe P13). Reads
+  // that want auto-expansion therefore use the one-sided variants below, and
+  // reads that just want data use `TestTableFlat`.
+
+  // Related table with no navigation properties at all — expanding into it ends
+  // the walk, so the one-sided variants below can auto-expand.
+  const TestTablePlain: DataverseTable<any> = new DataverseTable({
+    logicalName: cfg.logicalName,
+    entitySetName: cfg.entitySetName,
+    client,
+    fields: { ...baseFields },
+  })
+
+  /** Value columns + the lookupId, no navigation properties — reads stay flat. */
+  const TestTableFlat: DataverseTable<any> = new DataverseTable({
+    logicalName: cfg.logicalName,
+    entitySetName: cfg.entitySetName,
+    client,
+    fields: { ...baseFields, testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0) },
+  })
+
+  /** Only the N:1 side of the self relationship — auto-expands the lookup. */
+  const TestTableLookupSide: DataverseTable<any> = new DataverseTable({
+    logicalName: cfg.logicalName,
+    entitySetName: cfg.entitySetName,
+    client,
+    fields: {
+      ...baseFields,
+      testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTablePlain),
+      testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTablePlain),
+    },
+  })
+
+  /** Only the inverse 1:N side of the self relationship — auto-expands the collection. */
+  const TestTableCollectionSide: DataverseTable<any> = new DataverseTable({
+    logicalName: cfg.logicalName,
+    entitySetName: cfg.entitySetName,
+    client,
+    fields: { ...baseFields, children: collection(cfg.collectionNav, () => TestTablePlain) },
+  })
+
+  return {
+    client,
+    TestTable0,
+    TestTable,
+    TestTablePlain,
+    TestTableFlat,
+    TestTableLookupSide,
+    TestTableCollectionSide,
+  }
 }
 
 export type Tables = ReturnType<typeof buildTables>

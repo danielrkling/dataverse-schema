@@ -1376,44 +1376,61 @@
     query.select();
     if (expandNavigation) {
       const seenRel = /* @__PURE__ */ new Set();
-      const relKeyOf = (prop, current) => {
-        const rel = prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : String(prop.logicalName);
-        return isExpandable(prop) ? rel : String(prop.logicalName);
-      };
+      const relKeyOf = (prop, current) => prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : `${prop.table?.entitySetName}:${prop.logicalName}`;
       const isExpandable = (prop) => prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection");
       const pickKeys = (t) => {
         const keys = [];
         for (const [key, prop] of Object.entries(t.fields)) {
-          if (prop.kind === "value") keys.push(key);
-          else if (prop.type === "lookupId" && t.entitySetName === prop.table?.entitySetName) {
+          if (prop.kind === "value") {
             keys.push(key);
-          } else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
+            continue;
+          }
+          if (prop.type !== "lookupId") continue;
+          const isSelf = t.entitySetName === prop.table?.entitySetName;
+          if (isSelf || !seenRel.has(relKeyOf(prop, t))) keys.push(key);
         }
         return keys;
       };
       const register = (current) => {
         for (const prop of Object.values(current.fields)) {
           if (!isExpandable(prop)) continue;
-          if (seenRel.has(relKeyOf(prop, current))) continue;
-          seenRel.add(relKeyOf(prop, current));
+          const relKey = relKeyOf(prop, current);
+          if (seenRel.has(relKey)) continue;
+          seenRel.add(relKey);
           register(prop.table);
         }
       };
       register(table);
-      const walk = (target, current, inExpansion, expanded) => {
+      const claimed = /* @__PURE__ */ new Map();
+      const walk = (target, current, inExpansion, trail) => {
+        const where = trail.length > 0 ? `under "${trail.join(" → ")}"` : "at the top level of the query";
         for (const [key, prop] of Object.entries(current.fields)) {
           if (prop.kind !== "navigation") continue;
           const isCollection = prop.type === "collection";
-          if (prop.type !== "lookup" && !isCollection || isCollection && inExpansion) continue;
-          if (expanded.has(relKeyOf(prop, current))) continue;
-          expanded.add(relKeyOf(prop, current));
+          if (prop.type !== "lookup" && !isCollection) continue;
+          const label = `${current.logicalName}.${key}`;
+          if (isCollection && inExpansion) {
+            throw new Error(
+              `Cannot auto-expand "${label}": the Dataverse Web API only supports one-to-many $expand at the top level of a query, not nested inside another $expand ${where}. Narrow the query with pickProperties("${key}") to leave it out.`
+            );
+          }
+          const relKey = relKeyOf(prop, current);
+          const claimedBy = claimed.get(relKey);
+          if (claimedBy !== void 0) {
+            const why = relKey.startsWith("self:") ? `Self-referencing relationships cannot be expanded from both sides of one request — the Web API cross-wires the lookup and its inverse collection.` : `A relationship can only be expanded once per query.`;
+            const via = claimedBy.length > 0 ? `"${claimedBy.join(" → ")}"` : "the top level";
+            throw new Error(
+              `Cannot auto-expand "${label}" ${where}: this expands the same relationship as an expand already issued from ${via}. ${why} Narrow the query with pickProperties() so only one of them is expanded.`
+            );
+          }
+          claimed.set(relKey, trail);
           target.expand(key, (sub) => {
             sub.select(...pickKeys(prop.table));
-            walk(sub, prop.table, true, expanded);
+            walk(sub, prop.table, true, [...trail, label]);
           });
         }
       };
-      walk(query, table, false, /* @__PURE__ */ new Set());
+      walk(query, table, false, []);
       query.select(...pickKeys(table));
     }
     if (options?.filter) query.filter(options.filter);
@@ -3458,7 +3475,43 @@
         children: collection(cfg.collectionNav, () => TestTable0)
       }
     });
-    return { client, TestTable0, TestTable };
+    const TestTablePlain = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: { ...baseFields }
+    });
+    const TestTableFlat = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: { ...baseFields, testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTable0) }
+    });
+    const TestTableLookupSide = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: {
+        ...baseFields,
+        testLookup: lookupId("nnsyc200_Test_Lookup", () => TestTablePlain),
+        testLookupNav: lookup("nnsyc200_Test_Lookup", () => TestTablePlain)
+      }
+    });
+    const TestTableCollectionSide = new DataverseTable({
+      logicalName: cfg.logicalName,
+      entitySetName: cfg.entitySetName,
+      client,
+      fields: { ...baseFields, children: collection(cfg.collectionNav, () => TestTablePlain) }
+    });
+    return {
+      client,
+      TestTable0,
+      TestTable,
+      TestTablePlain,
+      TestTableFlat,
+      TestTableLookupSide,
+      TestTableCollectionSide
+    };
   }
 
   class FixtureTracker {
@@ -3719,7 +3772,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-01T20:05:53.806Z"}
+      meta.textContent = `build ${"2026-10-02T12:49:53.779Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3812,7 +3865,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-01T20:05:53.806Z",
+          build: "2026-10-02T12:49:53.779Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3831,7 +3884,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-01T20:05:53.806Z"}\``,
+        `Build: \`${"2026-10-02T12:49:53.779Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
