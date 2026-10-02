@@ -1,7 +1,7 @@
 import { expect, test } from "vitest"
 import {
   DataverseTable, DataverseClient, primaryKey, string, number, choice, NumberField,
-  lookup, collection, fetchOdata, any, all, eq, ne, gt, and, FieldRef,
+  lookup, collection, lookupId, fetchOdata, any, all, eq, ne, gt, and, FieldRef,
   groupby, sum, count, average, min, max, buildTableQueryAst, EqualUserId,
 } from "../src"
 
@@ -312,4 +312,53 @@ test("buildTableQueryAst accepts FilterExpr and proxy callbacks in filter", () =
   const astFn = buildTableQueryAst(Account, { filter: f => EqualUserId(f.revenue) })
   expect(astFn.filters).toHaveLength(1)
   expect(astFn.filters![0]).toMatchObject({ type: "fn", fnName: "EqualUserId", values: [] })
+})
+
+test("buildTableQueryAst drops lookupId columns paired with expanded lookups", () => {
+  const Child: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "children", logicalName: "child",
+    fields: { id: primaryKey("childid"), name: string("name") },
+  })
+  const Root: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "roots", logicalName: "root",
+    fields: {
+      id: primaryKey("rootid"),
+      childId: lookupId("child_link", () => Child as any),
+      child: lookup("child_link", () => Child as any), // same relationship as childId
+    },
+  })
+
+  const ast = buildTableQueryAst(Root, undefined, true)
+  // childId's `_child_link_value` is excluded from $select; the nav is expanded once.
+  expect(ast.select).not.toContain("_child_link_value")
+  expect(ast.expands!.map(e => e.navigation)).toEqual(["child_link"])
+  expect(ast.select).toContain("rootid")
+})
+
+test("buildTableQueryAst expands only one side of a self-referencing relationship", () => {
+  // Mirrors the live-org evidence: N:1 and its inverse 1:N on the same entity set —
+  // expanding both made Dataverse mix the expansions (nav returned null, the
+  // related record showed up under the collection key instead).
+  const Self = new DataverseTable({
+    client, entitySetName: "selftables", logicalName: "selftable",
+    fields: { id: primaryKey("sid"), name: string("name") },
+  })
+  const T: DataverseTable<any> = new DataverseTable({
+    client, entitySetName: "selftables", logicalName: "selftable",
+    fields: {
+      id: primaryKey("selfid"),
+      name: string("name"),
+      parentNav: lookup("self_lookup", () => Self),        // N:1 side of the self relationship
+      parentId: lookupId("self_lookup", () => Self),       // paired `_value` selector (same relationship)
+      kids: collection("selftables_kids", () => Self as any), // inverse 1:N side of the same self relationship
+    },
+  })
+
+  const ast = buildTableQueryAst(T, undefined, true)
+  // The lookup side wins; the inverse collection of the self relationship is skipped.
+  expect(ast.expands!.map(e => e.navigation)).toEqual(["self_lookup"])
+
+  // `_value` stays in $select — live probe P3 proved _value + same-nav expand is legal.
+  expect(ast.select).toContain("_self_lookup_value")
+  expect(ast.select).toContain("selfid")
 })

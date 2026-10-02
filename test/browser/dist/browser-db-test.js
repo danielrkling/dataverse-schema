@@ -1376,37 +1376,37 @@
     query.select();
     if (expandNavigation) {
       const seenRel = /* @__PURE__ */ new Set();
-      const skipIt = (prop, inExpansion) => {
-        if (prop.kind !== "navigation") return true;
-        const isCollection = prop.type === "collection";
-        if (prop.type !== "lookup" && !isCollection) return true;
-        if (isCollection && inExpansion) return true;
-        if (seenRel.has(String(prop.logicalName))) return true;
-        return false;
+      const relKeyOf = (prop, current) => {
+        const rel = prop.table?.entitySetName === current.entitySetName ? `self:${current.entitySetName}` : String(prop.logicalName);
+        return isExpandable(prop) ? rel : String(prop.logicalName);
       };
-      const register = (current, inExpansion) => {
-        for (const prop of Object.values(current.fields)) {
-          if (skipIt(prop, inExpansion)) continue;
-          seenRel.add(String(prop.logicalName));
-          register(prop.table, true);
-        }
-      };
-      register(table, false);
+      const isExpandable = (prop) => prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection");
       const pickKeys = (t) => {
         const keys = [];
         for (const [key, prop] of Object.entries(t.fields)) {
           if (prop.kind === "value") keys.push(key);
-          else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
+          else if (prop.type === "lookupId" && t.entitySetName === prop.table?.entitySetName) {
+            keys.push(key);
+          } else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key);
         }
         return keys;
       };
+      const register = (current) => {
+        for (const prop of Object.values(current.fields)) {
+          if (!isExpandable(prop)) continue;
+          if (seenRel.has(relKeyOf(prop, current))) continue;
+          seenRel.add(relKeyOf(prop, current));
+          register(prop.table);
+        }
+      };
+      register(table);
       const walk = (target, current, inExpansion, expanded) => {
         for (const [key, prop] of Object.entries(current.fields)) {
           if (prop.kind !== "navigation") continue;
           const isCollection = prop.type === "collection";
           if (prop.type !== "lookup" && !isCollection || isCollection && inExpansion) continue;
-          if (expanded.has(String(prop.logicalName))) continue;
-          expanded.add(String(prop.logicalName));
+          if (expanded.has(relKeyOf(prop, current))) continue;
+          expanded.add(relKeyOf(prop, current));
           target.expand(key, (sub) => {
             sub.select(...pickKeys(prop.table));
             walk(sub, prop.table, true, expanded);
@@ -3719,7 +3719,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-01T19:53:26.603Z"}
+      meta.textContent = `build ${"2026-10-01T20:05:53.806Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3812,7 +3812,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-01T19:53:26.603Z",
+          build: "2026-10-01T20:05:53.806Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3831,7 +3831,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-01T19:53:26.603Z"}\``,
+        `Build: \`${"2026-10-01T20:05:53.806Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

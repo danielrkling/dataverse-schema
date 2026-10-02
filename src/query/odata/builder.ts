@@ -681,41 +681,49 @@ export function buildTableQueryAst<T extends GenericProperties>(
   // Users narrow via pickProperties to keep expands out.
   if (expandNavigation) {
     const seenRel = new Set<string>()
-    const skipIt = (prop: any, inExpansion: boolean): boolean => {
-      if (prop.kind !== "navigation") return true
-      const isCollection = prop.type === "collection"
-      if (prop.type !== "lookup" && !isCollection) return true
-      // Dataverse rejects a one-to-many expand nested inside another expansion.
-      if (isCollection && inExpansion) return true
-      // A relationship is expanded at most once per query.
-      if (seenRel.has(String(prop.logicalName))) return true
-      return false
+    // Dedupe key for an expandable relationship. Self-referencing relationships
+    // (N:1 + its inverse 1:N on the same entity set) are keyed as one side: the
+    // org's expansion engine mixes the two directions when both are expanded in
+    // one request (P13/P10 probe evidence: lookup nav null, related record under
+    // the collection key). Lookup side takes priority (declaration order).
+    const relKeyOf = (prop: any, current: DataverseTable<any>): string => {
+      const rel = prop.table?.entitySetName === current.entitySetName
+        ? `self:${current.entitySetName}`
+        : String(prop.logicalName)
+      return isExpandable(prop) ? rel : String(prop.logicalName)
     }
-    // Pre-pass: register every relationship that will be expanded so `_select`
-    // keys can consistently drop the paired `_value` column of expanded lookups.
-    const register = (current: DataverseTable<any>, inExpansion: boolean): void => {
-      for (const prop of Object.values(current.fields) as any[]) {
-        if (skipIt(prop, inExpansion)) continue
-        seenRel.add(String(prop.logicalName))
-        register(prop.table, true)
-      }
-    }
-    register(table as DataverseTable<any>, false)
+    const isExpandable = (prop: any): boolean =>
+      prop.kind === "navigation" && (prop.type === "lookup" || prop.type === "collection")
     const pickKeys = (t: DataverseTable<any>): string[] => {
       const keys: string[] = []
       for (const [key, prop] of Object.entries(t.fields) as [string, any][]) {
         if (prop.kind === "value") keys.push(key)
-        else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key)
+        else if (prop.type === "lookupId" && t.entitySetName === prop.table?.entitySetName) {
+          // Self relationship: `_value` stays in $select — live probe P3 proved
+          // _value + same-nav expand coexists legally.
+          keys.push(key)
+        } else if (prop.type === "lookupId" && !seenRel.has(String(prop.logicalName))) keys.push(key)
       }
       return keys
     }
+    // Pre-pass: register every relationship that will be expanded so `_select`
+    // keys can consistently drop the paired `_value` column of expanded lookups.
+    const register = (current: DataverseTable<any>): void => {
+      for (const prop of Object.values(current.fields) as any[]) {
+        if (!isExpandable(prop)) continue
+        if (seenRel.has(relKeyOf(prop, current))) continue
+        seenRel.add(relKeyOf(prop, current))
+        register(prop.table)
+      }
+    }
+    register(table as DataverseTable<any>)
     const walk = (target: ODataQuery<any>, current: DataverseTable<any>, inExpansion: boolean, expanded: Set<string>): void => {
       for (const [key, prop] of Object.entries(current.fields) as [string, any][]) {
         if (prop.kind !== "navigation") continue
         const isCollection = prop.type === "collection"
         if ((prop.type !== "lookup" && !isCollection) || (isCollection && inExpansion)) continue
-        if (expanded.has(String(prop.logicalName))) continue
-        expanded.add(String(prop.logicalName))
+        if (expanded.has(relKeyOf(prop, current))) continue
+        expanded.add(relKeyOf(prop, current))
         target.expand(key as any, (sub: any) => {
           sub.select(...pickKeys(prop.table))
           walk(sub, prop.table, true, expanded)
