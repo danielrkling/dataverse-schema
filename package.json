@@ -1,69 +1,18 @@
 {
-  "name": "dataverse-schema",
-  "version": "2.0.0",
-  "description": "A Schema library designed for Microsoft Dataverse to aid in Web API calls",
+  "name": "dataverse-schema-monorepo",
+  "private": true,
   "type": "module",
-  "files": [
-    "dist"
+  "workspaces": [
+    "packages/*"
   ],
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "keywords": [
-    "dataverse",
-    "webresource",
-    "schema",
-    "dynamics",
-    "crm",
-    "api"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/danielrkling/dataverse-schema.git"
-  },
-  "author": "LeviEyal",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/danielrkling/dataverse-schema/issues"
-  },
-  "homepage": "https://github.com/danielrkling/dataverse-schema#readme",
-  "devDependencies": {
-    "@tanstack/db": "^0.8.7",
-    "@vitest/coverage-v8": "^3.2.7",
-    "fake-indexeddb": "^6.2.5",
-    "jsdom": "^26.1.0",
-    "msw": "^2.14.6",
-    "tsdown": "^0.22.14",
-    "valibot": "^1.4.2",
-    "vite": "^6.2.6",
-    "vite-plugin-dts": "^4.5.3",
-    "vitest": "^3.1.1"
-  },
-  "dependencies": {
-    "@standard-schema/spec": "^1.1.0"
-  },
-  "peerDependencies": {
-    "@tanstack/db": "^0.8.7"
-  },
-  "peerDependenciesMeta": {
-    "@tanstack/db": {
-      "optional": true
-    }
-  },
   "scripts": {
-    "build": "tsdown",
-    "build:browser-test": "vite build --mode browser-test && vite build --mode browser-db-test",
-    "build:browser-db-test": "vite build --mode browser-db-test",
-    "dev": "vite",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "test:types": "vitest run --typecheck --typecheck.include=\"test/*typecheck*.test.ts\""
+    "build": "npm run build -w @dataverse-schema/sync && npm run build -w dataverse-schema",
+    "build:browser-test": "npm run build:browser-test -w dataverse-schema",
+    "test": "npm run test -w @dataverse-schema/sync && npm run test -w dataverse-schema",
+    "test:types": "npm run test:types -w dataverse-schema",
+    "typecheck": "npm run typecheck -w @dataverse-schema/sync; npm run typecheck -w dataverse-schema"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
   }
 }

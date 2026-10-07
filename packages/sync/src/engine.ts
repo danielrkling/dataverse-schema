@@ -1,28 +1,61 @@
 import { type Database, openDB } from "./idb";
-import { type DataverseTable } from "dataverse-schema";
-import { type GenericProperties } from "dataverse-schema";
-import { getEtag } from "dataverse-schema";
-import { isConcurrencyError, isKeyViolation, serializeError } from "./classifiers";
-import { isDeterministicFailure } from "./error-codes";
 import { isMetaKey, isMetaOnly, valuesEqual } from "./util";
 import { MutationPersistenceError, type QueuedMutation } from "./types";
+import { isDeterministicFailure as defaultIsDeterministicFailure, serializeError } from "./errors";
+/**
+ * Generic offline sync engine — the product-agnostic core of the
+ * `dataverse-schema` sync layer, extracted so a second adapter (e.g.
+ * SharePoint via Microsoft Graph) can reuse the identical flush/retry/
+ * conflict machinery.
+ *
+ * The engine knows IndexedDB, BroadcastChannel, web locks, retry/backoff,
+ * etag freshness bookkeeping and conflict diffing. It does **not** know
+ * Dataverse or SharePoint: it talks to the backend only through the
+ * {@link SyncTable} interface, which {@link DataverseTable} satisfies
+ * structurally (see packages/dataverse/src/table.ts) and which each product
+ * package adapts for its own table type.
+ */
 
-/** Options for {@link SyncEngine} construction. */
+/** The table contract SyncEngine needs — a structural subset of `DataverseTable`. */
+export type SyncTable = {
+    /** Dataverse entity set name (or equivalent collection key), used as the store name. */
+    entitySetName: string;
+    /** Primary key descriptor: `key` is the TypeScript property name stored in IDB. */
+    primaryKey: { key: string };
+    /** The table's field definitions, in map order, used for conflict diffing. */
+    fields: Record<string, unknown>;
+    getPrimaryId(value: any): string | undefined;
+    getRecord(id: string): Promise<any>;
+    createRecord(
+        value: any,
+        options?: { signal?: AbortSignal; overriddenCreatedOn?: Date | string },
+    ): Promise<any>;
+    updateRecord(id: string, value: any, options?: { signal?: AbortSignal; ifMatch?: string }): Promise<any>;
+    deleteRecord(id: string, options?: { signal?: AbortSignal; ifMatch?: string }): Promise<any>;
+};
+
+/** Reads the concurrency token (`$etag`) from a record. Injected, not imported, so the engine stays product-agnostic. */
+export type EtagReader = (value: any) => string | undefined;
+
+/** Default etag reader: the library's `$etag` record convention. */
+const defaultGetEtag: EtagReader = (value) => value?.["$etag"];
+
+/** Options for constructing a generic {@link SyncEngine}. */
 export type SyncEngineOptions = {
     /** Name for the engine's IndexedDB database and BroadcastChannel. Unique per instance — two DBs with the same name share the flush lock. */
     name: string;
     /** Tables the engine can sync; keyed by `entitySetName`. */
-    tables: DataverseTable<GenericProperties>[];
+    tables: SyncTable[];
     /** Schema version for the IndexedDB database; grows when late-registered collections need new stores. */
     version: number;
     /**
      * When true, queued inserts replay with the offline transaction time as
-     * `overriddencreatedon` (the "Record Created On" attribute), so the
-     * record's `createdon` shows when it was created offline rather than
-     * when the queue was flushed. Requires the flushing user's security
-     * role to include `prvOverrideCreatedOnCreatedBy`.
+     * `overriddenCreatedOn` (the Dataverse "Record Created On" column),
+     * passed as a `createRecord` option — see DataverseTable.MutationOptions.
      */
     overrideCreatedOn?: boolean;
+    /** Reads the concurrency token from server records. Defaults to `$etag` (the library's record convention). */
+    getEtag?: EtagReader;
     /**
      * Retry budget per mutation: failed mutations are re-attempted with
      * exponential backoff until they are sent this many times, then moved to
@@ -48,6 +81,14 @@ export type SyncEngineOptions = {
      * on explicit user action.
      */
     flushOnOnline?: boolean;
+    /**
+     * Classifies a thrown error for the flush loop: when `deterministic` is
+     * true the mutation skips its remaining retry budget and moves straight
+     * to the errored store. Injected so Dataverse codes and SharePoint/Graph
+     * semantics stay product-side. Defaults to a generic HTTP-status
+     * heuristic (see errors.ts isDeterministicFailure).
+     */
+    isDeterministicFailure?: (error: unknown) => boolean;
 };
 
 const DEFAULT_MAX_MUTATION_ATTEMPTS = 3;
@@ -126,16 +167,15 @@ export type RetryOptions = {
  * The vanilla offline sync engine: a durable IndexedDB mutation queue with a
  * flush cycle (web-lock serialized, cross-tab broadcast), deterministic
  * failure classification, etag freshness bookkeeping, and conflict
- * resolutions (force / rebase / discard / plain retry). It talks to Dataverse
- * through the registered {@link DataverseTable}s and knows nothing about
- * TanStack DB; adapters (see src/tanstack-db.ts) only map their mutation
- * format into {@link QueuedMutation} and feed it to {@link enqueue}.
+ * resolutions (force / rebase / discard / plain retry). It talks to the
+ * backend through the registered {@link SyncTable}s and knows nothing about
+ * any product's HTTP layer; adapters only map their mutation format into
+ * {@link QueuedMutation} and feed it to {@link enqueue}.
  */
 export class SyncEngine {
     name: string;
     version: number;
-    // Widened deliberately: the sync DB stores heterogeneous tables.
-    readonly tables = new Map<string, DataverseTable<GenericProperties>>();
+    readonly tables = new Map<string, SyncTable>();
 
     MUTATION_QUEUE_NAME = "Mutations"
     ERRORED_MUTATIONS_NAME = "Errored Mutations"
@@ -169,6 +209,10 @@ export class SyncEngine {
     // to read the current state (see the conflict-dashboard use case).
     private mutationListeners = new Set<() => void>()
 
+    // Injected product adapters (see SyncEngineOptions).
+    private getEtag: EtagReader
+    private isDeterministicFailure: (error: unknown) => boolean
+
     constructor(options: SyncEngineOptions) {
         this.name = options.name;
         this.channel = new BroadcastChannel(options.name)
@@ -179,6 +223,8 @@ export class SyncEngine {
         this.retryBaseDelay = options.retryBaseDelay ?? DEFAULT_RETRY_BASE_DELAY;
         this.retryMaxDelay = options.retryMaxDelay ?? DEFAULT_RETRY_MAX_DELAY;
         this.flushOnOnline = options.flushOnOnline !== false;
+        this.getEtag = options.getEtag ?? defaultGetEtag;
+        this.isDeterministicFailure = options.isDeterministicFailure ?? defaultIsDeterministicFailure;
         for (const table of options.tables) this.tables.set(table.entitySetName, table);
 
         // Listen for tab sync & cancellation signals across browser tabs
@@ -201,8 +247,9 @@ export class SyncEngine {
     }
 
     // Captured from SyncEngineOptions: replay queued inserts with the offline
-    // transaction time as `overriddencreatedon` so `createdon` reflects when
-    // the record was created offline, not when the queue was flushed.
+    // transaction time as `overriddenCreatedOn` (a createRecord option), so
+    // `createdon` reflects when the record was created offline — not when the
+    // queue was flushed.
     overrideCreatedOn = false;
     // Retry budget per mutation before it moves to the errored store.
     maxAttempts: number
@@ -239,7 +286,7 @@ export class SyncEngine {
 
     private notifyMutationsChanged(): void {
         for (const listener of [...this.mutationListeners]) {
-            try { listener(); } catch (err) { console.warn("[dataverse-offline] listener failed:", err); }
+            try { listener(); } catch (err) { console.warn("[sync-engine] listener failed:", err); }
         }
     }
 
@@ -287,7 +334,7 @@ export class SyncEngine {
                     // Another tab still holds an old-version connection; our
                     // own "versionchange" close below is what unblocks it.
                     console.warn(
-                        `[dataverse-offline] DB "${self.name}" upgrade to v${blockedVersion} ` +
+                        `[sync-engine] DB "${self.name}" upgrade to v${blockedVersion} ` +
                             `blocked while another tab holds a v${currentVersion} connection`,
                     );
                 },
@@ -419,10 +466,10 @@ export class SyncEngine {
     }
 
     /**
-     * Flushes the mutation queue to Dataverse. After a successful flush the
-     * authoritative server records (carrying fresh etags) are broadcast via the
-     * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
-     * and IDB cache store — see the offline adapter's handleTabMessage.
+     * Flushes the mutation queue to the backend. After a successful flush the
+     * authoritative server records (carrying fresh etags) are broadcast via
+     * MUTATIONS_ADDED so every collection reconciles its in-memory row and IDB
+     * cache store — see the offline adapter's handleTabMessage.
      */
     public async flushQueue() {
         // The Web Lock is keyed by the database name (this.name). Cross-tab
@@ -478,7 +525,7 @@ export class SyncEngine {
                 try {
                     if (mutation.type === "insert") {
                         // `overrideCreatedOn` replays the offline transaction
-                        // time as `overriddencreatedon`; without it the record
+                        // time as `overriddenCreatedOn`; without it the record
                         // would show the flush time as its `createdon`.
                         const record = await table.createRecord(
                             mutation.value,
@@ -494,7 +541,7 @@ export class SyncEngine {
                         // back to the full optimistic row in that case.
                         const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
                         const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? undefined : mutation.ifMatch });
-                        const etag = getEtag(record);
+                        const etag = this.getEtag(record);
                         if (etag) {
                             // Persist the new etag so a later flush (or a
                             // sibling update still queued for this key) uses it
@@ -515,17 +562,16 @@ export class SyncEngine {
                     changed = true;
                 } catch (e) {
                     if (!navigator.onLine) break; // Pause queue processing if offline
-                    console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
+                    console.error(`[sync-engine] Failed to flush mutation ${mutation.id}:`, e);
                     mutation.error = serializeError(e);
                     mutation.lastAttemptAt = Date.now();
-                    // Deterministic failures (412 concurrency, duplicate-key
-                    // violations, missing records, validation rejects) cannot
+                    // Deterministic failures (product-classified: concurrency
+                    // conflicts, duplicate keys, validation rejects) cannot
                     // behave any differently on a retry, so skip the retry
                     // cycle entirely and move the mutation straight to the
-                    // errored store — interpretError explains why, and how the
-                    // operator can get past it. Transient failures (throttle,
-                    // 5xx, network) keep the retry/backoff cycle below.
-                    if (isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
+                    // errored store. Transient failures (throttle, 5xx,
+                    // network) keep the retry/backoff cycle below.
+                    if (this.isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
                     else mutation.attempts++;
                     if (mutation.attempts >= this.maxAttempts) {
                         mutation.nextAttemptAt = undefined;
@@ -657,8 +703,8 @@ export class SyncEngine {
      * - **Force** (`{ force: true }`): re-applied without its `If-Match`
      *   precondition — updates overwrite the server's current state
      *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
-     *   concurrency failure (see {@link isConcurrencyError}) when the local
-     *   changes should win regardless of concurrent server-side edits.
+     *   concurrency failure when the local changes should win regardless of
+     *   concurrent server-side edits.
      * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
      *   record and re-applies the local changes on top of its *fresh* etag
      *   — a "resend my edits, accept the server's state as the base"
@@ -704,7 +750,7 @@ export class SyncEngine {
                 let fresh: string | undefined;
                 try {
                     const server = await table.getRecord(mutation.key);
-                    fresh = server ? getEtag(server) : undefined;
+                    fresh = server ? this.getEtag(server) : undefined;
                 } catch {
                     // Server unreachable while rebasing — fall back to the
                     // freshest etag this DB has already successfully
@@ -777,7 +823,7 @@ export class SyncEngine {
             await tx.done;
             this.notifyMutationsChanged();
         } catch (e) {
-            console.error("[dataverse-offline] Error writing mutation to IDB:", e);
+            console.error("[sync-engine] Error writing mutation to IDB:", e);
             throw new MutationPersistenceError(
                 "Failed to persist offline mutations",
                 mutations.map((mutation) => mutation.id),

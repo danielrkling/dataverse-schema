@@ -2,38 +2,37 @@
 
 ## Project Overview
 
-`dataverse-schema` is a strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. It provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations. Ships as an ES module with a separate `@tanstack/db` integration entry point.
+npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. It provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations. Ships as an ES module with a separate `@tanstack/db` integration entry point.
+
+- `packages/dataverse` — the library itself (npm package `dataverse-schema`)
+- `packages/sync` — `@dataverse-schema/sync`: the product-agnostic offline engine (durable IndexedDB mutation queue, no Dataverse knowledge); the Dataverse adapter lives in `packages/dataverse/src/sync/`
 
 ## Build, Lint, and Test Commands
 
+Root scripts delegate into workspaces:
+
 ```bash
-# Build (tsdown → dist/index.mjs, dist/tanstack-db/index.mjs)
+# Build both packages (sync first — dataverse depends on it)
 npm run build
 
-# Dev server (vite)
+# Dev server / browser-test bundle (run inside packages/dataverse)
 npm run dev
+npm run build:browser-test   # → packages/dataverse/test/browser/dist/browser-test.js (see test/browser/README.md)
 
-# Build the browser integration-test bundle (vite, mode=browser-test)
-npm run build:browser-test   # → test/browser/dist/browser-test.js (see test/browser/README.md)
-
-# Run all tests (vitest)
+# Run all tests (vitest, both workspaces)
 npm test
 
-# Run tests in watch mode
-npm run test:watch
-
 # Run a single test file
-npx vitest run test/fields.test.ts
+cd packages/dataverse && npx vitest run test/fields.test.ts
 
-# Run tests matching a name pattern
-npx vitest run -t "table.getRecord"
-
-# Typecheck (no emit)
+# Typecheck both packages
 npm run typecheck
 
 # Verify expectTypeOf assertions with real tsc (type-level tests)
 npm run test:types
 ```
+
+`@dataverse-schema/sync` is resolved to source (`../sync/src`) by `packages/dataverse/tsconfig.json` paths and `vitest.config.ts` alias during dev/test; builds use the workspace dist.
 
 There is no linter or formatter configured. Do not add linting unless the user explicitly asks.
 
@@ -51,7 +50,7 @@ There is no linter or formatter configured. Do not add linting unless the user e
 ## Code Structure
 
 ```
-src/
+packages/dataverse/src/
   index.ts                     — barrel re-exports the public API (client, table, fields, query builders, util, types, functions)
   client.ts                    — DataverseClient: HTTP client for Dataverse Web API (auth, CRUD, batch, functions/actions)
   table.ts                     — DataverseTable class (schema + CRUD + query methods) and DataverseIntersectTable
@@ -80,13 +79,16 @@ src/
   tanstack-db.ts               — TanStack DB adapter: dataverseCollectionOptions,
                                  dataverseOfflineCollectionOptions (offline factory over
                                  SyncEngine), serializeMutation (PendingMutation mapping)
-  sync/                        — Vanilla offline sync engine (no TanStack dependency)
-    index.ts                   — barrel (also re-exported from the package root)
-    queue.ts                   — SyncEngine: IndexedDB mutation queue, flush/retries,
-                                 force/rebase resolutions, conflict details, etag cache
-    types.ts                   — QueuedMutation, MutationPersistenceError
+  sync/                        — Dataverse adapter over the generic engine
+    index.ts                   — barrel: re-exports the generic engine from @dataverse-schema/sync
+                                 plus Dataverse classifiers/error interpretation
+    adapter.ts                 — dataverseSyncEngine(): injects getEtag ($etag) + the Dataverse
+                                 deterministic-failure classifier into the generic SyncEngine
+    types.ts                   — re-export surface (QueuedMutation, MutationPersistenceError)
     classifiers.ts             — serializeError, isConcurrencyError, isKeyViolation
-    util.ts                    — plainClone, valuesEqual, isMetaKey/isMetaOnly
+    error-codes.ts             — DATVERSE_ERROR_CODES table, interpretError, isDeterministicFailure
+  (generic engine lives in packages/sync: engine.ts — SyncEngine over a
+   SyncTable interface; idb.ts — zero-dep IndexedDB wrapper; types/util/errors)
 test/
   util.test.ts                 — util helpers (etag, xml, dates, image URLs)
   filter-render.test.ts        — FilterExpr rendering to OData + FetchXML (incl. choice transforms)

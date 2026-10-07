@@ -1,7 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "paths": {}
-  },
+  "compilerOptions": { "paths": {} },
   "include": ["src/tanstack-db"]
 }

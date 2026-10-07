@@ -2,3 +2,4 @@ node_modules
 builds
 coverage
 temp
+dist

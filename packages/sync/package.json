@@ -1,0 +1,41 @@
+{
+  "name": "@dataverse-schema/sync",
+  "version": "0.1.0",
+  "description": "Generic offline sync engine (durable IndexedDB mutation queue with flush/retry/conflict machinery) for the dataverse-schema family",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "keywords": [
+    "offline",
+    "sync",
+    "indexeddb",
+    "mutation-queue",
+    "dataverse"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielrkling/dataverse-schema.git",
+    "directory": "packages/sync"
+  },
+  "author": "LeviEyal",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "tsdown": "^0.22.14"
+  }
+}

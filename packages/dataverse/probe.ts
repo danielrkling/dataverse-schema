@@ -1,4 +1,4 @@
-import { fetchOdata, fetchXml, eq, gt, lt, and, count, sum, number, primaryKey, string, bool, boolean, datetime, lookup, lookupId, collection, DataverseTable, sum, count, groupby, average, min, max } from "./src"
+import { fetchOdata, fetchXml, eq, gt, lt, and, count, sum, number, primaryKey, string, bool, boolean, datetime, lookup, lookupId, collection, DataverseTable, sum, count, groupby, average, min, max } from "./packages/dataverse/src"
 const client = new DataverseClient({ url: "http://localhost" });
 const Address = new DataverseTable({ client, entitySetName: "addresses", logicalName: "address", fields: { id: primaryKey("addressid"), street: string("street_Address"), zip: number("zip_code") } });
 const Person = new DataverseTable({ client, entitySetName: "people", logicalName: "person", fields: { pk: primaryKey("personid"), name: string("fullname"), age: number("person_age"), active: boolean("active") } });
