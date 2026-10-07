@@ -3,3 +3,4 @@ builds
 coverage
 temp
 dist
+tsconfig.tsbuildinfo
