@@ -6,6 +6,9 @@ npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript libra
 
 - `packages/dataverse` — the library itself (npm package `dataverse-schema`)
 - `packages/sync` — `@dataverse-schema/sync`: the product-agnostic offline engine (durable IndexedDB mutation queue, no Dataverse knowledge); the Dataverse adapter lives in `packages/dataverse/src/sync/`
+- `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.
+
+Maintenance note: `packages/sharepoint/src/` fields are intentionally a minimal `FieldBase`/factory set mirroring the Dataverse field-class conventions (factory names `text`/`number`/`bool`/`date`/`datetime`/`primaryKey`). They will converge into a shared `packages/core` — do not build SharePoint-specific abstractions on top of the client/table beyond this slice without first considering a core extraction.
 
 ## Build, Lint, and Test Commands
 
