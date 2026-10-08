@@ -212,14 +212,20 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             const folder = await this.rootFolder();
             const added = await this.client.addFile(folder, file.ref.name, file.ref.data as Blob | ArrayBuffer, { signal: options.signal, overwrite: file.overwrite });
             const itemId = await this.fileIdFromAdd(added);
-            // Metadata columns (everything but the file) go on via MERGE.
+            // Metadata columns (everything but the file) go on via MERGE with
+            // `If-Match: *`: the item was created milliseconds ago inside this
+            // same call, so a preconditioned etag is meaningless — and the
+            // legacy surface can evaluate an implicit (stale) etag here after
+            // the upload churned the item's etag, surfacing as an etag
+            // failure on a create. Unconditional metadata merge is the
+            // correct business semantics for this transaction.
             const metadataValues = { ...(value as Record<string, unknown>) } as Record<string, unknown>;
             delete metadataValues[file.key];
             if (Object.keys(metadataValues).length > 0) {
                 await this.client.mergeRecord(this.listTitle, itemId, {
                     __metadata: { type: await this.getType() },
                     ...this.transformValueToSharePoint(metadataValues),
-                });
+                }, { ifMatch: "*" });
             }
             const wire = await this.client.getRecord(this.listTitle, itemId);
             // content already uploaded inline — no further afterSave pass
