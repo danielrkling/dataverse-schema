@@ -54,12 +54,12 @@ test("references selected alone auto-expand with their standard carve-outs", () 
     );
 });
 
-test("expand() overrides the standard carve-outs where provided", () => {
+test("expand() ADDS extra props on top of the standard carve-outs (union)", () => {
     const q = Docs().query()
         .select((f) => [f.id, f.author])
-        .expand({ author: ["Id", "Title"] })
+        .expand({ author: ["JobTitle"] }) // additional prop, standard set kept
         .build();
-    expect(q).toBe("$select=Id,Author/Id,Author/Title&$expand=Author");
+    expect(q).toBe("$select=Id,Author/Id,Author/Title,Author/EMail,Author/JobTitle&$expand=Author");
 });
 
 test("where: choice/person/lookup/datetime filter literals follow the field type", () => {

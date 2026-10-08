@@ -7,10 +7,11 @@
  * @example
  * const q = Documents.query()
  *     .select((f) => [f.title, f.ko, f.status, f.author])
- *     .expand({ author: ["Id", "Title"], concurCodes: ["Id", "Title"] })
  *     .where((f) => and(eq(f.status, "Draft"), startsWith(f.title, "R")))
  *     .orderBy((f) => f.modified, "desc")
  *     .top(50);
+ * // references selected above expand themselves (person: Id/Title/EMail,
+ * // lookup: Id/Title); .expand({ author: ["JobTitle"] }) can add props.
  *
  * const items = await Documents.getRecords(q.build());
  */
@@ -37,10 +38,9 @@ function filterKey(field: FieldBase<any>): string {
 }
 
 /**
- * A typed handle to one table field inside a query. Comparison helpers
- * produce OData v3 filter fragments; the value types follow the field kind:
- * choices get display strings, reference fields get ids (+ email display value),
- * strings/numbers/booleans/Date.
+ * A typed handle to one table field inside a query. Comparators are free
+ * functions (eq/ne/gt/…/startsWith) that take a ref + value; the value types
+ * follow the field kind (choices: display strings, reference fields: ids.
  */
 export class SPFieldRef<F extends FieldBase<any>, TValue = any> {
     readonly field: F;
@@ -58,27 +58,6 @@ export class SPFieldRef<F extends FieldBase<any>, TValue = any> {
     /** Raw select key that flows to `$select` (documented for expand carve-outs). */
     toString(): string {
         return this.name;
-    }
-
-    /** Comparison literals are rendered per the field kind. */
-    eq(value: TValue): string { return `${filterKey(this.field)} eq ${literal(this.unwrapValue(value))}`; }
-    ne(value: TValue): string { return `${filterKey(this.field)} ne ${literal(this.unwrapValue(value))}`; }
-    gt(value: TValue): string { return `${filterKey(this.field)} gt ${literal(this.unwrapValue(value))}`; }
-    ge(value: TValue): string { return `${filterKey(this.field)} ge ${literal(this.unwrapValue(value))}`; }
-    lt(value: TValue): string { return `${filterKey(this.field)} lt ${literal(this.unwrapValue(value))}`; }
-    le(value: TValue): string { return `${filterKey(this.field)} le ${literal(this.unwrapValue(value))}`; }
-    /** OData v3: v3 has no `contains` — the canonical form is `substringof(needle, Field) eq true`. */
-    contains(value: string): string { return `substringof(${literal(value)}, ${filterKey(this.field)}) eq true`; }
-    startsWith(value: string): string { return `startswith(${filterKey(this.field)}, ${literal(value)})`; }
-    endsWith(value: string): string { return `endswith(${filterKey(this.field)}, ${literal(value)})`; }
-
-    private unwrapValue(value: TValue): unknown {
-        // reference fields filter on numeric ids; `{ id }` objects are accepted too
-        if (value !== null && typeof value === "object") {
-            const id = (value as { id?: unknown }).id;
-            return typeof id === "number" ? id : value;
-        }
-        return value;
     }
 }
 
@@ -176,10 +155,19 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
     /**
      * Expands reference/collection fields and adds their property carve-outs
      * to `$select` (`Author/Id, Author/Title`) — the same spell the legacy
-     * surface expects from `$select=$expand` pairs.
+     * surface expects from `$select=$expand` pairs. Only needed to override or
+     * *add* properties: plain references selected via {@link select} expand
+     * themselves with the standard carve-outs. Additional `.expand()` calls
+     * for the same key append props.
      */
     expand(spec: ExpandSpec<TFields>): this {
-        this._expand = { ...this._expand, ...spec };
+        const entries = spec as Partial<Record<string, readonly string[]>>;
+        for (const key of Object.keys(entries)) {
+            const props = entries[key];
+            if (!props?.length) continue;
+            const existing = (this._expand as Partial<Record<string, readonly string[]>>)[key] ?? [];
+            (this._expand as Partial<Record<string, readonly string[]>>)[key] = [...new Set([...existing, ...props])];
+        }
         return this;
     }
 
@@ -252,15 +240,35 @@ const DEFAULT_CARVE_OUTS = new Map<Function, readonly string[]>([
 type AnyRef = SPFieldRef<FieldBase<any>, any>;
 type RefValue<R> = R extends SPFieldRef<any, infer V> ? V : never;
 
-export function eq<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.eq(value); }
-export function ne<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.ne(value); }
-export function gt<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.gt(value); }
-export function ge<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.ge(value); }
-export function lt<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.lt(value); }
-export function le<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.le(value); }
-export function contains<R extends AnyRef>(ref: R, value: string): string { return ref.contains(value); }
-export function startsWith<R extends AnyRef>(ref: R, value: string): string { return ref.startsWith(value); }
-export function endsWith<R extends AnyRef>(ref: R, value: string): string { return ref.endsWith(value); }
+/** Reference fields filter on numeric ids; `{ id }` objects are accepted too. */
+function filterValue(value: unknown): unknown {
+    if (value !== null && typeof value === "object") {
+        const id = (value as { id?: unknown }).id;
+        return typeof id === "number" ? id : value;
+    }
+    return value;
+}
+
+function cmp(op: string, ref: AnyRef, value: unknown): string {
+    return `${filterKey(ref.field)} ${op} ${literal(filterValue(value))}`;
+}
+
+export function eq<R extends AnyRef>(ref: R, value: RefValue<R>): string { return cmp("eq", ref, value); }
+export function ne<R extends AnyRef>(ref: R, value: RefValue<R>): string { return cmp("ne", ref, value); }
+export function gt<R extends AnyRef>(ref: R, value: RefValue<R>): string { return cmp("gt", ref, value); }
+export function ge<R extends AnyRef>(ref: R, value: RefValue<R>): string { return cmp("ge", ref, value); }
+export function lt<R extends AnyRef>(ref: R, value: RefValue<R>): string { return cmp("lt", ref, value); }
+export function le<R extends AnyRef>(ref: R, value: RefValue<R>): string { return cmp("le", ref, value); }
+export function contains<R extends AnyRef>(ref: R, value: string): string {
+    // OData v3: no `contains()` — `substringof` with inverted args.
+    return `substringof(${literal(value)}, ${filterKey(ref.field)}) eq true`;
+}
+export function startsWith<R extends AnyRef>(ref: R, value: string): string {
+    return `startswith(${filterKey(ref.field)}, ${literal(value)})`;
+}
+export function endsWith<R extends AnyRef>(ref: R, value: string): string {
+    return `endswith(${filterKey(ref.field)}, ${literal(value)})`;
+}
 
 /** Per-call-site proxy over the table's declared fields (typed keys + refs). */
 export function buildProxy<TFields extends Record<string, FieldBase<any>>>(fields: TFields): QueryProxy<TFields> {
