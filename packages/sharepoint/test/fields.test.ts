@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { text, number, bool, date, datetime, json, people, lookupId, parseIdName } from "../src/fields";
+import { text, number, bool, date, datetime, json, people, person, lookupId, parseIdName } from "../src/fields";
 
 // --- date: real Date objects ---
 
@@ -33,33 +33,50 @@ test("json parses string columns and serializes objects back", () => {
 
 // --- people ---
 
-test("people reads unexpanded, expanded numbers and legacy string shapes", () => {
-    const f = people("OwnerId");
+test("person reads unexpanded, expanded numbers and legacy string shapes", () => {
+    const f = person("OwnerId");
     expect(f.fromSharePoint(null)).toBeNull();
     expect(f.fromSharePoint(0)).toBeNull(); // no-user sentinel
     expect(f.fromSharePoint(17)).toEqual({ id: 17 });
     expect(f.fromSharePoint({ __metadata: { type: "SP.FieldUserValue" }, Id: 17 })).toEqual({ id: 17 });
-    expect(f.fromSharePoint({ Id: 17, Title: "Jane Doe" })).toEqual({ id: 17, name: "Jane Doe" });
+    expect(f.fromSharePoint({ Id: 17, Title: "Jane Doe", EMail: "jane@x" })).toEqual({ id: 17, name: "Jane Doe", email: "jane@x" });
     expect(f.fromSharePoint("17;#Jane Doe")).toEqual({ id: 17, name: "Jane Doe" });
     expect(f.fromSharePoint("")).toBeNull();
+    expect(f.writeName).toBe("OwnerIdId"); // legacy REST write key
 });
 
-test("people writes send the plain numeric id; object writes validate shape", () => {
-    const f = people("OwnerId");
+test("person writes send the plain numeric id under <Name>Id; typed shape optional", () => {
+    const f = person("OwnerId");
+    const t = person("OwnerId", { writeShape: "typed" });
     expect(f.toSharePoint({ id: 17 })).toBe(17);
-    expect(f.toSharePoint(null as any)).toBeNull();
+    expect(f.toSharePoint(null)).toBeNull();
+    expect(t.toSharePoint({ id: 17 })).toEqual({ __metadata: { type: "SP.FieldUserValue" }, id: 17 });
     expect(() => f.toSharePoint({ id: "x" } as any)).toThrow(TypeError);
+});
+
+test("people reads expanded person result arrays, writes the <Name>Id envelope", () => {
+    const f = people("Members");
+    expect(f.fromSharePoint(null)).toEqual([]); // empty ⇔ []
+    expect(f.fromSharePoint({ results: [{ Id: 1, Title: "A", EMail: "a@x" }, { Id: 2, Title: "B" }] }))
+        .toEqual([{ id: 1, name: "A", email: "a@x" }, { id: 2, name: "B" }]);
+    expect(f.fromSharePoint([{ Id: 3 }, 4])).toEqual([{ id: 3 }, { id: 4 }]);
+    expect(f.writeName).toBe("MembersId");
+    expect(f.toSharePoint([{ id: 1 }, { id: 2 }] as any)).toEqual({ results: [1, 2] });
+    expect(() => f.toSharePoint([{ id: "?" }] as any)).toThrow(TypeError);
 });
 
 // --- lookupId ---
 
 test("lookupId reads LookupId-expanded objects and legacy strings", () => {
-    const f = lookupId("RefId");
+    const f = lookupId("Ref");
     expect(f.fromSharePoint(null)).toBeNull();
     expect(f.fromSharePoint({ __metadata: { type: "SP.FieldLookupValue" }, LookupId: 2 })).toEqual({ id: 2 });
     expect(f.fromSharePoint({ Id: 2, Title: "Project Alpha" })).toEqual({ id: 2, name: "Project Alpha" });
     expect(f.fromSharePoint("2;#Project Alpha")).toEqual({ id: 2, name: "Project Alpha" });
+    expect(f.writeName).toBe("RefId"); // derived write key
     expect(f.toSharePoint({ id: 2 } as any)).toBe(2);
+    expect(lookupId("Ref", { writeShape: "typed" }).toSharePoint({ id: 2 } as any))
+        .toEqual({ __metadata: { type: "SP.FieldLookupValue" }, id: 2 });
 });
 
 test("parseIdName handles id-only and empty legacy strings", () => {

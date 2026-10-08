@@ -97,9 +97,14 @@ export class SharePointClient {
      */
     async fetch(resource: string, options: RequestInit & { raw?: boolean } = {}): Promise<any> {
         const { raw, ...fetchOptions } = options;
+        // Bare paths are `_api`-scoped (the only REST surface this client
+        // serves); absolute URLs (e.g. from next links) pass through, and paths
+        // that already carry `_api` are honored as-is.
         const url = /^https?:\/\//i.test(resource)
             ? resource
-            : `${this.options.url}${resource.startsWith("/") ? "" : "/"}${resource}`;
+            : resource.replace(/^\/+/, "").startsWith("_api/")
+                ? `${this.options.url}/${resource}`.replace(/\/_api\/\/_api\//, "/_api/")
+                : `${this.api}${resource.startsWith("/") ? "" : "/"}${resource}`;
 
         const { token, requestDigest, headers: baseHeaders } = this.options;
         const method = (fetchOptions.method ?? "GET").toUpperCase();
@@ -381,6 +386,32 @@ export class SharePointClient {
             throw new Error(`List "${listTitle}" did not return a RootFolder ServerRelativeUrl`);
         }
         return value;
+    }
+
+    /**
+     * The current authenticated user (cookie session or Bearer identity):
+     * the `Web/CurrentUser` REST surface.
+     *
+     * @example
+     * const me = await client.getCurrentUser(); // { id, name, loginName, email }
+     */
+    async getCurrentUser(): Promise<{ id: number; name: string; loginName: string; email: string }> {
+        const data = await this.fetch("Web/CurrentUser?$select=Id,Title,LoginName,Email") ?? {};
+        const id = Number((data as any).Id);
+        if (!Number.isInteger(id) || id < 1) {
+            throw new SharePointHttpError(
+                "CurrentUser did not return a valid Id",
+                200,
+                "OK",
+                data,
+            );
+        }
+        return {
+            id,
+            name: String((data as any).Title ?? ""),
+            loginName: String((data as any).LoginName ?? ""),
+            email: String((data as any).Email ?? ""),
+        };
     }
 }
 

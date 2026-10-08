@@ -116,7 +116,8 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             const field = (this.fields as Record<string, FieldBase<any>>)[tsKey];
             if (!field) continue; // unknown/$-keys (e.g. $etag) are metadata-only
             if (field instanceof FileField) continue; // content flows through afterSave, never the item body
-            wire[(field as FieldBase<any>).name] = field.toSharePoint(raw);
+            const fieldWithWrite = field as FieldBase<any>;
+            wire[fieldWithWrite.writeName] = fieldWithWrite.toSharePoint(raw);
         }
         return wire;
     }
@@ -208,11 +209,8 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             // Document library: upload first — the file *is* the item.
             if (!file.ref.name) throw new Error(`document field "${file.key}" value requires { name, data } for upload`);
             const folder = await this.rootFolder();
-            const added = await this.client.addFile(folder, file.ref.name, file.ref.data as Blob | ArrayBuffer, { signal: options.signal });
-            const itemId = ((added as any)?.ListItemAllFields?.Id ?? (added as any)?.ListItemAllFields?.ID) as number | undefined;
-            if (itemId == null) {
-                throw new Error("Files/Add response did not carry ListItemAllFields.Id — cannot MERGE metadata onto the created item");
-            }
+            const added = await this.client.addFile(folder, file.ref.name, file.ref.data as Blob | ArrayBuffer, { signal: options.signal, overwrite: file.overwrite });
+            const itemId = await this.fileIdFromAdd(added);
             // Metadata columns (everything but the file) go on via MERGE.
             const metadataValues = { ...(value as Record<string, unknown>) } as Record<string, unknown>;
             delete metadataValues[file.key];
@@ -290,14 +288,40 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     }
 
     /** The FileRef to upload for this save, or null when nothing to upload. */
-    private fileData(value: Record<string, unknown>): { key: string; ref: FileRef } | null {
+    private fileData(value: Record<string, unknown>): { key: string; ref: FileRef; overwrite: boolean } | null {
         const keyOrUndefined = this._documentFieldKey();
         if (!keyOrUndefined) return null;
         const ref = value[keyOrUndefined] as FileRef | undefined;
         if (!ref || ref.data == null) return null;
-        if (typeof Blob !== "undefined" && ref.data instanceof Blob) return { key: keyOrUndefined, ref };
-        if (ref.data instanceof ArrayBuffer || ref.data instanceof Uint8Array) return { key: keyOrUndefined, ref };
+        if (typeof Blob !== "undefined" && ref.data instanceof Blob) return { key: keyOrUndefined, ref, overwrite: this.fileField().overwrite };
+        if (ref.data instanceof ArrayBuffer || ref.data instanceof Uint8Array) return { key: keyOrUndefined, ref, overwrite: this.fileField().overwrite };
         return null;
+    }
+
+    private fileField(): FileField {
+        const field = (this.fields as Record<string, FieldBase<any>>)[this._documentFieldKey()!];
+        return field as FileField;
+    }
+
+    /**
+     * Resolves the list item id behind an uploaded file. `Files/Add` carries
+     * `ListItemAllFields` in the verbose response on current tenants; when a
+     * template omits it, fall back to the explicit follow-up call
+     * (`GetFileByServerRelativeUrl(...)/ListItemAllFields?$select=Id`).
+     */
+    private async fileIdFromAdd(added: any): Promise<number> {
+        const nested = (added as any)?.ListItemAllFields?.Id ?? (added as any)?.ListItemAllFields?.ID;
+        if (typeof nested === "number" && Number.isInteger(nested)) return nested;
+        const url = (added as any)?.ServerRelativeUrl;
+        if (typeof url !== "string" || !url) {
+            throw new Error("Files/Add response carried neither ListItemAllFields.Id nor ServerRelativeUrl");
+        }
+        const byUrl = await this.client.fetch(`Web/GetFileByServerRelativeUrl('${encodeURIComponent(url)}')/ListItemAllFields?$select=Id`);
+        const id = (byUrl as any)?.Id ?? (byUrl as any)?.d?.Id;
+        if (typeof id !== "number" || !Number.isInteger(id)) {
+            throw new Error("Uploaded file item id could not be resolved (ListItemAllFields missing)");
+        }
+        return id;
     }
 
     /** Document-library root folder (server-relative), resolved once and cached. */
@@ -325,7 +349,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             throw new Error(`document field "${file.key}" value requires { name, data } to overwrite content`);
         }
         await this.client.addFile(folder, file.ref.name, file.ref.data as Blob | ArrayBuffer, {
-            overwrite: true,
+            overwrite: file.overwrite,
         });
     }
 

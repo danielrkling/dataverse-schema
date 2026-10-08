@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { SharePointClient } from "../src/client";
 import { SharePointTable } from "../src/table";
-import { text, number, bool, date, datetime, json, people, lookupId } from "../src/fields";
+import { text, number, bool, date, datetime, json, person, lookupId } from "../src/fields";
 import { primaryKey } from "../src/fields";
 import { text as ftext, datetime as fdatetime } from "../src/fields";
 
@@ -23,7 +23,7 @@ function makeTable() {
             due: date("DueDate"),
             created: datetime("Created"),
             meta: json("Meta0"),
-            owner: people("OwnerId"),
+            owner: person("OwnerId"),
             ref: lookupId("RefId"),
         },
     });
@@ -121,4 +121,28 @@ test("field factories map wire shapes", () => {
     expect(ftext("Title").fromSharePoint(null)).toBe("");
     expect(fdatetime("Created").toSharePoint(new Date("2026-03-05T06:07:08Z") as any)).toBe("2026-03-05T06:07:08.000Z");
     expect(fdatetime("Created").fromSharePoint(null)).toBeNull();
+});
+
+// --- concurrency (etag) semantics ---
+
+test("updateRecord etag precedence: explicit ifMatch > $etag; delete passes If-Match", async () => {
+    const Tasks = makeTable();
+    const mergeSpy = vi.spyOn(Tasks.client, "mergeRecord").mockResolvedValue(undefined);
+    const deleteSpy = vi.spyOn(Tasks.client, "deleteRecord").mockResolvedValue("7");
+
+    // explicit option wins over the record snapshot's $etag
+    await Tasks.updateRecord(7, { done: true, $etag: '"2"' } as any, { ifMatch: '"9"' });
+    expect(mergeSpy.mock.lastCall![3]).toMatchObject({ ifMatch: '"9"' });
+
+    // otherwise the record's $etag drives the precondition (exact match ⇒ no 412)
+    await Tasks.updateRecord(7, { done: true, $etag: '"2"' } as any);
+    expect(mergeSpy.mock.calls.at(-1)![3]).toMatchObject({ ifMatch: '"2"' });
+
+    // missing $etag + missing option → no If-Match header at all (unconditional)
+    await Tasks.updateRecord(7, { done: true } as any);
+    expect(mergeSpy.mock.calls.at(-1)![3]).toMatchObject({ ifMatch: undefined });
+
+    // delete forwards any etag it is given (server 412s on mismatch)
+    await Tasks.deleteRecord(7, { ifMatch: '"2"' });
+    expect(deleteSpy.mock.lastCall?.slice(0)).toEqual(["Tasks", 7, { ifMatch: '"2"' }]);
 });

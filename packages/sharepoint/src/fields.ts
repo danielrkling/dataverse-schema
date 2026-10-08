@@ -19,7 +19,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { ListItemId } from "./types";
 import type { SharePointClient } from "./client";
 
-export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "lookup" | "choice" | "multiChoice" | "file";
+export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "people" | "lookup" | "choice" | "multiChoice" | "file";
 
 export type FieldOptions<T> = {
     /** Standard-Schema (valibot/Zod/ArkType) schema for the field's read value. */
@@ -37,6 +37,15 @@ export class FieldBase<T> {
         this.name = name;
         this.type = type;
         this.options = options;
+    }
+
+    /**
+     * The wire key write payloads target. Defaults to the read `name`;
+     * reference fields override it to SharePoint's derived `<name>Id` property
+     * (see ReferenceFieldOptions).
+     */
+    get writeName(): string {
+        return this.name;
     }
 
     /** Wire value (REST payload) → TS read value. */
@@ -139,58 +148,136 @@ export class JsonField<T = any> extends FieldBase<T> {
 }
 
 /** A user/group reference: expanded or unexpanded REST shapes flatten to this. */
-export type Person = { id: number; name?: string };
+export type Person = { id: number; name?: string; email?: string };
 
 /** A lookup reference (per single-valued lookup column). */
 export type Lookup = Person;
 
 /**
- * Person/group column (`SP.FieldUser`). Reads `nullable Person | null`.
- *
- * Wire shapes handled on read:
- * - unexpanded: `{"__metadata":…, "Id": 17}` or the plain number `17` (verbose REST variants)
- * - expanded (`$expand=Field`): `{ Id, Title, … }`
- * - legacy string form: `"17;#Display Name"`
- *
- * Write: the id is sent as the plain numeric value (supported for single-value
- * fields across SharePoint REST versions); multi-value person columns are out
- * of scope for the flat query surface.
+ * Legacy write conventions for reference columns on the verbose REST surface:
+ * a single-valued lookup/person column "Project" is written via the derived
+ * `ProjectId` property (numeric id), a multi-valued column via
+ * `{ <Name>Id: { results: [...] } }`. Fields expose `writeName` so the table
+ * emits those keys instead of the (read-shaped) column name.
  */
-export class PeopleField<T extends Person | null = Person | null> extends FieldBase<T> {
-    constructor(name: string, options: FieldOptions<T> = {}) {
+export type ReferenceWriteShape = "derivedId" | "typed";
+
+export type ReferenceFieldOptions<T> = FieldOptions<T> & {
+    /**
+     * Write body shape: `"derivedId"` (default) — `<Name>Id: id | { results }`;
+     * `"typed"` — `<Name>Id: { __metadata: { type }, Id|LookupId }`.
+     */
+    writeShape?: ReferenceWriteShape;
+};
+
+/** Derives the REST write key for a reference field: the `<name>Id` property. */
+export function referenceWriteName(name: string): string {
+    return `${name}Id`;
+}
+
+/**
+ * Single person/group column (`SP.FieldUser`, `person()`): reads
+ * `Person | null` — id from `{ Id }` / plain number / legacy `"17;#Name"`
+ * strings, display name and (when expanded) `EMail` included. `null`/`0`
+ * (the "no user" sentinel) read as null.
+ *
+ * Write: the derived `<Name>Id` property (see {@link ReferenceFieldOptions}).
+ */
+export class PersonField extends FieldBase<Person | null> {
+    readonly writeShape: ReferenceWriteShape;
+
+    constructor(name: string, options: ReferenceFieldOptions<Person | null> = {}) {
         super(name, "person", options);
+        this.writeShape = options.writeShape ?? "derivedId";
     }
-    override fromSharePoint(wire: unknown): T {
-        return parseIdName(wire) as T;
+    /** The `<name>Id` property write shape targets (see ReferenceFieldOptions). */
+    override get writeName(): string {
+        return referenceWriteName(this.name);
     }
-    override toSharePoint(value: T): unknown {
-        if (value == null) return null;
-        if (typeof value !== "object" || typeof (value as Person).id !== "number") {
-            throw new TypeError("people field expects { id }");
-        }
-        return (value as Person).id;
+    override fromSharePoint(wire: unknown): Person | null {
+        return parseIdName(wire);
+    }
+    override toSharePoint(value: Person | null): unknown {
+        return referenceWriteValue(this, value, "SP.FieldUserValue");
     }
 }
 
 /**
- * Single-valued lookup column (`SP.FieldLookup`). Same shape handling as
- * {@link PeopleField} — `id` from the wire (or `LookupId` when expanded),
- * plus the lookup's display value when present (`Title`/`Value`/legacy `"2;#x"`).
+ * Person/group collection column (`people()`): reads expanded multi-user
+ * results (`{ results: [...] }`, arrays) as `Person[]`; empty ⇔ `[]`.
+ *
+ * Write: the derived `<Name>Id` results envelope
+ * (`{ results: [id, ...] }`).
  */
-export class LookupField<T extends Lookup | null = Lookup | null> extends FieldBase<T> {
-    constructor(name: string, options: FieldOptions<T> = {}) {
+export class PeopleField extends FieldBase<Person[]> {
+    readonly writeShape: ReferenceWriteShape;
+
+    constructor(name: string, options: ReferenceFieldOptions<Person[]> = {}) {
+        super(name, "people", options);
+        this.writeShape = options.writeShape ?? "derivedId";
+    }
+    override get writeName(): string {
+        return referenceWriteName(this.name);
+    }
+    override fromSharePoint(wire: unknown): Person[] {
+        const entries =
+            wire == null ? [] :
+            Array.isArray(wire) ? wire :
+            Array.isArray((wire as { results?: unknown[] }).results) ? (wire as { results: unknown[] }).results :
+            [wire];
+        return entries
+            .map((entry) => parseIdName(entry))
+            .filter((v): v is Person => v !== null);
+    }
+    override toSharePoint(value: Person[]): { results: number[] } {
+        if (!Array.isArray(value)) throw new TypeError("people field expects an array of { id }");
+        return { results: value.map((p) => {
+            if (typeof p?.id !== "number") throw new TypeError("people field entries expect { id }");
+            return p.id;
+        }) };
+    }
+}
+
+/**
+ * Single-valued lookup column (`SP.FieldLookup`, `lookupId()`): same read
+ * shapes as {@link PersonField} — id from `{ Id }`/`{ LookupId }` (expanded),
+ * plain number, or legacy `"2;#Name"` string.
+ *
+ * Write: the derived `<Name>Id` property (see {@link ReferenceFieldOptions}).
+ */
+export class LookupField extends FieldBase<Lookup | null> {
+    readonly writeShape: ReferenceWriteShape;
+
+    constructor(name: string, options: ReferenceFieldOptions<Lookup | null> = {}) {
         super(name, "lookup", options);
+        this.writeShape = options.writeShape ?? "derivedId";
     }
-    override fromSharePoint(wire: unknown): T {
-        return parseIdName(wire) as T;
+    override get writeName(): string {
+        return referenceWriteName(this.name);
     }
-    override toSharePoint(value: T): unknown {
-        if (value == null) return null;
-        if (typeof value !== "object" || typeof (value as Lookup).id !== "number") {
-            throw new TypeError("lookup field expects { id }");
-        }
-        return (value as Lookup).id;
+    override fromSharePoint(wire: unknown): Lookup | null {
+        return parseIdName(wire);
     }
+    override toSharePoint(value: Lookup | null): unknown {
+        return referenceWriteValue(this, value, "SP.FieldLookupValue");
+    }
+}
+
+/**
+ * Builds the write value for single-valued reference fields:
+ * - `derivedId`: the bare numeric id;
+ * - `typed`: an `SP.FieldUserValue`/`SP.FieldLookupValue`-shaped object.
+ * Empty local values surface as `null` (SharePoint clears a single-valued
+ * reference column on MERGE with `null`).
+ */
+function referenceWriteValue(field: { writeShape: ReferenceWriteShape; name: string }, value: Person | Lookup | null, wireType: string): unknown {
+    if (value == null) return null;
+    if (typeof value !== "object" || typeof (value as Person).id !== "number") {
+        throw new TypeError(`field "${field.name}" expects { id }`);
+    }
+    return field.writeShape === "typed"
+        ? { __metadata: { type: wireType }, id: (value as Person).id }
+        : (value as Person).id;
 }
 
 /**
@@ -204,8 +291,13 @@ export function parseIdName(wire: unknown): { id: number; name?: string } | null
         const o = wire as NodeJS.Dict<unknown>;
         const id = o["LookupId"] ?? o["Id"] ?? o["id"];
         const name = (o["Title"] ?? o["name"]) as string | undefined;
+        const email = (o["EMail"] ?? o["Email"]) as string | undefined;
         if (typeof id !== "number" || id === 0) return null;
-        return { id, ...(name ? { name } : {}) };
+        return {
+            id,
+            ...(name ? { name } : {}),
+            ...(email ? { email } : {}),
+        };
     }
     if (typeof wire === "number") return wire === 0 ? null : { id: wire };
     if (typeof wire === "string") {
@@ -224,8 +316,9 @@ export function bool(name: string, options?: FieldOptions<boolean>) { return new
 export function json<T = any>(name: string, options?: FieldOptions<T>) { return new JsonField(name, options); }
 export function date(name: string, options?: FieldOptions<Date | null>) { return new DateField(name, options); }
 export function datetime(name: string, options?: FieldOptions<Date | null>) { return new DatetimeField(name, options); }
-export function people(name: string, options?: FieldOptions<Person | null>) { return new PeopleField(name, options); }
-export function lookupId(name: string, options?: FieldOptions<Lookup | null>) { return new LookupField(name, options); }
+export function people(name: string, options?: ReferenceFieldOptions<Person[]>) { return new PeopleField(name, options); }
+export function person(name: string, options?: ReferenceFieldOptions<Person | null>) { return new PersonField(name, options); }
+export function lookupId(name: string, options?: ReferenceFieldOptions<Lookup | null>) { return new LookupField(name, options); }
 export function title(name: string = "Title", options?: FieldOptions<string>) { return new StringField(name, options); }
 
 /**
@@ -316,8 +409,17 @@ export type TransformContext = {
  * - large-file resumable sessions are out of scope for the flat surface.
  */
 export class FileField extends FieldBase<FileRef | null> {
-    constructor(name: string = "FileLeafRef", options: FieldOptions<FileRef | null> = {}) {
+    /**
+     * Content overwrite policy for the Files/Add channel (both create and
+     * update paths). Default `true` — passing `{ data }` to save *is* the
+     * explicit opt-in to replace content; `overwrite: false` makes SharePoint
+     * fail on duplicate filenames instead.
+     */
+    readonly overwrite: boolean;
+
+    constructor(name: string = "FileLeafRef", options: FieldOptions<FileRef | null> & { overwrite?: boolean } = {}) {
         super(name, "file", options);
+        this.overwrite = options.overwrite !== false;
     }
     /** Never part of an item body — content goes through the Files/Add upload channel. */
     override toSharePoint(_value: FileRef | null): undefined {
@@ -325,7 +427,7 @@ export class FileField extends FieldBase<FileRef | null> {
     }
 }
 
-export function document(name: string = "FileLeafRef", options?: FieldOptions<FileRef | null>) {
+export function document(name: string = "FileLeafRef", options?: FieldOptions<FileRef | null> & { overwrite?: boolean }) {
     return new FileField(name, options);
 }
 

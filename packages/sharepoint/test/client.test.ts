@@ -44,7 +44,7 @@ test("client fetch adds verbose JSON headers and Bearer token", async () => {
     stubFetch(() => jsonResponse({ d: { results: [] } }));
     await client.fetch("Web/Lists");
     const [url, init] = lastFetch();
-    expect(url).toBe("https://contoso.sharepoint.com/sites/dev/Web/Lists");
+    expect(url).toBe("https://contoso.sharepoint.com/sites/dev/_api/Web/Lists");
     const headers = init.headers as Record<string, string>;
     expect(headers.Accept).toBe("application/json;odata=verbose");
     expect(headers.Authorization).toBe("Bearer T");
@@ -81,4 +81,18 @@ test("itemsPath URL-encodes the list title", () => {
     expect(client.itemsPath("My Tasks & More")).toBe(
         "https://x/_api/Web/Lists/GetByTitle('My%20Tasks%20%26%20More')/Items",
     );
+});
+
+// --- current user ---
+
+test("getCurrentUser maps the Web/CurrentUser shape", async () => {
+    const client = new SharePointClient({ url: "https://x", token: "T" });
+    stubFetch((url) => {
+        expect(url).toBe("https://x/_api/Web/CurrentUser?$select=Id,Title,LoginName,Email");
+        return jsonResponse({ d: { Id: 42, Title: "Jane", LoginName: "i:0#.f|x|jane", Email: "jane@x" } });
+    });
+    expect(await client.getCurrentUser()).toEqual({ id: 42, name: "Jane", loginName: "i:0#.f|x|jane", email: "jane@x" });
+
+    stubFetch(() => jsonResponse({ d: {} })); // invalid id → loud error
+    await expect(client.getCurrentUser()).rejects.toThrow("CurrentUser");
 });
