@@ -11,6 +11,7 @@
 
 import { SharePointClient, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
 import { FieldBase, FileField, type FileRef, type InferRecord, type TransformContext } from "./fields";
+import { SPQuery, spQuery, type QueryProxy } from "./query";
 import type { ListItemId, GenericProperties } from "./types";
 
 /** Concurrency/row metadata shared by every REST item (`__metadata`). */
@@ -355,6 +356,23 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
 
     /** Server-relative root folder of this list/library (cached promise). */
     #rootFolder: Promise<string> | undefined;
+
+    /**
+     * Entry point for the typed (proxy-based) query builder — the simpler
+     * sibling of the Dataverse package's fluent OData builder.
+     *
+     * @example
+     * const q = Documents.query()
+     *     .select((f) => [f.id, f.title, f.status])
+     *     .expand({ project: ["Id", "Title"] })
+     *     .where((f) => f.status.eq("Draft"))
+     *     .orderBy((f) => f.modified, "desc")
+     *     .top(50)
+     *     .build();
+     */
+    query(): SPQuery<TFields> {
+        return spQuery(this);
+    }
 
     /**
      * OData v3 query-string builder mirroring the OData `QueryBuilderOptions`

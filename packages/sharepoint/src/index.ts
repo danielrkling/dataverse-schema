@@ -1,6 +1,7 @@
 export * from "./client";
 export * from "./fields";
 export * from "./table";
+export * from "./query";
 export * from "./types";
 
 // Compile-time check: SharePointTable structurally satisfies the sync
