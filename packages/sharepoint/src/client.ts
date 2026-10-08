@@ -328,9 +328,59 @@ export class SharePointClient {
         return query.startsWith("?") ? query : `?${query}`;
     }
 
+    /**
+     * Uploads a file into a folder (document library root or sub-folder) via
+     * `Files/Add`. Creates the list item along with the content; the response
+     * carries the created `File`, including `ListItemAllFields.Id` for a
+     * follow-up metadata MERGE.
+     *
+     * @example
+     * const file = await client.addFile("/Shared Documents", "report.pdf", blob);
+     * // file.ListItemAllFields.Id → the list item Id for metadata updates
+     */
+    async addFile(
+        folderServerRelativeUrl: string,
+        fileName: string,
+        content: Blob | ArrayBuffer | Uint8Array,
+        options: { overwrite?: boolean; signal?: AbortSignal } = {},
+    ) {
+        const resource =
+            `Web/GetFolderByServerRelativeUrl('${encodePath(folderServerRelativeUrl)}')` +
+            `/Files/Add(url='${encodeURIComponent(fileName)}',overwrite='${options.overwrite ?? true}')`;
+        return this.fetch(resource, {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: content as any,
+            signal: options.signal,
+        });
+    }
+
+    /**
+     * Downloads a file's content by server-relative path via `GetFileByServerRelativeUrl'\)'$value`.
+     *
+     * @example
+     * const blob = await client.getFileContent("/Shared Documents/report.pdf");
+     */
+    async getFileContent(serverRelativeUrl: string, options: RequestOptions = {}): Promise<Response> {
+        return this.fetch(
+            `Web/GetFileByServerRelativeUrl('${encodePath(serverRelativeUrl)}')/$value`,
+            { raw: true, signal: options.signal },
+        );
+    }
+
     /** Inline lists metadata (types, fields) for schema discovery. */
     async getLists(options: QueryRequestOptions = {}) {
         return this.fetch(`${this.api}/Web/Lists${this._q(options.query)}`, { signal: options.signal });
+    }
+
+    /** The library/list root folder's server-relative URL (used for file upload). */
+    async getRootFolder(listTitle: string): Promise<string> {
+        const folder = await this.fetch(`Web/Lists/GetByTitle('${encodeURIComponent(listTitle)}')/RootFolder?$select=ServerRelativeUrl`);
+        const value = typeof folder === "object" && folder ? (folder as any).ServerRelativeUrl : undefined;
+        if (typeof value !== "string" || !value) {
+            throw new Error(`List "${listTitle}" did not return a RootFolder ServerRelativeUrl`);
+        }
+        return value;
     }
 }
 
@@ -339,6 +389,14 @@ function toVerboseBody(value: object): object {
     // Dates must be serialized as `YYYY-MM-DDTHH:mm:ss` ISO strings —
     // JSON.stringify already does that for Date instances.
     return value;
+}
+
+/**
+ * Percent-encodes each path segment but keeps `/` separators intact.
+ * `encodeURIComponent` would destroy the server-relative path semantics.
+ */
+function encodePath(serverRelativeUrl: string): string {
+    return serverRelativeUrl.split("/").map(encodeURIComponent).join("/");
 }
 
 /**

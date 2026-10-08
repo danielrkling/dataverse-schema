@@ -9,8 +9,8 @@
  * {@link SyncTable} contract so `@offlinecollectionoptions` reuse is trivial.
  */
 
-import { SharePointClient, type QueryRequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
-import { FieldBase, type InferRecord } from "./fields";
+import { SharePointClient, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
+import { FieldBase, FileField, type FileRef, type InferRecord, type TransformContext } from "./fields";
 import type { ListItemId, GenericProperties } from "./types";
 
 /** Concurrency/row metadata shared by every REST item (`__metadata`). */
@@ -30,6 +30,11 @@ export type SharePointTableOptions<TFields extends Record<string, FieldBase<any>
     primaryKey?: string;
     /** The list item content type — used when building `__metadata.type` for writes. */
     listItemEntityTypeFullName?: string;
+    /**
+     * Optional server-relative root folder override for document libraries
+     * (skips the RootFolder fetch). Default: discovered lazily from the list.
+     */
+    rootFolderUrl?: string;
 };
 
 /**
@@ -56,6 +61,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     fields: TFields;
     primaryKey: { key: string };
     listItemEntityTypeFullName?: string;
+    rootFolderUrl?: string;
 
     /**
      * The engine/queue-facing identity of this table — for SharePoint that is
@@ -72,6 +78,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         this.fields = options.fields;
         this.primaryKey = { key: options.primaryKey ?? "id" };
         this.listItemEntityTypeFullName = options.listItemEntityTypeFullName;
+        this.rootFolderUrl = options.rootFolderUrl;
     }
 
     /**
@@ -85,6 +92,12 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         if (!wire || typeof wire !== "object") return wire;
         const out: Record<string, unknown> = {};
         for (const [tsKey, field] of Object.entries(this.fields) as [string, FieldBase<any>][]) {
+            if (field instanceof FileField) {
+                // Doc-lib content: name/url come from two item properties
+                // (FileLeafRef/FileRef), not from one field's wire value.
+                out[tsKey] = this.fileRefFromWire(wire);
+                continue;
+            }
             out[tsKey] = field.fromSharePoint(wire[field.name]);
         }
         const meta = wire.__metadata as ItemMetadata | undefined;
@@ -102,9 +115,22 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         for (const [tsKey, raw] of Object.entries(value)) {
             const field = (this.fields as Record<string, FieldBase<any>>)[tsKey];
             if (!field) continue; // unknown/$-keys (e.g. $etag) are metadata-only
+            if (field instanceof FileField) continue; // content flows through afterSave, never the item body
             wire[(field as FieldBase<any>).name] = field.toSharePoint(raw);
         }
         return wire;
+    }
+
+    /** Builds `{ name, url }` for the doc-lib field from the item wire (`FileLeafRef` + `FileRef`). */
+    fileRefFromWire(wire: any): FileRef {
+        const name = wire["FileLeafRef"] ?? wire["FileLeafRef0"];
+        const serverRelative = wire["FileRef"];
+        return {
+            ...(name != null ? { name: String(name) } : {}),
+            // FileRef is server-relative ("/sites/dev/...") — resolve against
+            // the client's site URL so origin + path always agree.
+            ...(serverRelative ? { url: new URL(String(serverRelative), this.client.options.url).href } : {}),
+        };
     }
 
     /**
@@ -170,13 +196,43 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      * (including `$etag`). SharePoint v3 has no
      * `Prefer: return=representation`; the `__metadata.type` body (plus the
      * created item's own metadata) is returned in the POST response.
+     *
+     * Document libraries: when a `file` value carries `{ name, data }`, the
+     * item is created by uploading the content (`Files/Add`) — the file *is*
+     * the item — and any metadata fields are MERGEd onto the created item
+     * afterwards (the table's afterSave hook, mirroring Dataverse's FileField).
      */
     async createRecord(value: Partial<InferRecord<TFields>> & { $type?: string }, options: QueryRequestOptions = {}) {
+        const file = this.fileData(value as Record<string, unknown>);
+        if (file) {
+            // Document library: upload first — the file *is* the item.
+            if (!file.ref.name) throw new Error(`document field "${file.key}" value requires { name, data } for upload`);
+            const folder = await this.rootFolder();
+            const added = await this.client.addFile(folder, file.ref.name, file.ref.data as Blob | ArrayBuffer, { signal: options.signal });
+            const itemId = ((added as any)?.ListItemAllFields?.Id ?? (added as any)?.ListItemAllFields?.ID) as number | undefined;
+            if (itemId == null) {
+                throw new Error("Files/Add response did not carry ListItemAllFields.Id — cannot MERGE metadata onto the created item");
+            }
+            // Metadata columns (everything but the file) go on via MERGE.
+            const metadataValues = { ...(value as Record<string, unknown>) } as Record<string, unknown>;
+            delete metadataValues[file.key];
+            if (Object.keys(metadataValues).length > 0) {
+                await this.client.mergeRecord(this.listTitle, itemId, {
+                    __metadata: { type: await this.getType() },
+                    ...this.transformValueToSharePoint(metadataValues),
+                });
+            }
+            const wire = await this.client.getRecord(this.listTitle, itemId);
+            // content already uploaded inline — no further afterSave pass
+            return this.transformItemFromSharePoint(wire);
+        }
         const wire = await this.client.postRecord(this.listTitle, {
             __metadata: { type: await this.getType() },
             ...this.transformValueToSharePoint(value as Record<string, unknown>),
         }, options);
-        return this.transformItemFromSharePoint(wire);
+        const record = this.transformItemFromSharePoint(wire);
+        await this._afterSave({ table: this, client: this.client, recordId: this.getPrimaryId(record) }, value);
+        return record;
     }
 
     /**
@@ -190,15 +246,12 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      * await Tasks.updateRecord(12, { done: true }, { ifMatch: item["$etag"] });
      */
     async updateRecord(id: ListItemId | number, value: Partial<InferRecord<TFields>> & { $type?: string; $etag?: string }, options: UpsertRecordOptions = {}) {
-        if (options.ifMatch == null && "$etag" in value && value.$etag == null) {
-            // An explicit `$etag: null` means "concurrency must fail" — sent
-            // verbatim; a missing `$etag` means the caller opted out.
-        }
         const metadata = await this.metadata(value);
         await this.client.mergeRecord(this.listTitle, id, {
             __metadata: metadata,
             ...this.transformValueToSharePoint(value as Record<string, unknown>),
         }, { ifMatch: options.ifMatch ?? value.$etag, signal: options.signal });
+        await this._afterSave({ table: this, client: this.client, recordId: id }, value);
         // MERGE has no return representation; sync-engine etag bookkeeping
         // fetches freshness itself (see @dataverse-schema/sync).
     }
@@ -206,10 +259,78 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     /**
      * Deletes a list item. Without `ifMatch` SharePoint performs an
      * unconditional delete; the sync engine always passes the freshest etag.
+     * For document libraries this removes the file together with the item —
+     * content and item share one lifecycle there.
      */
     async deleteRecord(id: ListItemId | number, options: DeleteRecordOptions = {}): Promise<ListItemId> {
         return this.client.deleteRecord(this.listTitle, id, options);
     }
+
+    /**
+     * Downloads the content of a document-library item as a `Response` (raw).
+     * Uses the record's FileRef (server-relative) via
+     * `GetFileByServerRelativeUrl(...)/$value`.
+     */
+    async getDocumentContent(id: ListItemId | number, options?: RequestOptions): Promise<Response> {
+        const record = await this.getRecord(id);
+        const ref = (record as any)?.[this._documentFieldKey() ?? ""] as FileRef | undefined;
+        if (!ref?.url) throw new Error(`Item ${id} has no file content (missing FileRef)`);
+        const pathname = new URL(ref.url).pathname;
+        return this.client.getFileContent(pathname, options);
+    }
+
+    // --- document/file plumbing (afterSave, mirroring the Dataverse File field) ---
+
+    /** Key of the first FileField in the fields map, if any. */
+    private _documentFieldKey(): string | undefined {
+        for (const [k, f] of Object.entries(this.fields) as [string, FieldBase<any>][]) {
+            if (f instanceof FileField) return k;
+        }
+        return undefined;
+    }
+
+    /** The FileRef to upload for this save, or null when nothing to upload. */
+    private fileData(value: Record<string, unknown>): { key: string; ref: FileRef } | null {
+        const keyOrUndefined = this._documentFieldKey();
+        if (!keyOrUndefined) return null;
+        const ref = value[keyOrUndefined] as FileRef | undefined;
+        if (!ref || ref.data == null) return null;
+        if (typeof Blob !== "undefined" && ref.data instanceof Blob) return { key: keyOrUndefined, ref };
+        if (ref.data instanceof ArrayBuffer || ref.data instanceof Uint8Array) return { key: keyOrUndefined, ref };
+        return null;
+    }
+
+    /** Document-library root folder (server-relative), resolved once and cached. */
+    async rootFolder(): Promise<string> {
+        this.#rootFolder ??= (async () =>
+            this.rootFolderUrl ?? (await this.client.getRootFolder(this.listTitle)))();
+        return this.#rootFolder;
+    }
+
+    /**
+     * afterSave hook (mirrors the Dataverse table's `_afterSave` + FileField
+     * `afterSave`): uploads content present in the saved value's document
+     * field via `Files/Add` with `overwrite=true`. On update the file *name*
+     * must match the item's existing `FileLeafRef` to replace its content —
+     * a different name creates a new item file, SharePoint does not rename
+     * through the flat surface.
+     */
+    private async _afterSave(ctx: TransformContext, value: Record<string, unknown>): Promise<void> {
+        const file = this.fileData(value);
+        // Only relevant for update (create path uploads inline via createWithContent flow above);
+        // inserts with no content skip entirely.
+        if (!file) return;
+        const folder = ctx.rootFolder ?? (await this.rootFolder());
+        if (!file.ref.name) {
+            throw new Error(`document field "${file.key}" value requires { name, data } to overwrite content`);
+        }
+        await this.client.addFile(folder, file.ref.name, file.ref.data as Blob | ArrayBuffer, {
+            overwrite: true,
+        });
+    }
+
+    /** Server-relative root folder of this list/library (cached promise). */
+    #rootFolder: Promise<string> | undefined;
 
     /**
      * OData v3 query-string builder mirroring the OData `QueryBuilderOptions`

@@ -17,8 +17,9 @@
 
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { ListItemId } from "./types";
+import type { SharePointClient } from "./client";
 
-export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "lookup";
+export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "lookup" | "choice" | "multiChoice" | "file";
 
 export type FieldOptions<T> = {
     /** Standard-Schema (valibot/Zod/ArkType) schema for the field's read value. */
@@ -216,7 +217,7 @@ export function parseIdName(wire: unknown): { id: number; name?: string } | null
     return null;
 }
 
-// Factories follow the dataverse-schema pattern (camelCase, matching field kind).
+/** Factories are defined at the bottom of this file (camelCase, dataverse-schema style). */
 export function text(name: string, options?: FieldOptions<string>) { return new StringField(name, options); }
 export function number(name: string, options?: FieldOptions<number | null>) { return new NumberField(name, options); }
 export function bool(name: string, options?: FieldOptions<boolean>) { return new BooleanField(name, options); }
@@ -232,6 +233,101 @@ export function title(name: string = "Title", options?: FieldOptions<string>) { 
  * `name` defaults to `"Id"` (the internal column SharePoint REST returns).
  */
 export function primaryKey(name: string = "Id") { return new NumberField(name, { readonly: true }); }
+
+// --- choice ---
+
+/**
+ * Single-select choice column. SharePoint stores choice values as their
+ * display strings (unlike Dataverse's numeric labels), so this is a plain
+ * nullable string. `choices` is validation metadata for the app layer —
+ * enforcement stays server-side.
+ */
+export class ChoiceField<C extends string = string> extends FieldBase<C | null> {
+    readonly choices: C[] | undefined;
+
+    constructor(name: string, options: FieldOptions<C | null> & { choices?: C[] } = {}) {
+        super(name, "choice", options);
+        this.choices = options.choices;
+    }
+    override fromSharePoint(wire: unknown): C | null {
+        return (wire == null || wire === "" ? null : wire) as C | null;
+    }
+}
+
+/**
+ * Multi-select choice column: wire is a ";#"-joined string (`"A;#B;#C"`),
+ * read as `string[]` (empty ⇔ `[]`, mirroring `multiChoice()` in the
+ * Dataverse package). Writes re-join with the delimiter.
+ */
+export class MultiChoiceField<C extends string = string> extends FieldBase<C[]> {
+    constructor(name: string, options: FieldOptions<C[]> = {}) {
+        super(name, "multiChoice", options);
+    }
+    override fromSharePoint(wire: unknown): C[] {
+        if (wire == null || wire === "") return [];
+        if (Array.isArray(wire)) return wire as C[];
+        return String(wire).split(";#").filter((v) => v !== "") as C[];
+    }
+    override toSharePoint(value: C[]): unknown {
+        if (!Array.isArray(value)) throw new TypeError("multiChoice field expects an array");
+        return value.join(";#");
+    }
+}
+
+export function choice<C extends string = string>(name: string, options?: FieldOptions<C | null> & { choices?: C[] }) {
+    return new ChoiceField(name, options);
+}
+export function multiChoice<C extends string = string>(name: string, options?: FieldOptions<C[]>) {
+    return new MultiChoiceField(name, options);
+}
+
+// --- document/file (doc libraries) ---
+
+/** Same explicit-channel shape as the Dataverse package's `FileRef`. */
+export type FileRef = {
+    name?: string;
+    url?: string;
+    data?: Blob | ArrayBuffer | null;
+};
+
+/** Transform context handed to afterSave hooks (mirrors the Dataverse package). */
+export type TransformContext = {
+    table: { listTitle: string };
+    client: SharePointClient;
+    /** Item id this save produced (upload target). */
+    recordId?: number | string;
+    /** Server-relative folder the file content belongs in (doc libraries). */
+    rootFolder?: string;
+};
+
+/**
+ * Document/file content for **document libraries** via the legacy `_api/web`
+ * REST surface: a doc-lib list item *is* a file, so there is no distinct
+ * column value to put in an item body. Content flows through the explicit
+ * channel, exactly like the Dataverse package's `FileField`:
+ *
+ * - create/update: include `{ name?, data: Blob | ArrayBuffer }` in the record
+ *   value — the field never appears in an item body (metadata MERGE and Files
+ *   upload are separate REST surfaces).
+ * - read: `{ name, url }` — `name` from the item's `FileLeafRef`, `url` from
+ *   `FileRef` (absolute, built from the client's site URL).
+ * - delete: removing the content = deleting the item (`deleteRecord`); there
+ *   is no "clear file" operation like Dataverse's `data: null` channel.
+ * - large-file resumable sessions are out of scope for the flat surface.
+ */
+export class FileField extends FieldBase<FileRef | null> {
+    constructor(name: string = "FileLeafRef", options: FieldOptions<FileRef | null> = {}) {
+        super(name, "file", options);
+    }
+    /** Never part of an item body — content goes through the Files/Add upload channel. */
+    override toSharePoint(_value: FileRef | null): undefined {
+        return undefined;
+    }
+}
+
+export function document(name: string = "FileLeafRef", options?: FieldOptions<FileRef | null>) {
+    return new FileField(name, options);
+}
 
 /** Infers the TS record type from a fields map. */
 export type InferRecord<TFields extends Record<string, FieldBase<any>>> = {
