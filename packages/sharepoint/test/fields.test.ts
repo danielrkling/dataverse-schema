@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { text, number, bool, date, datetime, json, choice, multiChoice, people, person, lookupId, parseIdName } from "../src/fields";
+import * as v from "valibot";
+import { text, number, bool, date, datetime, json, choice, multiChoice, people, person, lookups, lookupId, parseIdName } from "../src/fields";
 
 // --- date: real Date objects ---
 
@@ -105,4 +106,38 @@ test("multiChoice values infer their element typing the same way", () => {
     const f = multiChoice("Tags", { choices: ["Alpha", "Beta"] });
     const tags = f.toSharePoint(["Alpha"] as any);
     expect(tags).toBe("Alpha");
+});
+
+// --- json: parse type + validation inferred from a Standard Schema ---
+
+const metaSchema = v.object({ a: v.number(), raw: v.string() });
+
+test("json infers its value type from the schema; values are validated on read", () => {
+    const f = json("Meta0", { schema: metaSchema });
+    // inference evidence: the read result satisfies exactly the valibot output
+    const good: { a: number; raw: string } | null = f.fromSharePoint('{"a":1,"raw":"x"}');
+    expect(good).toEqual({ a: 1, raw: "x" });
+    expect(f.fromSharePoint(null)).toBeNull();
+
+    // schema violation throws with the column name
+    expect(() => f.fromSharePoint('{"a":"not-a-number","raw":"x"}')).toThrow('json column "Meta0" failed schema validation (1 issue)');
+    expect(() => f.fromSharePoint("{broken")).toThrow('Invalid JSON in column "Meta0"');
+});
+
+test("json without a schema stays untyped parse-as-is", () => {
+    const f = json("Meta0");
+    expect(f.fromSharePoint('{"a":1}')).toEqual({ a: 1 });
+});
+
+// --- lookups: multi-lookup collections ---
+
+test("lookups reads multi-lookup results and writes the <Name>Id envelope", () => {
+    const f = lookups("Concur_x0020_Codes");
+    expect(f.fromSharePoint(null)).toEqual([]);
+    expect(f.fromSharePoint({ results: [
+        { Id: 1, Title: "Nuc 23" },
+        { LookupId: 2 },
+    ] })).toEqual([{ id: 1, name: "Nuc 23" }, { id: 2 }]);
+    expect(f.writeName).toBe("Concur_x0020_CodesId");
+    expect(f.toSharePoint([{ id: 1 } as any, { id: 2 } as any])).toEqual({ results: [1, 2] });
 });

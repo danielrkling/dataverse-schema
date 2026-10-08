@@ -19,7 +19,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { ListItemId } from "./types";
 import type { SharePointClient } from "./client";
 
-export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "people" | "lookup" | "choice" | "multiChoice" | "file";
+export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "people" | "lookup" | "lookupCollection" | "choice" | "multiChoice" | "file";
 
 export type FieldOptions<T> = {
     /** Standard-Schema (valibot/Zod/ArkType) schema for the field's read value. */
@@ -127,19 +127,44 @@ export class DatetimeField<T extends Date | null = Date | null> extends FieldBas
     }
 }
 
+/**
+ * JSON string columns (`multi-line text` with plain-text JSON) — undefined/null
+ * read as null. The parsed value type + runtime validation are INFERRED from a
+ * Standard Schema (valibot/Zod/ArkType):
+ *
+ *   json("Meta", { schema: v.object({ a: v.number() }) })   // reads { a: number } | null
+ *
+ * Without a schema the value stays `unknown`-ish (parsed as-is).
+ */
 export class JsonField<T = any> extends FieldBase<T> {
-    constructor(name: string, options: FieldOptions<T> = {}) {
+    readonly schema?: StandardSchemaV1<unknown, T>;
+
+    constructor(name: string, options: FieldOptions<T> & { schema?: StandardSchemaV1<unknown, T> } = {}) {
         super(name, "json", options);
+        this.schema = options.schema;
     }
-    /** JSON string columns (`multi-line text` with plain-text JSON) — undefined/null reads as null. */
+
     override fromSharePoint(wire: unknown): T {
         if (wire == null || wire === "") return null as T;
+        let parsed: unknown;
         try {
-            return JSON.parse(wire as string) as T;
+            parsed = JSON.parse(wire as string);
         } catch {
             throw new Error(`Invalid JSON in column "${this.name}"`);
         }
+        if (!this.schema) return parsed as T;
+        if (wire === "" ) return null as T;
+        // Standard-Schema validation: sync only (table transforms are sync).
+        const result = this.schema["~standard"].validate(parsed);
+        if (result instanceof Promise) {
+            throw new Error(`json column "${this.name}" uses an async schema — provide a synchronous one`);
+        }
+        if (result.issues) {
+            throw new Error(`json column "${this.name}" failed schema validation (${result.issues.length} issue${result.issues.length === 1 ? "" : "s"})`);
+        }
+        return result.value as T;
     }
+
     override toSharePoint(value: T): unknown {
         if (value == null) return null;
         if (typeof value === "string") return value;
@@ -313,7 +338,9 @@ export function parseIdName(wire: unknown): { id: number; name?: string } | null
 export function text(name: string, options?: FieldOptions<string>) { return new StringField(name, options); }
 export function number(name: string, options?: FieldOptions<number | null>) { return new NumberField(name, options); }
 export function bool(name: string, options?: FieldOptions<boolean>) { return new BooleanField(name, options); }
-export function json<T = any>(name: string, options?: FieldOptions<T>) { return new JsonField(name, options); }
+export function json<T = any>(name: string, options?: FieldOptions<T> & { schema?: StandardSchemaV1<unknown, T> }) {
+    return new JsonField(name, options);
+}
 export function date(name: string, options?: FieldOptions<Date | null>) { return new DateField(name, options); }
 export function datetime(name: string, options?: FieldOptions<Date | null>) { return new DatetimeField(name, options); }
 export function people(name: string, options?: ReferenceFieldOptions<Person[]>) { return new PeopleField(name, options); }
@@ -345,6 +372,44 @@ export class ChoiceField<C extends string = string> extends FieldBase<C | null> 
     override fromSharePoint(wire: unknown): C | null {
         return (wire == null || wire === "" ? null : wire) as C | null;
     }
+}
+
+/**
+ * Multi-value reference *collection* column (`lookups()`): the same wire
+ * shapes and `<Name>Id: { results: [...] }` write envelope as {@link PeopleField},
+ * but for lookup columns (e.g. a multi-lookup "Concur codes" column). Reads
+ * `Lookup[]`; person collections can use the same field (both flatten to
+ * `{ id, name? }`).
+ */
+export class LookupCollectionField extends FieldBase<Lookup[]> {
+    readonly writeShape: ReferenceWriteShape;
+
+    constructor(name: string, options: ReferenceFieldOptions<Lookup[]> = {}) {
+        super(name, "lookupCollection", options);
+        this.writeShape = options.writeShape ?? "derivedId";
+    }
+    override get writeName(): string {
+        return referenceWriteName(this.name);
+    }
+    override fromSharePoint(wire: unknown): Lookup[] {
+        const entries =
+            wire == null ? [] :
+            Array.isArray(wire) ? wire :
+            Array.isArray((wire as { results?: unknown[] }).results) ? (wire as { results: unknown[] }).results :
+            [wire];
+        return entries.map((entry) => parseIdName(entry)).filter((v): v is Lookup => v !== null);
+    }
+    override toSharePoint(value: Lookup[]): { results: number[] } {
+        if (!Array.isArray(value)) throw new TypeError("lookup collection field expects an array of { id }");
+        return { results: value.map((v) => {
+            if (typeof v?.id !== "number") throw new TypeError("lookup collection entries expect { id }");
+            return v.id;
+        }) };
+    }
+}
+
+export function lookups(name: string, options?: ReferenceFieldOptions<Lookup[]> & { choices?: readonly Lookup[] }) {
+    return new LookupCollectionField(name, options);
 }
 
 /**
