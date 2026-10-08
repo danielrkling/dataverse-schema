@@ -17,7 +17,7 @@
  */
 
 import { SharePointTable, type SharePointTableOptions } from "./table";
-import { ChoiceField, DateField, DatetimeField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase } from "./fields";
+import { ChoiceField, DateField, DatetimeField, FileField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase } from "./fields";
 
 // --- field refs -----------------------------------------------------------
 
@@ -188,10 +188,19 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
     top(count: number): this { this._top = count; return this; }
     skip(count: number): this { this._skip = count; return this; }
 
-    /** Builds the raw OData v3 query string (no leading `?`) for `table.getRecords`/`getRecord`. */
+    /**
+     * Builds the raw OData v3 query string (no leading `?`) for `table.getRecords`/`getRecord`.
+     *
+     * With no `.select()` the default is "everything declared on the table":
+     * every plain field, the document field's `FileRef` mirror, and every
+     * reference field expanded with its standard carve-outs. `__metadata` is
+     * always included in `$select` so reads carry `__metadata.etag` regardless
+     * of how narrow the projection is (the MERGE/DELETE concurrency currency).
+     */
     build(): string {
         const parts: string[] = [];
-        const selectEntries = [...this._select];
+        if (this._select.length === 0) this.select((f) => this._defaultSelect());
+        const selectEntries = [...this._select, "__metadata"];
         const expandKeys = Object.keys(this._expand) as ReferenceKeys<TFields>[];
         for (const key of expandKeys) {
             const props = (this._expand as Record<string, readonly string[]>)[key as string];
@@ -215,6 +224,26 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
     private _tableKey(key: string): string {
         const field = (this._table.fields as Record<string, FieldBase<any>>)[key];
         return field?.name ?? key;
+    }
+
+    /** Default full select: every declared field (FileRef mirroring the file channel) + reference carve-outs. */
+    private _defaultSelect(): string[] {
+        const entries: string[] = [];
+        const fields = this._table.fields as Record<string, FieldBase<any>>;
+        for (const key of Object.keys(fields)) {
+            const field = fields[key];
+            const carve = DEFAULT_CARVE_OUTS.get(field?.constructor as Function);
+            if (carve) {
+                (this._expand as Record<string, readonly string[]>)[key] ??= carve;
+                continue; // references ride $expand, not $select
+            }
+            if (field instanceof FileField) {
+                entries.push(field.name, "FileRef"); // the url mirror the table's file reads rely on
+                continue;
+            }
+            entries.push(field.name);
+        }
+        return entries;
     }
 
     /** Cached typed proxy per builder instance. */
