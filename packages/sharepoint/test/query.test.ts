@@ -2,7 +2,8 @@ import { expect, test } from "vitest";
 import { SharePointClient } from "../src/client";
 import { SharePointTable } from "../src/table";
 import { choice, datetime, document, json, people, person, multiLookup, lookup, primaryKey, text, title } from "../src/fields";
-import { and, isNotNull, isNull, not, or, spQuery } from "../src/query";
+import { and, contains, endsWith, eq, gt, isNotNull, isNull, not, or, startsWith, spQuery } from "../src/query";
+
 
 // Pure unit tests over the query builder: assert built OData v3 strings.
 
@@ -30,9 +31,9 @@ function Docs() {
 
 test("select renders the declared field names, unknown keys excluded", () => {
     const q = Docs().query()
-        .select((f) => [f.id, f.title, f.ko, f.status, f.created, f.author, f.file])
+        .select((f) => [f.id, f.title, f.ko, f.status, f.created, f.file])
         .build();
-    expect(q).toBe("$select=Id,Title,KO,Status,Created,Author,FileLeafRef");
+    expect(q).toBe("$select=Id,Title,KO,Status,Created,FileLeafRef");
 });
 
 test("select: reordered options and strings pass through", () => {
@@ -42,22 +43,33 @@ test("select: reordered options and strings pass through", () => {
     expect(q).toBe("$select=Custom_x0020_Col,KO");
 });
 
-test("expand adds reference $expand + Property/CarveOut select keys", () => {
+test("references selected alone auto-expand with their standard carve-outs", () => {
     const q = Docs().query()
-        .select((f) => [f.id, f.title])
-        .expand({ author: ["Id", "Title", "EMail"], concurCodes: ["Id", "Title"] })
+        .select((f) => [f.id, f.title, f.author, f.editor, f.concurCodes, f.reviewers])
         .build();
-    expect(q).toBe("$select=Id,Title,Author/Id,Author/Title,Author/EMail,Concur_x0020_Codes/Id,Concur_x0020_Codes/Title&$expand=Author,Concur_x0020_Codes");
+    // person/people carry Id/Title/EMail, lookups Id/Title — without .expand()
+    expect(q).toBe(
+        "$select=Id,Title,Author/Id,Author/Title,Author/EMail,Editor/Id,Editor/Title,Editor/EMail,"
+        + "Concur_x0020_Codes/Id,Concur_x0020_Codes/Title,Reviewers/Id,Reviewers/Title,Reviewers/EMail&$expand=Author,Editor,Concur_x0020_Codes,Reviewers",
+    );
+});
+
+test("expand() overrides the standard carve-outs where provided", () => {
+    const q = Docs().query()
+        .select((f) => [f.id, f.author])
+        .expand({ author: ["Id", "Title"] })
+        .build();
+    expect(q).toBe("$select=Id,Author/Id,Author/Title&$expand=Author");
 });
 
 test("where: choice/person/lookup/datetime filter literals follow the field type", () => {
     const q = Docs().query()
         .select((f) => [f.id])
         .where((f) => [
-            f.status.eq("Draft"),
-            f.author.eq(17),
-            f.project.eq({ id: 3 }), // { id } accepted for references
-            f.created.gt(new Date("2026-01-02T03:04:05Z")),
+            eq(f.status, "Draft"),
+            eq(f.author, 17),
+            eq(f.project, { id: 3 }), // { id } accepted for references
+            gt(f.created, new Date("2026-01-02T03:04:05Z")),
         ])
         .build();
     expect(q).toContain("Status eq 'Draft'");
@@ -70,13 +82,13 @@ test("where: and/or/not/isNull/isNotNull are composed with parens", () => {
     const q = Docs().query()
         .select((f) => [f.id])
         .where((f) => and(
-            or(f.status.eq("Draft"), f.status.eq("Approved")),
-            f.ko.startsWith("23"),
-            f.ko.contains("Nuc"),
-            f.ko.endsWith("A"),
+            or(eq(f.status, "Draft"), eq(f.status, "Approved")),
+            startsWith(f.ko, "23"),
+            contains(f.ko, "Nuc"),
+            endsWith(f.ko, "A"),
             isNull(f.project),
             isNotNull(f.author),
-            not(f.status.eq("Pending")),
+            not(eq(f.status, "Pending")),
         ))
         .build();
     expect(q).toContain("(Status eq 'Draft' or Status eq 'Approved')");
@@ -91,15 +103,15 @@ test("where: and/or/not/isNull/isNotNull are composed with parens", () => {
 test("where: chained filters accumulate with and()", () => {
     const q = Docs().query()
         .select((f) => [f.id])
-        .where((f) => f.status.eq("Draft"))
-        .where((f) => f.ko.startsWith("23"))
+        .where((f) => eq(f.status, "Draft"))
+        .where((f) => startsWith(f.ko, "23"))
         .build();
     expect(q).toContain("(Status eq 'Draft') and (startswith(KO, '23'))");
 });
 
 test("where: string values escape single quotes", () => {
     const q = Docs().query().select((f) => [f.id])
-        .where((f) => f.title.eq("O'Brien's"))
+        .where((f) => eq(f.title, "O'Brien's"))
         .build();
     expect(q).toContain("Title eq 'O''Brien''s'");
 });

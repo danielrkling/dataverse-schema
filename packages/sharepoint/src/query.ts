@@ -44,11 +44,15 @@ function filterKey(field: FieldBase<any>): string {
  */
 export class SPFieldRef<F extends FieldBase<any>, TValue = any> {
     readonly field: F;
+    /** The wire/column name written into $select/$expand (e.g. `Author`). */
     readonly name: string;
+    /** The TypeScript property key in the table's field map. */
+    readonly key: string;
 
-    constructor(field: F, name = field.name) {
+    constructor(field: F, key = field.name) {
         this.field = field;
-        this.name = name;
+        this.key = key;
+        this.name = field.name;
     }
 
     /** Raw select key that flows to `$select` (documented for expand carve-outs). */
@@ -149,10 +153,23 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
      * automatically — only *expanded* reference fields need their `Id`/`Title`
      * carve-outs inside the select entries, which {@link expand} adds.
      */
-    select(fields: (f: QueryProxy<TFields>) => (SPFieldRef<any, any> | string | undefined)[]): this {
+    select(fields: (f: QueryProxy<TFields>) => (SPFieldRef<any, any> | string | undefined | null)[]): this {
         this._select = (fields(this.proxy()) ?? [])
-            .map((entry: SPFieldRef<any, any> | string | undefined | null) => (typeof entry === "string" ? entry : entry?.name))
-            .filter((entry): entry is string => !!entry);
+            .map((entry: SPFieldRef<any, any> | string | undefined | null) => {
+                if (typeof entry === "string") return { kind: "raw" as const, value: entry };
+                if (!entry) return undefined;
+                if (DEFAULT_CARVE_OUTS.has(entry.field.constructor as Function)) {
+                    // Reference fields expand themselves: the carve-outs are the
+                    // same for every column of that kind (person: Id/Title/EMail;
+                    // lookup: Id/Title), so select() treats them as expands —
+                    // no separate .expand() definition required.
+                    this._expand[entry.key as ReferenceKeys<TFields>] ??= DEFAULT_CARVE_OUTS.get(entry.field.constructor as Function)!;
+                    return undefined;
+                }
+                return { kind: "raw" as const, value: entry.name };
+            })
+            .filter((entry): entry is { kind: "raw"; value: string } => !!entry)
+            .map((entry) => entry.value);
         return this;
     }
 
@@ -220,11 +237,36 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
     }
 }
 
+/**
+ * Standard expand carve-outs per reference field kind — `select()` expands
+ * these automatically; `.expand()` overrides/adds per key.
+ */
+const DEFAULT_CARVE_OUTS = new Map<Function, readonly string[]>([
+    [PersonField, ["Id", "Title", "EMail"]],
+    [PeopleField, ["Id", "Title", "EMail"]],
+    [LookupField, ["Id", "Title"]],
+    [MultiLookupField, ["Id", "Title"]],
+]);
+
+/** Free-function comparators — function style reads better in `and`/`or` chains. */
+type AnyRef = SPFieldRef<FieldBase<any>, any>;
+type RefValue<R> = R extends SPFieldRef<any, infer V> ? V : never;
+
+export function eq<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.eq(value); }
+export function ne<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.ne(value); }
+export function gt<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.gt(value); }
+export function ge<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.ge(value); }
+export function lt<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.lt(value); }
+export function le<R extends AnyRef>(ref: R, value: RefValue<R>): string { return ref.le(value); }
+export function contains<R extends AnyRef>(ref: R, value: string): string { return ref.contains(value); }
+export function startsWith<R extends AnyRef>(ref: R, value: string): string { return ref.startsWith(value); }
+export function endsWith<R extends AnyRef>(ref: R, value: string): string { return ref.endsWith(value); }
+
 /** Per-call-site proxy over the table's declared fields (typed keys + refs). */
 export function buildProxy<TFields extends Record<string, FieldBase<any>>>(fields: TFields): QueryProxy<TFields> {
     const proxy = {} as QueryProxy<TFields>;
     for (const key of Object.keys(fields)) {
-        proxy[key as keyof QueryProxy<TFields>] = new SPFieldRef((fields as Record<string, any>)[key]) as QueryProxy<TFields>[keyof QueryProxy<TFields>];
+        proxy[key as keyof QueryProxy<TFields>] = new SPFieldRef((fields as Record<string, FieldBase<any>>)[key], key) as QueryProxy<TFields>[keyof QueryProxy<TFields>];
     }
     return proxy;
 }
