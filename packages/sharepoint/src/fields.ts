@@ -336,9 +336,9 @@ export function primaryKey(name: string = "Id") { return new NumberField(name, {
  * enforcement stays server-side.
  */
 export class ChoiceField<C extends string = string> extends FieldBase<C | null> {
-    readonly choices: C[] | undefined;
+    readonly choices: readonly C[] | undefined;
 
-    constructor(name: string, options: FieldOptions<C | null> & { choices?: C[] } = {}) {
+    constructor(name: string, options: FieldOptions<C> & { choices?: readonly C[] } = {}) {
         super(name, "choice", options);
         this.choices = options.choices;
     }
@@ -353,8 +353,11 @@ export class ChoiceField<C extends string = string> extends FieldBase<C | null> 
  * Dataverse package). Writes re-join with the delimiter.
  */
 export class MultiChoiceField<C extends string = string> extends FieldBase<C[]> {
-    constructor(name: string, options: FieldOptions<C[]> = {}) {
+    readonly choices: readonly C[] | undefined;
+
+    constructor(name: string, options: FieldOptions<C[]> & { choices?: readonly C[] } = {}) {
         super(name, "multiChoice", options);
+        this.choices = options.choices;
     }
     override fromSharePoint(wire: unknown): C[] {
         if (wire == null || wire === "") return [];
@@ -367,10 +370,20 @@ export class MultiChoiceField<C extends string = string> extends FieldBase<C[]> 
     }
 }
 
-export function choice<C extends string = string>(name: string, options?: FieldOptions<C | null> & { choices?: C[] }) {
+/**
+ * Single-select choice column. Nullable by construction (`null` ⇔ unset).
+ * The value union is INFERRED from the `choices` array (SharePoint stores
+ * choice values as display strings — no numeric label mapping like
+ * Dataverse's `{ 1: "Draft" }`):
+ *
+ *   choice("Status", { choices: ["Draft", "Pending"] }) // "Draft" | "Pending" | null
+ *
+ * or typed explicitly via the generic when the list is built dynamically.
+ */
+export function choice<C extends string = string>(name: string, options?: FieldOptions<C> & { choices?: readonly C[] }) {
     return new ChoiceField(name, options);
 }
-export function multiChoice<C extends string = string>(name: string, options?: FieldOptions<C[]>) {
+export function multiChoice<C extends string = string>(name: string, options?: FieldOptions<C[]> & { choices?: readonly C[] }) {
     return new MultiChoiceField(name, options);
 }
 

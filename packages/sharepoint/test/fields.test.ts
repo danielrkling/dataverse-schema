@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { text, number, bool, date, datetime, json, people, person, lookupId, parseIdName } from "../src/fields";
+import { text, number, bool, date, datetime, json, choice, multiChoice, people, person, lookupId, parseIdName } from "../src/fields";
 
 // --- date: real Date objects ---
 
@@ -84,4 +84,25 @@ test("parseIdName handles id-only and empty legacy strings", () => {
     expect(parseIdName("5;#")).not.toHaveProperty("name");
     expect(parseIdName("0;#")).toBeNull();
     expect(parseIdName(undefined)).toBeNull();
+});
+
+// --- choice: value union inferred from the choices array ---
+
+test("choice infers the display-string union from choices (no explicit generic)", () => {
+    const f = choice("Status", { choices: ["Draft", "Pending", "Approved"] });
+    // compile-time evidence: the read type IS the inferred union | null —
+    // these assignments only typecheck if fromSharePoint returns exactly that.
+    const draft: "Draft" | "Pending" | "Approved" | null = f.fromSharePoint("Draft");
+    expect(draft).toBe("Draft");
+    const unsetValue: "Draft" | "Pending" | "Approved" | null = f.fromSharePoint(null);
+    expect(unsetValue).toBeNull();
+    // an out-of-table value must NOT be assignable (would fail: Type '"X"')
+    const explicit: string | null = f.fromSharePoint("Any"); // widened ok
+    expect(explicit).toBe("Any");
+});
+
+test("multiChoice values infer their element typing the same way", () => {
+    const f = multiChoice("Tags", { choices: ["Alpha", "Beta"] });
+    const tags = f.toSharePoint(["Alpha"] as any);
+    expect(tags).toBe("Alpha");
 });
