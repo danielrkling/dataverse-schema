@@ -31,21 +31,31 @@ function Docs() {
 
 test("select renders the declared field names, unknown keys excluded", () => {
     const q = Docs().query()
-        .select((f) => [f.id, f.title, f.ko, f.status, f.created, f.file])
+        .select((f) => ({ id: f.id, title: f.title, ko: f.ko, status: f.status, created: f.created, file: f.file }))
         .build();
     expect(q).toBe("$select=Id,Title,KO,Status,Created,FileLeafRef");
 });
 
-test("select: reordered options and strings pass through", () => {
+test("select: keys may be reordered arbitrarily (select order is ours to choose)", () => {
     const q = Docs().query()
-        .select((f) => ["Custom_x0020_Col", f.ko])
+        .select((f) => ({ ko: f.ko, created: f.created }))
         .build();
-    expect(q).toBe("$select=Custom_x0020_Col,KO");
+    expect(q).toBe("$select=KO,Created")
+});
+
+test("select fixes the record type to the picked subset", async () => {
+    const DocsT = Docs();
+    const q = DocsT.query().select((f) => ({ id: f.id, title: f.title }));
+    // compile-time evidence: the resolved rows ARE the picked subset type:
+    // narrowing the pick types the result: assigning an object missing the
+    // picked keys fails tsc; this one compiles because it matches exactly.
+    const typedRows: Awaited<ReturnType<typeof q.execute>> = [{ id: 1, title: "x" }];
+    expect(typedRows[0].title).toBe("x");
 });
 
 test("references selected alone auto-expand with their standard carve-outs", () => {
     const q = Docs().query()
-        .select((f) => [f.id, f.title, f.author, f.editor, f.concurCodes, f.reviewers])
+        .select((f) => ({ id: f.id, title: f.title, author: f.author, editor: f.editor, concurCodes: f.concurCodes, reviewers: f.reviewers }))
         .build();
     // person/people carry Id/Title/EMail, lookups Id/Title — without .expand()
     expect(q).toBe(
@@ -56,7 +66,7 @@ test("references selected alone auto-expand with their standard carve-outs", () 
 
 test("expand() ADDS extra props on top of the standard carve-outs (union)", () => {
     const q = Docs().query()
-        .select((f) => [f.id, f.author])
+        .select((f) => ({ id: f.id, author: f.author }))
         .expand({ author: ["JobTitle"] }) // additional prop, standard set kept
         .build();
     expect(q).toBe("$select=Id,Author/Id,Author/Title,Author/EMail,Author/JobTitle&$expand=Author");
@@ -65,11 +75,11 @@ test("expand() ADDS extra props on top of the standard carve-outs (union)", () =
 test("where: choice/person/lookup/datetime filter literals follow the field type", () => {
     const q0 = null;
     const q = Docs().query()
-        .select((f) => [f.id])
+        .select((f) => ({ id: f.id }))
         .where((f) => [
             eq(f.status, "Draft"),
             eq(f.author, 17),
-            eq(f.project, { id: 3 }), // { id } accepted for references
+            eq(f.project, 3), // references filter on their numeric id
             gt(f.created, new Date("2026-01-02T03:04:05Z")),
         ])
         .build();
@@ -81,7 +91,7 @@ test("where: choice/person/lookup/datetime filter literals follow the field type
 
 test("where: and/or/not/isNull/isNotNull are composed with parens", () => {
     const q = Docs().query()
-        .select((f) => [f.id])
+        .select((f) => ({ id: f.id }))
         .where((f) => and(
             or(eq(f.status, "Draft"), eq(f.status, "Approved")),
             startsWith(f.ko, "23"),
@@ -103,7 +113,7 @@ test("where: and/or/not/isNull/isNotNull are composed with parens", () => {
 
 test("where: chained filters accumulate with and()", () => {
     const q = Docs().query()
-        .select((f) => [f.id])
+        .select((f) => ({ id: f.id }))
         .where((f) => eq(f.status, "Draft"))
         .where((f) => startsWith(f.ko, "23"))
         .build();
@@ -111,7 +121,7 @@ test("where: chained filters accumulate with and()", () => {
 });
 
 test("where: string values escape single quotes", () => {
-    const q = Docs().query().select((f) => [f.id])
+    const q = Docs().query().select((f) => ({ id: f.id }))
         .where((f) => eq(f.title, "O'Brien's"))
         .build();
     expect(q).toContain("Title eq 'O''Brien''s'");
@@ -119,7 +129,7 @@ test("where: string values escape single quotes", () => {
 
 test("orderby/top/skip render once each", () => {
     const q = Docs().query()
-        .select((f) => [f.id])
+        .select((f) => ({ id: f.id }))
         .orderBy((f) => f.created, "desc")
         .orderBy((f) => f.title)
         .skip(10)

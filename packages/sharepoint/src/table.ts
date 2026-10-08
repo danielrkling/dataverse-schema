@@ -89,7 +89,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      * not declared fields are dropped — declare them (or use
      * `GenericProperties` style tables) when you need raw passthrough.
      */
-    transformItemFromSharePoint(wire: any): any {
+    transformItemFromSharePoint(wire: any): InferRecord<TFields> {
         if (!wire || typeof wire !== "object") return wire;
         const out: Record<string, unknown> = {};
         for (const [tsKey, field] of Object.entries(this.fields) as [string, FieldBase<any>][]) {
@@ -107,7 +107,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             if (meta.type != null) out["$type"] = meta.type;
             if (meta.uri != null) out["$uri"] = meta.uri;
         }
-        return out;
+        return out as InferRecord<TFields>;
     }
 
     /** Transformed record partial → wire REST payload (without `__metadata`). */
@@ -189,7 +189,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      * @example
      * const done = await Tasks.getRecords('$filter=IsDone eq true&$orderby=Title');
      */
-    async getRecords(query?: string, options: QueryRequestOptions = {}) {
+    async getRecords(query?: string, options: QueryRequestOptions = {}): Promise<InferRecord<TFields>[]> {
         return this.client.getRecords(this.listTitle, { query, signal: options.signal }).then((rows) => rows && rows.map((r) => this.transformItemFromSharePoint(r)));
     }
 

@@ -16,8 +16,9 @@
  * const items = await Documents.getRecords(q.build());
  */
 
-import { SharePointTable, type SharePointTableOptions } from "./table";
-import { ChoiceField, DateField, DatetimeField, FileField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase } from "./fields";
+import type { SharePointTable } from "./table";
+import type { QueryRequestOptions } from "./client";
+import { ChoiceField, DateField, DatetimeField, FileField, JsonField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase, type InferRecord, type FileRef } from "./fields";
 
 // --- field refs -----------------------------------------------------------
 
@@ -92,14 +93,14 @@ export function isNotNull(ref: { field: FieldBase<any> }): string {
 
 type ValueOf<F extends FieldBase<any>> =
     F extends ChoiceField<infer C> ? C :
-    F extends PersonField | LookupField ? number | { id: number } | null :
+    F extends PersonField | LookupField ? number :
     F extends StringField<infer S> ? S :
     F extends NumberField<infer N> ? N :
     F extends BooleanField ? boolean :
     F extends DateField<any> ? Date :
     F extends DatetimeField<any> ? Date :
     F extends MultiChoiceField<infer C> ? C :
-    F extends PeopleField | MultiLookupField ? string :
+    F extends PeopleField | MultiLookupField | MultiChoiceField<infer C> ? string :
     never;
 
 /** The typed field refs a query callback receives (one per declared field). */
@@ -111,12 +112,33 @@ type ReferenceKeys<TFields extends Record<string, FieldBase<any>>> = {
     [K in keyof TFields]: TFields[K] extends PersonField | LookupField | PeopleField | MultiLookupField ? K : never;
 }[keyof TFields];
 
+/** The value type one field reads back as (record-side, not comparator-side). */
+type ReadValueOf<F extends FieldBase<any>> =
+    F extends ChoiceField<infer C> ? C | null :
+    F extends PersonField | LookupField ? { id: number; name?: string; email?: string } | null :
+    F extends PeopleField | MultiLookupField ? Array<{ id: number; name?: string; email?: string }> :
+    F extends StringField<infer S> ? S :
+    F extends NumberField<infer N> ? N :
+    F extends BooleanField ? boolean :
+    F extends DateField<any> | DatetimeField<any> ? Date | null :
+    F extends JsonField<infer J> ? J :
+    F extends FileField ? FileRef | null :
+    never;
+
+/** A `.select()` pick: each ref maps to its read value type under the same key. */
+export type PickedRecord<P extends object> = {
+    [K in keyof P]: P[K] extends SPFieldRef<infer F, any> ? ReadValueOf<F & FieldBase<any>> : never;
+};
+
 /** `expand({ author: ["Id","Title"] })` — keys restricted to reference fields. */
 export type ExpandSpec<TFields extends Record<string, FieldBase<any>>> = Partial<Record<ReferenceKeys<TFields>, readonly string[]>>;
 
 // --- the builder ----------------------------------------------------------
 
-export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
+export class SPQuery<
+    TFields extends Record<string, FieldBase<any>>,
+    TResult extends Record<string, any> = InferRecord<TFields>,
+> {
     constructor(private readonly _table: SharePointTable<TFields>) {}
 
     private _select: string[] = [];
@@ -127,15 +149,20 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
     private _skip: number | undefined;
 
     /**
-     * Declares the returned columns (typed refs from the table's field map).
+     * Declares the returned columns and FIXES the builder's result type to
+     * exactly the picked subset:
+     *
+     *   .select((f) => ({ id: f.id, status: f.status }))   // → Promise<{ id: number; status: "…" | null }[]>
+     *
      * Reference fields that are expanded (see {@link expand}) are added
      * automatically — only *expanded* reference fields need their `Id`/`Title`
      * carve-outs inside the select entries, which {@link expand} adds.
      */
-    select(fields: (f: QueryProxy<TFields>) => (SPFieldRef<any, any> | string | undefined | null)[]): this {
-        this._select = (fields(this.proxy()) ?? [])
-            .map((entry: SPFieldRef<any, any> | string | undefined | null) => {
-                if (typeof entry === "string") return { kind: "raw" as const, value: entry };
+    select<P extends { [K in keyof TFields & string]?: SPFieldRef<any, any> }>(
+        fields: (f: QueryProxy<TFields>) => P,
+    ): SPQuery<TFields, PickedRecord<P>> {
+        this._select = Object.values(fields(this.proxy()) ?? {})
+            .map((entry) => {
                 if (!entry) return undefined;
                 if (DEFAULT_CARVE_OUTS.has(entry.field.constructor as Function)) {
                     // Reference fields expand themselves: the carve-outs are the
@@ -145,11 +172,10 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
                     this._expand[entry.key as ReferenceKeys<TFields>] ??= DEFAULT_CARVE_OUTS.get(entry.field.constructor as Function)!;
                     return undefined;
                 }
-                return { kind: "raw" as const, value: entry.name };
+                return entry.name;
             })
-            .filter((entry): entry is { kind: "raw"; value: string } => !!entry)
-            .map((entry) => entry.value);
-        return this;
+            .filter((entry): entry is string => !!entry);
+        return this as unknown as SPQuery<TFields, PickedRecord<P>>;
     }
 
     /**
@@ -201,9 +227,15 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
      * a guaranteed `$etag` after a narrow read, re-fetch the record (table
      * `getRecord`) or pass `ifMatch: "*"` explicitly.
      */
+    /** Runs the built query against its own table and resolves the picked record type. */
+    async execute(options: QueryRequestOptions = {}): Promise<TResult[]> {
+        const rows = await this._table.getRecords(this.build(), options);
+        return rows as unknown as TResult[];
+    }
+
     build(): string {
         const parts: string[] = [];
-        if (this._select.length === 0) this.select((f) => this._defaultSelect());
+        if (this._select.length === 0) this._select = this._defaultSelect();
         const selectEntries = [...this._select];
         const expandKeys = Object.keys(this._expand) as ReferenceKeys<TFields>[];
         for (const key of expandKeys) {
@@ -316,4 +348,3 @@ export function buildProxy<TFields extends Record<string, FieldBase<any>>>(field
 export function spQuery<TFields extends Record<string, FieldBase<any>>>(table: SharePointTable<TFields>): SPQuery<TFields> {
     return new SPQuery(table);
 }
-export type { SharePointTableOptions };
