@@ -48,6 +48,9 @@ export class FieldBase<T> {
         return this.name;
     }
 
+    /** No runtime value. Use with typeof field.T */
+    T!: T
+
     /** Wire value (REST payload) → TS read value. */
     fromSharePoint(wire: unknown): T {
         return wire as T;
@@ -513,4 +516,7 @@ export function document(name: string = "FileLeafRef", options?: FieldOptions<Fi
 export type InferRecord<TFields extends Record<string, FieldBase<any>>> = {
     [K in keyof TFields]: TFields[K] extends FieldBase<infer T> ? T : never;
 };
+
+/** The table's inferred record type via the phantom `T` property (`InferTable<typeof Tasks>`). */
+export type InferTable<TTable extends { T: any }> = TTable["T"];
 

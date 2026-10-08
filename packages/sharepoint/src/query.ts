@@ -47,6 +47,8 @@ export class SPFieldRef<F extends FieldBase<any>, TValue = any> {
     readonly field: F;
     /** The wire/column name written into $select/$expand (e.g. `Author`). */
     readonly name: string;
+    /** No runtime value — mirrors field.T inside queries/picks. */
+    declare T: InferRecord<Record<string, F>>[string];
     /** The TypeScript property key in the table's field map. */
     readonly key: string;
 

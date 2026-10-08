@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { SharePointClient } from "../src/client";
 import { SharePointTable } from "../src/table";
+import { InferTable } from "../src/fields";
 import { text, number, bool, date, datetime, json, person, lookup } from "../src/fields";
 import { primaryKey } from "../src/fields";
 import { text as ftext, datetime as fdatetime } from "../src/fields";
@@ -145,4 +146,19 @@ test("updateRecord etag precedence: explicit ifMatch > $etag; delete passes If-M
     // delete forwards any etag it is given (server 412s on mismatch)
     await Tasks.deleteRecord(7, { ifMatch: '"2"' });
     expect(deleteSpy.mock.lastCall?.slice(0)).toEqual(["Tasks", 7, { ifMatch: '"2"' }]);
+});
+
+// --- phantom T property (parity with the Dataverse package) ---
+
+test("field.T / table.T carry the inferred types for typeof-style inference", () => {
+    const Tasks = makeTable();
+    // field.T resolves that field's value type (compile-only; phantom runtime):
+    void (Tasks.fields.title.T as string);
+    // table.T resolves the whole inferred record:
+    const record: typeof Tasks.T = { id: 1, title: "x", done: false, n: null, due: null, created: null, meta: null, owner: null, ref: null } as typeof Tasks.T;
+    expect(record.id).toBe(1);
+    // InferTable alias resolves through the phantom:
+    const alias: InferTable<typeof Tasks> = record;
+    expect(alias.id).toBe(1);
+    // a wrong record shape fails to compile (not asserted — cast safety is the point)
 });

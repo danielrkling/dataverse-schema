@@ -73,6 +73,9 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         return this.listTitle;
     }
 
+    /** No runtime value. Use for type inference: `InferRecord`-shaped ({@link InferTable}). */
+    T!: InferRecord<TFields>;
+
     constructor(options: SharePointTableOptions<TFields>) {
         this.client = options.client;
         this.listTitle = options.listTitle;
