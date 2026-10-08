@@ -33,14 +33,14 @@ test("select renders the declared field names, unknown keys excluded", () => {
     const q = Docs().query()
         .select((f) => [f.id, f.title, f.ko, f.status, f.created, f.file])
         .build();
-    expect(q).toBe("$select=Id,Title,KO,Status,Created,FileLeafRef,__metadata");
+    expect(q).toBe("$select=Id,Title,KO,Status,Created,FileLeafRef");
 });
 
 test("select: reordered options and strings pass through", () => {
     const q = Docs().query()
         .select((f) => ["Custom_x0020_Col", f.ko])
         .build();
-    expect(q).toBe("$select=Custom_x0020_Col,KO,__metadata");
+    expect(q).toBe("$select=Custom_x0020_Col,KO");
 });
 
 test("references selected alone auto-expand with their standard carve-outs", () => {
@@ -49,7 +49,7 @@ test("references selected alone auto-expand with their standard carve-outs", () 
         .build();
     // person/people carry Id/Title/EMail, lookups Id/Title — without .expand()
     expect(q).toBe(
-        "$select=Id,Title,__metadata,Author/Id,Author/Title,Author/EMail,Editor/Id,Editor/Title,Editor/EMail,"
+        "$select=Id,Title,Author/Id,Author/Title,Author/EMail,Editor/Id,Editor/Title,Editor/EMail,"
         + "Concur_x0020_Codes/Id,Concur_x0020_Codes/Title,Reviewers/Id,Reviewers/Title,Reviewers/EMail&$expand=Author,Editor,Concur_x0020_Codes,Reviewers",
     );
 });
@@ -59,7 +59,7 @@ test("expand() ADDS extra props on top of the standard carve-outs (union)", () =
         .select((f) => [f.id, f.author])
         .expand({ author: ["JobTitle"] }) // additional prop, standard set kept
         .build();
-    expect(q).toBe("$select=Id,__metadata,Author/Id,Author/Title,Author/EMail,Author/JobTitle&$expand=Author");
+    expect(q).toBe("$select=Id,Author/Id,Author/Title,Author/EMail,Author/JobTitle&$expand=Author");
 });
 
 test("where: choice/person/lookup/datetime filter literals follow the field type", () => {
@@ -125,20 +125,20 @@ test("orderby/top/skip render once each", () => {
         .skip(10)
         .top(20)
         .build();
-    expect(q).toBe("$select=Id,__metadata&$orderby=Created desc,Title&$top=20&$skip=10");
+    expect(q).toBe("$select=Id&$orderby=Created desc,Title&$top=20&$skip=10");
 });
 
 test("empty select builds the full default select; standalone spQuery(table) mirrors query()", () => {
     expect(Docs().query().build()).toBe(
         "$select=Id,Title,KO,Status,Created,Concurrence_Status_JSON,"
-        + "FileLeafRef,FileRef,__metadata,"
+        + "FileLeafRef,FileRef,"
         + "Author/Id,Author/Title,Author/EMail,Editor/Id,Editor/Title,Editor/EMail,"
         + "Project/Id,Project/Title,Source/Id,Source/Title,"
         + "Concur_x0020_Codes/Id,Concur_x0020_Codes/Title,"
         + "Reviewers/Id,Reviewers/Title,Reviewers/EMail"
         + "&$expand=Author,Editor,Project,Source,Concur_x0020_Codes,Reviewers");
     const DocsT = Docs();
-    // top() alone still builds a full default select (the server needs $select for etags)
+    // top() alone still builds a full default select
     expect(spQuery(DocsT).top(3).build()).toContain("$top=3");
-    expect(spQuery(DocsT).top(3).build()).toContain("__metadata");
+    expect(spQuery(DocsT).top(3).build()).toContain("FileRef");
 });

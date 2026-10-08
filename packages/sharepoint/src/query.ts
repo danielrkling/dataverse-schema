@@ -193,14 +193,18 @@ export class SPQuery<TFields extends Record<string, FieldBase<any>>> {
      *
      * With no `.select()` the default is "everything declared on the table":
      * every plain field, the document field's `FileRef` mirror, and every
-     * reference field expanded with its standard carve-outs. `__metadata` is
-     * always included in `$select` so reads carry `__metadata.etag` regardless
-     * of how narrow the projection is (the MERGE/DELETE concurrency currency).
+     * reference field expanded with its standard carve-outs.
+     *
+     * Note: `__metadata` is deliberately NOT added to `$select` — the legacy
+     * `_api/web` surface rejects it as a selectable property on some tenants.
+     * `__metadata.etag` rides along on responses as served; when a MERGE needs
+     * a guaranteed `$etag` after a narrow read, re-fetch the record (table
+     * `getRecord`) or pass `ifMatch: "*"` explicitly.
      */
     build(): string {
         const parts: string[] = [];
         if (this._select.length === 0) this.select((f) => this._defaultSelect());
-        const selectEntries = [...this._select, "__metadata"];
+        const selectEntries = [...this._select];
         const expandKeys = Object.keys(this._expand) as ReferenceKeys<TFields>[];
         for (const key of expandKeys) {
             const props = (this._expand as Record<string, readonly string[]>)[key as string];
