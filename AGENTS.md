@@ -6,9 +6,13 @@ npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript libra
 
 - `packages/dataverse` — the library itself (npm package `dataverse-schema`)
 - `packages/sync` — `@dataverse-schema/sync`: the product-agnostic offline engine (durable IndexedDB mutation queue, no Dataverse knowledge); the Dataverse adapter lives in `packages/dataverse/src/sync/`
-- `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.
+- `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.Note: **no shared core** — keep the SharePoint package stand-alone (flat field/query surface).
 
-Maintenance note: `packages/sharepoint/src/` fields are intentionally a minimal `FieldBase`/factory set mirroring the Dataverse field-class conventions (factory names `text`/`number`/`bool`/`date`/`datetime`/`primaryKey`). They will converge into a shared `packages/core` — do not build SharePoint-specific abstractions on top of the client/table beyond this slice without first considering a core extraction.
+Deliberate design decision: **no shared core**. The SharePoint package is standalone with a flat field/query surface — duplicate, don't extract. Fields (`packages/sharepoint/src/fields.ts`) follow the Dataverse field-class conventions (camelCase factories `text`/`number`/`bool`/`json`/`date`/`datetime`/`people`/`lookupId`/`primaryKey`/`title`) but implement only what the SharePoint REST surface needs:
+- `date`/`datetime` read/write real `Date` instances (wire is ISO; invalid wire reads as null)
+- `json` parses serializable string columns (`multi-line` JSON) — undefined/null read as null; non-JSON strings throw
+- `people`/`lookupId` read `Person`/`Lookup` = `{ id, name? }` from unexpanded (`{ Id }` / plain number), expanded (`$expand`, `{ Id, Title }` / `{ LookupId }`), and legacy `"2;#Name"` wire shapes; `0`/empty read as null; write sends the plain numeric id
+Don't add abstractions (filter trees, expand graphs, batch) to this package beyond what the flat query surface needs.
 
 ## Build, Lint, and Test Commands
 

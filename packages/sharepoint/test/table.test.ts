@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { SharePointClient } from "../src/client";
 import { SharePointTable } from "../src/table";
-import { text, number, bool, date, datetime } from "../src/fields";
+import { text, number, bool, date, datetime, json, people, lookupId } from "../src/fields";
 import { primaryKey } from "../src/fields";
 import { text as ftext, datetime as fdatetime } from "../src/fields";
 
@@ -22,6 +22,9 @@ function makeTable() {
             n: number("Amount0"),
             due: date("DueDate"),
             created: datetime("Created"),
+            meta: json("Meta0"),
+            owner: people("OwnerId"),
+            ref: lookupId("RefId"),
         },
     });
 }
@@ -37,6 +40,9 @@ test("table.fromSharePoint maps fields and hoists __metadata as $-keys", () => {
         Amount0: "3.5",
         DueDate: "2026-01-02",
         Created: "2026-01-02T03:04:05Z",
+        Meta0: null,
+        OwnerId: { __metadata: { type: "SP.FieldUserValue" }, Id: 17 },
+        RefId: "2;#Project Alpha",
         __metadata: { etag: '"2"', type: "SP.Data.TasksListItem", uri: "w", id: 12 },
         UndeclaredThing: 1, // dropped — not a declared field
     });
@@ -45,8 +51,11 @@ test("table.fromSharePoint maps fields and hoists __metadata as $-keys", () => {
         title: "hello",
         done: false,
         n: 3.5,
-        due: "2026-01-02",
+        due: new Date("2026-01-02"),
         created: new Date("2026-01-02T03:04:05Z"),
+        meta: null,
+        owner: { id: 17 },
+        ref: { id: 2, name: "Project Alpha" },
         "$etag": '"2"',
         "$type": "SP.Data.TasksListItem",
         "$uri": "w",

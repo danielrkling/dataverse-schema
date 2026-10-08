@@ -10,15 +10,15 @@
  *   `"MyCustomField0"`); discover via `_api/web/lists/GetByTitle('List')/Fields`.
  * - `Title` is the one SharePoint-ism: display name `Title`, internal `Title`,
  *   and it behaves like a non-null string (wire null ⇔ `""`).
-
- * TODO(convergence): once a `packages/core` is extracted, these classes move
- * there to share transforms + validation with the Dataverse field system.
+ *
+ * This package is intentionally standalone: SharePoint gets a flat, minimal
+ * field/query surface instead of the shared core the Dataverse package uses.
  */
 
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { ListItemId } from "./types";
 
-export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "datetime";
+export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "lookup";
 
 export type FieldOptions<T> = {
     /** Standard-Schema (valibot/Zod/ArkType) schema for the field's read value. */
@@ -84,38 +84,147 @@ export class BooleanField extends FieldBase<boolean> {
     }
 }
 
-export class DateField<T = string | null> extends FieldBase<T> {
+/** Date-only column. Reads/writes real `Date` objects (wire is `YYYY-MM-DDT00:00:00`). */
+export class DateField<T extends Date | null = Date | null> extends FieldBase<T> {
     constructor(name: string, options: FieldOptions<T> = {}) {
         super(name, "date", options);
     }
     override fromSharePoint(wire: unknown): T {
-        return (wire == null || wire === "" ? null : new Date(wire as string).toISOString().slice(0, 10)) as T;
+        if (wire == null || wire === "") return null as T;
+        const d = new Date(wire as string);
+        return (Number.isNaN(d.getTime()) ? null : d) as T;
     }
     override toSharePoint(value: T): unknown {
         if (value == null) return null;
-        return value instanceof Date ? value.toISOString().slice(0, 10) : value;
+        if (!(value instanceof Date)) throw new TypeError("date field expects a Date instance");
+        return value.toISOString();
     }
 }
 
-export class DatetimeField<T = Date | null> extends FieldBase<T> {
+export class DatetimeField<T extends Date | null = Date | null> extends FieldBase<T> {
     constructor(name: string, options: FieldOptions<T> = {}) {
         super(name, "datetime", options);
     }
     override fromSharePoint(wire: unknown): T {
-        return (wire == null || wire === "" ? null : new Date(wire as string)) as T;
+        if (wire == null || wire === "") return null as T;
+        const d = new Date(wire as string);
+        return (Number.isNaN(d.getTime()) ? null : d) as T;
     }
     override toSharePoint(value: T): unknown {
         if (value == null) return null;
-        return value instanceof Date ? value.toISOString() : value;
+        if (!(value instanceof Date)) throw new TypeError("datetime field expects a Date instance");
+        return value.toISOString();
     }
+}
+
+export class JsonField<T = any> extends FieldBase<T> {
+    constructor(name: string, options: FieldOptions<T> = {}) {
+        super(name, "json", options);
+    }
+    /** JSON string columns (`multi-line text` with plain-text JSON) — undefined/null reads as null. */
+    override fromSharePoint(wire: unknown): T {
+        if (wire == null || wire === "") return null as T;
+        try {
+            return JSON.parse(wire as string) as T;
+        } catch {
+            throw new Error(`Invalid JSON in column "${this.name}"`);
+        }
+    }
+    override toSharePoint(value: T): unknown {
+        if (value == null) return null;
+        if (typeof value === "string") return value;
+        return JSON.stringify(value);
+    }
+}
+
+/** A user/group reference: expanded or unexpanded REST shapes flatten to this. */
+export type Person = { id: number; name?: string };
+
+/** A lookup reference (per single-valued lookup column). */
+export type Lookup = Person;
+
+/**
+ * Person/group column (`SP.FieldUser`). Reads `nullable Person | null`.
+ *
+ * Wire shapes handled on read:
+ * - unexpanded: `{"__metadata":…, "Id": 17}` or the plain number `17` (verbose REST variants)
+ * - expanded (`$expand=Field`): `{ Id, Title, … }`
+ * - legacy string form: `"17;#Display Name"`
+ *
+ * Write: the id is sent as the plain numeric value (supported for single-value
+ * fields across SharePoint REST versions); multi-value person columns are out
+ * of scope for the flat query surface.
+ */
+export class PeopleField<T extends Person | null = Person | null> extends FieldBase<T> {
+    constructor(name: string, options: FieldOptions<T> = {}) {
+        super(name, "person", options);
+    }
+    override fromSharePoint(wire: unknown): T {
+        return parseIdName(wire) as T;
+    }
+    override toSharePoint(value: T): unknown {
+        if (value == null) return null;
+        if (typeof value !== "object" || typeof (value as Person).id !== "number") {
+            throw new TypeError("people field expects { id }");
+        }
+        return (value as Person).id;
+    }
+}
+
+/**
+ * Single-valued lookup column (`SP.FieldLookup`). Same shape handling as
+ * {@link PeopleField} — `id` from the wire (or `LookupId` when expanded),
+ * plus the lookup's display value when present (`Title`/`Value`/legacy `"2;#x"`).
+ */
+export class LookupField<T extends Lookup | null = Lookup | null> extends FieldBase<T> {
+    constructor(name: string, options: FieldOptions<T> = {}) {
+        super(name, "lookup", options);
+    }
+    override fromSharePoint(wire: unknown): T {
+        return parseIdName(wire) as T;
+    }
+    override toSharePoint(value: T): unknown {
+        if (value == null) return null;
+        if (typeof value !== "object" || typeof (value as Lookup).id !== "number") {
+            throw new TypeError("lookup field expects { id }");
+        }
+        return (value as Lookup).id;
+    }
+}
+
+/**
+ * Shared parser for person/lookup wire shapes:
+ * `{ Id / LookupId }` objects, plain numbers, and legacy `"2;#Name"` strings.
+ * `0` (the "no user" sentinel) and empty values read as `null`.
+ */
+export function parseIdName(wire: unknown): { id: number; name?: string } | null {
+    if (wire == null || wire === "") return null;
+    if (typeof wire === "object") {
+        const o = wire as NodeJS.Dict<unknown>;
+        const id = o["LookupId"] ?? o["Id"] ?? o["id"];
+        const name = (o["Title"] ?? o["name"]) as string | undefined;
+        if (typeof id !== "number" || id === 0) return null;
+        return { id, ...(name ? { name } : {}) };
+    }
+    if (typeof wire === "number") return wire === 0 ? null : { id: wire };
+    if (typeof wire === "string") {
+        const m = /^\s*(\d+)\s*;#(.*)$/.exec(wire);
+        if (m) return m[1] === "0" ? null : { id: Number(m[1]), ...(m[2] ? { name: m[2] } : {}) };
+        const n = Number(wire);
+        return Number.isNaN(n) || n === 0 ? null : { id: n };
+    }
+    return null;
 }
 
 // Factories follow the dataverse-schema pattern (camelCase, matching field kind).
 export function text(name: string, options?: FieldOptions<string>) { return new StringField(name, options); }
 export function number(name: string, options?: FieldOptions<number | null>) { return new NumberField(name, options); }
 export function bool(name: string, options?: FieldOptions<boolean>) { return new BooleanField(name, options); }
-export function date(name: string, options?: FieldOptions<string | null>) { return new DateField(name, options); }
+export function json<T = any>(name: string, options?: FieldOptions<T>) { return new JsonField(name, options); }
+export function date(name: string, options?: FieldOptions<Date | null>) { return new DateField(name, options); }
 export function datetime(name: string, options?: FieldOptions<Date | null>) { return new DatetimeField(name, options); }
+export function people(name: string, options?: FieldOptions<Person | null>) { return new PeopleField(name, options); }
+export function lookupId(name: string, options?: FieldOptions<Lookup | null>) { return new LookupField(name, options); }
 export function title(name: string = "Title", options?: FieldOptions<string>) { return new StringField(name, options); }
 
 /**
