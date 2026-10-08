@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { SharePointClient } from "../src/client";
 import { SharePointTable } from "../src/table";
-import { text, number, bool, date, datetime, json, person, lookupId } from "../src/fields";
+import { text, number, bool, date, datetime, json, person, lookup } from "../src/fields";
 import { primaryKey } from "../src/fields";
 import { text as ftext, datetime as fdatetime } from "../src/fields";
 
@@ -24,7 +24,7 @@ function makeTable() {
             created: datetime("Created"),
             meta: json("Meta0"),
             owner: person("OwnerId"),
-            ref: lookupId("RefId"),
+            ref: lookup("RefId"),
         },
     });
 }

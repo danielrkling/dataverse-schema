@@ -264,7 +264,7 @@ export class PeopleField extends FieldBase<Person[]> {
 }
 
 /**
- * Single-valued lookup column (`SP.FieldLookup`, `lookupId()`): same read
+ * Single-valued lookup column (`SP.FieldLookup`, `lookup()`): same read
  * shapes as {@link PersonField} — id from `{ Id }`/`{ LookupId }` (expanded),
  * plain number, or legacy `"2;#Name"` string.
  *
@@ -345,7 +345,7 @@ export function date(name: string, options?: FieldOptions<Date | null>) { return
 export function datetime(name: string, options?: FieldOptions<Date | null>) { return new DatetimeField(name, options); }
 export function people(name: string, options?: ReferenceFieldOptions<Person[]>) { return new PeopleField(name, options); }
 export function person(name: string, options?: ReferenceFieldOptions<Person | null>) { return new PersonField(name, options); }
-export function lookupId(name: string, options?: ReferenceFieldOptions<Lookup | null>) { return new LookupField(name, options); }
+export function lookup(name: string, options?: ReferenceFieldOptions<Lookup | null>) { return new LookupField(name, options); }
 export function title(name: string = "Title", options?: FieldOptions<string>) { return new StringField(name, options); }
 
 /**
@@ -375,13 +375,13 @@ export class ChoiceField<C extends string = string> extends FieldBase<C | null> 
 }
 
 /**
- * Multi-value reference *collection* column (`lookups()`): the same wire
+ * Multi-value reference *collection* column (`multiLookup()`): the same wire
  * shapes and `<Name>Id: { results: [...] }` write envelope as {@link PeopleField},
  * but for lookup columns (e.g. a multi-lookup "Concur codes" column). Reads
  * `Lookup[]`; person collections can use the same field (both flatten to
  * `{ id, name? }`).
  */
-export class LookupCollectionField extends FieldBase<Lookup[]> {
+export class MultiLookupField extends FieldBase<Lookup[]> {
     readonly writeShape: ReferenceWriteShape;
 
     constructor(name: string, options: ReferenceFieldOptions<Lookup[]> = {}) {
@@ -408,8 +408,8 @@ export class LookupCollectionField extends FieldBase<Lookup[]> {
     }
 }
 
-export function lookups(name: string, options?: ReferenceFieldOptions<Lookup[]> & { choices?: readonly Lookup[] }) {
-    return new LookupCollectionField(name, options);
+export function multiLookup(name: string, options?: ReferenceFieldOptions<Lookup[]> & { choices?: readonly Lookup[] }) {
+    return new MultiLookupField(name, options);
 }
 
 /**

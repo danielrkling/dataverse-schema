@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import * as v from "valibot";
-import { text, number, bool, date, datetime, json, choice, multiChoice, people, person, lookups, lookupId, parseIdName } from "../src/fields";
+import { text, number, bool, date, datetime, json, choice, multiChoice, people, person, multiLookup, lookup, parseIdName } from "../src/fields";
 
 // --- date: real Date objects ---
 
@@ -66,17 +66,17 @@ test("people reads expanded person result arrays, writes the <Name>Id envelope",
     expect(() => f.toSharePoint([{ id: "?" }] as any)).toThrow(TypeError);
 });
 
-// --- lookupId ---
+// --- lookup ---
 
-test("lookupId reads LookupId-expanded objects and legacy strings", () => {
-    const f = lookupId("Ref");
+test("lookup reads LookupId-expanded objects and legacy strings", () => {
+    const f = lookup("Ref");
     expect(f.fromSharePoint(null)).toBeNull();
     expect(f.fromSharePoint({ __metadata: { type: "SP.FieldLookupValue" }, LookupId: 2 })).toEqual({ id: 2 });
     expect(f.fromSharePoint({ Id: 2, Title: "Project Alpha" })).toEqual({ id: 2, name: "Project Alpha" });
     expect(f.fromSharePoint("2;#Project Alpha")).toEqual({ id: 2, name: "Project Alpha" });
     expect(f.writeName).toBe("RefId"); // derived write key
     expect(f.toSharePoint({ id: 2 } as any)).toBe(2);
-    expect(lookupId("Ref", { writeShape: "typed" }).toSharePoint({ id: 2 } as any))
+    expect(lookup("Ref", { writeShape: "typed" }).toSharePoint({ id: 2 } as any))
         .toEqual({ __metadata: { type: "SP.FieldLookupValue" }, id: 2 });
 });
 
@@ -129,10 +129,10 @@ test("json without a schema stays untyped parse-as-is", () => {
     expect(f.fromSharePoint('{"a":1}')).toEqual({ a: 1 });
 });
 
-// --- lookups: multi-lookup collections ---
+// --- multiLookup: multi-lookup collections ---
 
-test("lookups reads multi-lookup results and writes the <Name>Id envelope", () => {
-    const f = lookups("Concur_x0020_Codes");
+test("multiLookup reads multi-lookup results and writes the <Name>Id envelope", () => {
+    const f = multiLookup("Concur_x0020_Codes");
     expect(f.fromSharePoint(null)).toEqual([]);
     expect(f.fromSharePoint({ results: [
         { Id: 1, Title: "Nuc 23" },
