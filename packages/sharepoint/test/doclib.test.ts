@@ -23,8 +23,11 @@ function jsonResponse(body: unknown) {
 }
 function stubRoutes(routes: Array<[string, unknown]>) {
     mock.mockImplementation(async (url: string, init: RequestInit) => {
+        const d = decodeURIComponent(url);
         for (const [fragment, body] of routes) {
-            if (url.includes(fragment)) return jsonResponse(body);
+            if (d.includes(fragment)) {
+                return body instanceof Response ? body : jsonResponse(body);
+            }
         }
         throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -33,7 +36,7 @@ function stubRoutes(routes: Array<[string, unknown]>) {
 // --- choice transforms ---
 
 test("choice reads nullable strings, multiChoice splits on ';#'", () => {
-    const c = choiceFactory<{ Status: "A" | "B" }>("Pick0", { choices: ["A", "B"] });
+    const c = choiceFactory("Pick0", { choices: ["A", "B"] });
     expect(c.choices).toEqual(["A", "B"]);
     expect(c.fromSharePoint("A")).toBe("A");
     expect(c.fromSharePoint("")).toBeNull();
@@ -84,12 +87,6 @@ test("create with file content uploads via Files/Add, merges metadata, then fetc
         },
     });
 
-    stubRoutes([
-        ["/Files/Add(url=%27report.pdf%27,overwrite=true)", { d: { __metadata: {}, ServerRelativeUrl: "/Documents/report.pdf", ListItemAllFields: { Id: 99 } } }],
-        ["/Web/Lists/GetByTitle", (url: string) => (url.includes("RootFolder") ? { d: { ServerRelativeUrl: "/Documents" } } : { d: { Id: 99, FileLeafRef: "report.pdf", FileRef: "/Documents/report.pdf", Title: null, SizeKB: 12, __metadata: { etag: '"1"', type: "SP.Data.DocumentsListItem" } } })],
-        ["Items(99)", { d: { Id: 99, FileLeafRef: "report.pdf", FileRef: "/Documents/report.pdf", Title: null, SizeKB: 12, __metadata: { etag: '"2"', type: "SP.Data.DocumentsListItem" } } }],
-    ] as any);
-    // Route 1 above uses objects; re-stub with a routing fn:
     mock.mockImplementation(async (url: string, init: RequestInit) => {
         const u = decodeURIComponent(url);
         if (u.includes("Files/Add")) {
