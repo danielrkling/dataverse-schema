@@ -140,9 +140,9 @@ export class DatetimeField<T extends Date | null = Date | null> extends FieldBas
  * Without a schema the value stays `unknown`-ish (parsed as-is).
  */
 export class JsonField<T = any> extends FieldBase<T> {
-    readonly schema?: StandardSchemaV1<unknown, T>;
+    readonly schema?: StandardSchemaV1<T>;
 
-    constructor(name: string, options: FieldOptions<T> & { schema?: StandardSchemaV1<unknown, T> } = {}) {
+    constructor(name: string, options: Omit<FieldOptions<T>,"schema"> & { schema?: StandardSchemaV1<T> } = {}) {
         super(name, "json", options);
         this.schema = options.schema;
     }
@@ -346,8 +346,8 @@ export function parseIdName(wire: unknown): { id: number; name?: string } | null
 export function text(name: string, options?: FieldOptions<string>) { return new StringField(name, options); }
 export function number(name: string, options?: FieldOptions<number | null>) { return new NumberField(name, options); }
 export function bool(name: string, options?: FieldOptions<boolean>) { return new BooleanField(name, options); }
-export function json<T = any>(name: string, options?: FieldOptions<T> & { schema?: StandardSchemaV1<unknown, T> }) {
-    return new JsonField(name, options);
+export function json<T = any>(name: string, options?: Omit<FieldOptions<T>,"schema"> & { schema?: StandardSchemaV1<T> }) {
+    return new JsonField<T>(name, options);
 }
 export function date(name: string, options?: FieldOptions<Date | null>) { return new DateField(name, options); }
 export function datetime(name: string, options?: FieldOptions<Date | null>) { return new DatetimeField(name, options); }

@@ -237,7 +237,11 @@ export class SPQuery<
 
     build(): string {
         const parts: string[] = [];
-        if (this._select.length === 0) this._select = this._defaultSelect();
+        if (this._select.length === 0 && Object.keys(this._expand).length === 0) {
+            const projection = defaultProjection(this._table);
+            this._select = projection.select;
+            Object.assign(this._expand as Record<string, readonly string[]>, projection.expand);
+        }
         const selectEntries = [...this._select];
         const expandKeys = Object.keys(this._expand) as ReferenceKeys<TFields>[];
         for (const key of expandKeys) {
@@ -258,38 +262,64 @@ export class SPQuery<
         return parts.join("&");
     }
 
-    /** Fields on references read through the expanded parent (`Author/Id`). */
-    private _tableKey(key: string): string {
-        const field = (this._table.fields as Record<string, FieldBase<any>>)[key];
-        return field?.name ?? key;
-    }
-
-    /** Default full select: every declared field (FileRef mirroring the file channel) + reference carve-outs. */
-    private _defaultSelect(): string[] {
-        const entries: string[] = [];
-        const fields = this._table.fields as Record<string, FieldBase<any>>;
-        for (const key of Object.keys(fields)) {
-            const field = fields[key];
-            const carve = DEFAULT_CARVE_OUTS.get(field?.constructor as Function);
-            if (carve) {
-                (this._expand as Record<string, readonly string[]>)[key] ??= carve;
-                continue; // references ride $expand, not $select
-            }
-            if (field instanceof FileField) {
-                entries.push(field.name, "FileRef"); // the url mirror the table's file reads rely on
-                continue;
-            }
-            entries.push(field.name);
-        }
-        return entries;
-    }
-
     /** Cached typed proxy per builder instance. */
     private _proxy: QueryProxy<TFields> | undefined;
     private proxy(): QueryProxy<TFields> {
         this._proxy ??= buildProxy<TFields>(this._table.fields);
         return this._proxy;
     }
+
+    /** Fields on references read through the expanded parent (`Author/Id`). */
+    private _tableKey(key: string): string {
+        return fieldName(this._table, key);
+    }
+}
+
+/** The field's SharePoint (logical) name, falling back to the key itself. */
+function fieldName(table: SharePointTable<any>, key: string): string {
+    return (table.fields as Record<string, FieldBase<any>>)[key]?.name ?? key;
+}
+
+/**
+ * Default full projection: every declared plain field + `FileRef` mirror for
+ * file channels; reference fields ride `$expand` with their standard carve-outs
+ * (a bare `/Items` response only serves `[Field]Id` numbers, and the expanded
+ * shapes are what the reference readers document). Consumed by the builder's
+ * `build()` when no `.select()` was given and by the table's plain
+ * `getRecord`/`getRecords` when the caller passes no query.
+ */
+export function defaultProjection(table: SharePointTable<any>): { select: string[]; expand: Record<string, readonly string[]> } {
+    const select: string[] = [];
+    const expand: Record<string, readonly string[]> = {};
+    const fields = table.fields as Record<string, FieldBase<any>>;
+    for (const key of Object.keys(fields)) {
+        const field = fields[key];
+        const carve = DEFAULT_CARVE_OUTS.get(field?.constructor as Function);
+        if (carve) {
+            expand[key] = carve;
+            continue; // references ride $expand, not $select
+        }
+        if (field instanceof FileField) {
+            select.push(field.name, "FileRef"); // the url mirror the table's file reads rely on
+            continue;
+        }
+        select.push(field.name);
+    }
+    return { select, expand };
+}
+
+/** The default projection rendered as a raw OData v3 query string. */
+export function defaultQuery(table: SharePointTable<any>): string {
+    const projection = defaultProjection(table);
+    const parts: string[] = [];
+    const expandKeys = Object.keys(projection.expand);
+    const selectEntries = [...projection.select];
+    for (const key of expandKeys) {
+        for (const prop of projection.expand[key]) selectEntries.push(`${fieldName(table, key)}/${prop}`);
+    }
+    if (selectEntries.length) parts.push(`$select=${selectEntries.join(",")}`);
+    if (expandKeys.length) parts.push(`$expand=${expandKeys.map((key) => fieldName(table, key)).join(",")}`);
+    return parts.join("&");
 }
 
 /**

@@ -11,7 +11,7 @@
 
 import { SharePointClient, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
 import { FieldBase, FileField, type FileRef, type InferRecord, type TransformContext } from "./fields";
-import { SPQuery, spQuery, type QueryProxy } from "./query";
+import { SPQuery, spQuery, defaultQuery, type QueryProxy } from "./query";
 import type { ListItemId, GenericProperties } from "./types";
 
 /** Concurrency/row metadata shared by every REST item (`__metadata`). */
@@ -178,7 +178,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      */
     async getRecord(id: ListItemId | number, query?: string, options: GetRecordOptions = {}) {
         const wire = await this.client.getRecord(this.listTitle, id, {
-            query,
+            query: query ?? defaultQuery(this), // always select+expand — a bare fetch only serves [Field]Id numbers for references
             signal: options.signal,
         });
         return wire ? this.transformItemFromSharePoint(wire) : null;
@@ -193,7 +193,13 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      * const done = await Tasks.getRecords('$filter=IsDone eq true&$orderby=Title');
      */
     async getRecords(query?: string, options: QueryRequestOptions = {}): Promise<InferRecord<TFields>[]> {
-        return this.client.getRecords(this.listTitle, { query, signal: options.signal }).then((rows) => rows && rows.map((r) => this.transformItemFromSharePoint(r)));
+        // no query → default full projection (select all declared fields,
+        // expand references with their carve-outs): a bare /Items response
+        // only serves `[Field]Id` numbers for reference columns, so the
+        // documented `{ id, title? }` / `{ id, name?, email? }` reads would
+        // silently degrade to `{ id }` everywhere. Raw strings opt in as-is.
+        const tableQuery = query ?? defaultQuery(this);
+        return this.client.getRecords(this.listTitle, { query: tableQuery, signal: options.signal }).then((rows) => rows && rows.map((r) => this.transformItemFromSharePoint(r)));
     }
 
     /**

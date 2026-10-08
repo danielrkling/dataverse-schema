@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { SharePointClient } from "../src/client";
 import { SharePointTable } from "../src/table";
+import { defaultQuery } from "../src/query";
 import { InferTable } from "../src/fields";
 import { text, number, bool, date, datetime, json, person, lookup } from "../src/fields";
 import { primaryKey } from "../src/fields";
@@ -161,4 +162,34 @@ test("field.T / table.T carry the inferred types for typeof-style inference", ()
     const alias: InferTable<typeof Tasks> = record;
     expect(alias.id).toBe(1);
     // a wrong record shape fails to compile (not asserted — cast safety is the point)
+});
+
+// --- default projection: plain fetches always select+expand references ---
+
+test("defaultQuery renders $select for plain fields plus $expand with carve-outs", () => {
+    const Tasks = makeTable();
+    const query = defaultQuery(Tasks);
+    // references never ride a bare $select (`ProjectId` style) — they expand:
+    expect(query).toContain("$select=");
+    expect(query).toContain("Title");
+    expect(query).toContain("OwnerId/Id,OwnerId/Title,OwnerId/EMail");
+    expect(query).toContain("RefId/Id,RefId/Title");
+    expect(query).toContain("$expand=OwnerId,RefId");
+    // no __metadata in $select (legacy surface rejects it as selectable)
+    expect(query).not.toContain("__metadata");
+});
+
+test("getRecord/getRecords default to the full projection when no query is passed", async () => {
+    const Tasks = makeTable();
+    const getSpy = vi.spyOn(Tasks.client, "getRecord").mockResolvedValue({ Id: 1, Title: "x", __metadata: { etag: '"1"' } });
+    await Tasks.getRecord(1);
+    expect(getSpy.mock.calls[0]![2]!.query).toBe(defaultQuery(Tasks));
+
+    const listSpy = vi.spyOn(Tasks.client, "getRecords").mockResolvedValue([]);
+    await Tasks.getRecords();
+    expect(listSpy.mock.calls[0]![1]!.query).toBe(defaultQuery(Tasks));
+
+    // explicit queries pass through untouched (caller opts out)
+    await Tasks.getRecords("$filter=IsDone eq true");
+    expect(listSpy.mock.calls[1]![1]!.query).toBe("$filter=IsDone eq true");
 });
