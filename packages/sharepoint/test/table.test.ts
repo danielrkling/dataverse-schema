@@ -56,7 +56,7 @@ test("table.fromSharePoint maps fields and hoists __metadata as $-keys", () => {
         created: new Date("2026-01-02T03:04:05Z"),
         meta: null,
         owner: { id: 17 },
-        ref: { id: 2, name: "Project Alpha" },
+        ref: { id: 2, title: "Project Alpha" },
         "$etag": '"2"',
         "$type": "SP.Data.TasksListItem",
         "$uri": "w",

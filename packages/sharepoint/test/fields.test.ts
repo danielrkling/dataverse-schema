@@ -72,8 +72,8 @@ test("lookup reads LookupId-expanded objects and legacy strings", () => {
     const f = lookup("Ref");
     expect(f.fromSharePoint(null)).toBeNull();
     expect(f.fromSharePoint({ __metadata: { type: "SP.FieldLookupValue" }, LookupId: 2 })).toEqual({ id: 2 });
-    expect(f.fromSharePoint({ Id: 2, Title: "Project Alpha" })).toEqual({ id: 2, name: "Project Alpha" });
-    expect(f.fromSharePoint("2;#Project Alpha")).toEqual({ id: 2, name: "Project Alpha" });
+    expect(f.fromSharePoint({ Id: 2, Title: "Project Alpha" })).toEqual({ id: 2, title: "Project Alpha" });
+    expect(f.fromSharePoint("2;#Project Alpha")).toEqual({ id: 2, title: "Project Alpha" });
     expect(f.writeName).toBe("RefId"); // derived write key
     expect(f.toSharePoint({ id: 2 } as any)).toBe(2);
     expect(lookup("Ref", { writeShape: "typed" }).toSharePoint({ id: 2 } as any))
@@ -137,7 +137,7 @@ test("multiLookup reads multi-lookup results and writes the <Name>Id envelope", 
     expect(f.fromSharePoint({ results: [
         { Id: 1, Title: "Nuc 23" },
         { LookupId: 2 },
-    ] })).toEqual([{ id: 1, name: "Nuc 23" }, { id: 2 }]);
+    ] })).toEqual([{ id: 1, title: "Nuc 23" }, { id: 2 }]);
     expect(f.writeName).toBe("Concur_x0020_CodesId");
     expect(f.toSharePoint([{ id: 1 } as any, { id: 2 } as any])).toEqual({ results: [1, 2] });
 });

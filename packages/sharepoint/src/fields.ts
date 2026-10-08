@@ -178,8 +178,12 @@ export class JsonField<T = any> extends FieldBase<T> {
 /** A user/group reference: expanded or unexpanded REST shapes flatten to this. */
 export type Person = { id: number; name?: string; email?: string };
 
-/** A lookup reference (per single-valued lookup column). */
-export type Lookup = Person;
+/**
+ * A lookup reference: id + the target's display value (`Title` on the wire).
+ * Lookups never carry an email — that's person (`SP.FieldUser`) territory —
+ * so the type stays separate from {@link Person} on purpose.
+ */
+export type Lookup = { id: number; title?: string };
 
 /**
  * Legacy write conventions for reference columns on the verbose REST surface:
@@ -284,7 +288,8 @@ export class LookupField extends FieldBase<Lookup | null> {
         return referenceWriteName(this.name);
     }
     override fromSharePoint(wire: unknown): Lookup | null {
-        return parseIdName(wire);
+        const parsed = parseIdName(wire);
+        return parsed ? { id: parsed.id, ...(parsed.name ? { title: parsed.name } : {}) } : null;
     }
     override toSharePoint(value: Lookup | null): unknown {
         return referenceWriteValue(this, value, "SP.FieldLookupValue");
@@ -400,7 +405,10 @@ export class MultiLookupField extends FieldBase<Lookup[]> {
             Array.isArray(wire) ? wire :
             Array.isArray((wire as { results?: unknown[] }).results) ? (wire as { results: unknown[] }).results :
             [wire];
-        return entries.map((entry) => parseIdName(entry)).filter((v): v is Lookup => v !== null);
+        return entries
+            .map((entry) => parseIdName(entry))
+            .filter((v): v is Person => v !== null)
+            .map((parsed) => ({ id: parsed.id, ...(parsed.name ? { title: parsed.name } : {}) }));
     }
     override toSharePoint(value: Lookup[]): { results: number[] } {
         if (!Array.isArray(value)) throw new TypeError("lookup collection field expects an array of { id }");
