@@ -140,9 +140,10 @@ test("updateRecord etag precedence: explicit ifMatch > $etag; delete passes If-M
     await Tasks.updateRecord(7, { done: true, $etag: '"2"' } as any);
     expect(mergeSpy.mock.calls.at(-1)![3]).toMatchObject({ ifMatch: '"2"' });
 
-    // missing $etag + missing option → no If-Match header at all (unconditional)
+    // missing $etag + missing option → unconditional If-Match: *
+    // (a header-less MERGE evaluates an implicit blank etag → 412)
     await Tasks.updateRecord(7, { done: true } as any);
-    expect(mergeSpy.mock.calls.at(-1)![3]).toMatchObject({ ifMatch: undefined });
+    expect(mergeSpy.mock.calls.at(-1)![3]).toMatchObject({ ifMatch: "*" });
 
     // delete forwards any etag it is given (server 412s on mismatch)
     await Tasks.deleteRecord(7, { ifMatch: '"2"' });
