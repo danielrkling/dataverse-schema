@@ -194,6 +194,33 @@ Notes:
 
 `SharePointTable` structurally satisfies the generic offline sync engine's `SyncTable` contract (`@dataverse-schema/sync`), so the offline mutation queue works over lists unchanged — see that package's docs.
 
+## Provisioning lists and columns
+
+The schema doubles as deployment metadata: per-kind pure definers emit CAML `<Field/>` XML for the legacy `fields/createfieldasxml` endpoint, and thin runners apply them. Definers are independent exports — importing only what you use tree-shakes cleanly.
+
+```typescript
+import { defineField, createList, applyListFields, defineText, defineNumber }; // ← import only the definers you need
+
+// Whole-table provisioning (creates the list — 100, or 101 when the table
+// declares a document() field — then applies every column idempotently):
+import { provisionList, resolveListId } from "sharepoint-schema";
+await provisionList(client, Tasks, {
+  lookupListIds: { project: await resolveListId(client, "Projects") },
+});
+
+// Or apply definitions to an existing list (idempotent: skips existing
+// matching columns, throws on type drift):
+await createList(client, { title: "Tasks" });
+await applyListFields(client, "Tasks", [
+  defineField(Tasks.fields.description),
+  defineText(Tasks.fields.description),   // ← or pick per-kind definers
+]);
+
+// Lifecycle helpers: deleteList(client, "Tasks"), renameList(client, "Tasks", "Tasks v2")
+```
+
+Strictness: anything the legacy surface can't express throws — `document()` columns (the file *is* the item), the built-in `Id`/`Title` columns (skipped, not created), choice/multiChoice fields lacking `choices`, and lookup fields without `targetListId`. A same-name existing column with a different stored type throws (schema drift) rather than silently re-narrowing.
+
 ## Development
 
 ```bash

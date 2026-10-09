@@ -3,6 +3,7 @@ export * from "./fields";
 export * from "./table";
 export * from "./query";
 export * from "./types";
+export * from "./provision";
 
 // Compile-time check: SharePointTable structurally satisfies the sync
 // engine's generic table contract, so @dataverse-schema/sync's SyncEngine
