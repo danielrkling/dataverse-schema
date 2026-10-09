@@ -307,9 +307,11 @@ function fieldNameOf(table: SharePointTable<any>, field: FieldBase<any>): string
 /**
  * Provisions a whole table from its schema: creates the list (template
  * auto-picked 100/101 from any document() field) and applies every column.
- * Idempotent on the field application; list creation itself throws on an
- * existing same-title list (deliberate — re-pointing at a live list should
- * be explicit via {@link applyListFields}).
+ *
+ * Idempotent end to end — safe to run twice or over an already-provisioned
+ * list: an existing same-title list is reused (`ifExists: "throw"` opts back
+ * into the old behavior), column application skips existing matching columns
+ * (a same-name column with a different stored type throws — schema drift).
  *
  * @example
  * await provisionList(client, Tasks, {
@@ -319,18 +321,32 @@ function fieldNameOf(table: SharePointTable<any>, field: FieldBase<any>): string
 export async function provisionList(
     client: SharePointClient,
     table: SharePointTable<any>,
-    options: { lookupListIds?: Record<string, string>; addToDefaultView?: boolean; template?: 100 | 101; description?: string } = {},
-): Promise<{ id: string; added: string[]; skipped: string[] }> {
-    const template = options.template ?? resolveTemplate(table);
-    const { id } = await createList(client, {
-        title: table.listTitle,
-        template,
-        description: options.description,
-    });
+    options: {
+        /** Reuse an existing same-title list (default `"reuse"`); `"throw"` errors on it. */
+        ifExists?: "reuse" | "throw";
+        lookupListIds?: Record<string, string | { Id: string }>;
+        addToDefaultView?: boolean;
+        template?: 100 | 101;
+        description?: string;
+    } = {},
+): Promise<{ id: string; created: boolean; added: string[]; skipped: string[] }> {
+    let id: string | undefined;
+    let created = false;
+    if (options.ifExists !== "throw") {
+        try {
+            id = await resolveListId(client, table.listTitle); // list already provisioned
+        } catch (error: any) {
+            if (error?.status !== 404) throw error;
+        }
+    }
+    if (id === undefined) {
+        id = (await createList(client, { title: table.listTitle, template: options.template ?? resolveTemplate(table), description: options.description })).id;
+        created = true;
+    }
     const fields = table.fields as Record<string, FieldBase<any>>;
     const definitions = Object.values(fields).map((field) =>
         defineField(field, { listId: options.lookupListIds?.[fieldNameOf(table, field)] }),
     );
     const outcome = await applyListFields(client, table.listTitle, definitions, options);
-    return { id, ...outcome };
+    return { id, created, ...outcome };
 }

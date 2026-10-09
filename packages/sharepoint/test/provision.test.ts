@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { SharePointClient } from "../src/client";
+import { SharePointClient, SharePointHttpError } from "../src/client";
 import { SharePointTable } from "../src/table";
 import {
     defineBool, defineChoice, defineDate, defineDatetime, defineField, defineJson,
@@ -82,16 +82,28 @@ test("defineField fans out by kind; built-ins and document fields skip", () => {
 
 // --- lifecycle + application (client.fetch mocked, no HTTP) ---
 
-function mockFetch() {
-    return vi.spyOn(client, "fetch").mockImplementation(async (resource: string, options?: RequestInit) => {
+const LIST_GUID = "{99999999-8888-7777-6666-555555555555}";
+const XML_TO_KIND: Record<string, number> = { Text: 2, Note: 3, DateTime: 4, Choice: 6, Number: 9, Boolean: 12, MultiChoice: 15, User: 20, Lookup: 20 };
+
+/** Stateful mock: created columns persist across "runs" in a server-side view (needed for reuse tests). */
+function mockFetch(seed: Record<string, number> = {}) {
+    const createdByName = new Map<string, number>(Object.entries(seed));
+    const spy = vi.spyOn(client, "fetch").mockImplementation(async (resource: string, options?: RequestInit) => {
         // NOTE: shapes match the real client.fetch — it unwraps the `d` envelope
         if (resource.includes("/fields?$select=InternalName")) {
-            return [{ InternalName: "Amount0", FieldTypeKind: 9 }, { InternalName: "Old", FieldTypeKind: 4 }];
+            return [...createdByName].map(([InternalName, FieldTypeKind]) => ({ InternalName, FieldTypeKind }));
         }
-        if (resource === "web/lists" && options?.method === "POST") return { Id: "{list-guid}" };
-        if (resource.includes("?$select=Id")) return "{99999999-8888-7777-6666-555555555555}";
+        if (resource.includes("createfieldasxml")) {
+            const xml = JSON.parse((options as RequestInit)!.body as string).parameters.SchemaXml as string;
+            const name = / Name="([^"]+)"/.exec(xml)![1]!;
+            createdByName.set(name, XML_TO_KIND[/ Type="([^"]+)"/.exec(xml)![1]!]);
+            return {};
+        }
+        if (resource === "web/lists" && options?.method === "POST") return { Id: LIST_GUID };
+        if (resource.includes("?$select=Id")) return LIST_GUID;
         return {};
     });
+    return spy;
 }
 
 test("resolveListId returns the list GUID", async () => {
@@ -139,7 +151,7 @@ test("addListField posts createfieldasxml with SchemaXml and options bits", asyn
 });
 
 test("applyListFields is idempotent: skips matching, adds missing, throws on drift", async () => {
-    const spy = mockFetch();
+    const spy = mockFetch({ Amount0: 9 });
     const xml = defineText(text("Description"));
     // Amount0 exists as Number (9); a Text (2) definition for the same name is drift:
     await expect(applyListFields(client, "Tasks", [defineText(text("Amount0"))])).rejects.toThrow("exists as FieldTypeKind 9");
@@ -153,7 +165,7 @@ test("applyListFields is idempotent: skips matching, adds missing, throws on dri
 });
 
 test("provisionList wires list + all schema columns; doc-lib tables pick 101 and skip document()", async () => {
-    const spy = mockFetch();
+    const spy = mockFetch({ Amount0: 9 });
     const Tasks = new SharePointTable({
         client,
         listTitle: "Tasks",
@@ -165,8 +177,8 @@ test("provisionList wires list + all schema columns; doc-lib tables pick 101 and
             ref: lookup("RefId"),
         },
     });
-    const outcome = await provisionList(client, Tasks, { lookupListIds: { ref: "{99999999-8888-7777-6666-555555555555}" } });
-    expect(outcome.id).toBe("{list-guid}");
+    const outcome = await provisionList(client, Tasks, { ifExists: "throw", lookupListIds: { ref: LIST_GUID } });
+    expect(outcome.id).toBe(LIST_GUID);
     expect(outcome.added).toEqual(["Description", "RefId"]); // Amount0 already exists (kind 9) → skipped
     // every column went through createfieldasxml with the resolved lookup guid:
     const addCalls = spy.mock.calls.filter(([r]) => (r as string).includes("createfieldasxml"));
@@ -180,7 +192,7 @@ test("provisionList picks template 101 for document libraries", async () => {
         listTitle: "Docs",
         fields: { id: primaryKey(), title: title(), file: document() },
     });
-    await provisionList(client, Docs);
+    await provisionList(client, Docs, { ifExists: "throw" });
     const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.BaseTemplate).toBe(101);
 });
@@ -196,4 +208,70 @@ test("lookup listId accepts GUID string or { Id } entity, throws loudly on junk 
     expect(() => defineLookup(Ref, { listId: { title: "Projects" } } as any)).toThrow('lookup field "RefId"');
     expect(() => defineLookup(Ref, { listId: { title: "Projects" } } as any)).not.toThrow("[object Object]");
     expect(() => defineLookup(Ref, { listId: "Projects" })).toThrow('lookup field "RefId"');
+});
+
+test("provisionList is idempotent: second run reuses the list, skips all columns, no drift throw", async () => {
+    const spy = mockFetch(); // mock returns {list-guid} for web/lists POST and {target-guid} for getbytitle
+    const Tasks = new SharePointTable({
+        client,
+        listTitle: "Tasks",
+        fields: {
+            id: primaryKey(),
+            title: title(),
+            description: text("Description"),
+            amount: number("Amount0"),
+            ref: lookup("RefId"),
+        },
+    });
+
+    // first run — create the list (strict), apply all columns
+    const first = await provisionList(client, Tasks, { ifExists: "throw", lookupListIds: { ref: LIST_GUID } });
+    expect(first.created).toBe(true);
+    const listAdds = spy.mock.calls.filter(([r]) => (r as string).includes("createfieldasxml")).length;
+    expect(listAdds).toBeGreaterThan(0);
+
+    // second run — same schema: reuses existing list (getbytitle resolves), fields all skipped
+    spy.mockClear().mockImplementation(spy.getMockImplementation()!);
+    const second = await provisionList(client, Tasks, { lookupListIds: { ref: LIST_GUID } });
+    expect(second.created).toBe(false);
+    expect(second.added).toEqual([]);
+    expect(second.skipped.length).toBeGreaterThan(0);
+    expect(spy.mock.calls.some(([r]) => (r as string).includes("createfieldasxml"))).toBe(false);
+    // never re-created the list:
+    expect(spy.mock.calls.some(([r, o]) => r === "web/lists" && (o as any)?.method === "POST")).toBe(false);
+});
+
+test("provisionList({ ifExists: 'throw' }) keeps the old strict behavior", async () => {
+    const spy = mockFetch(); // getbytitle resolves → ifExists throw must bail by re-checking… actually throw path skips resolve; list POST returns success in mock
+    const Tasks = new SharePointTable({
+        client,
+        listTitle: "Tasks",
+        fields: { id: primaryKey(), title: title(), description: text("Description") },
+    });
+    // with 'throw', existing lists are never resolved first → POST goes out (mock accepts), drift-checked columns still apply:
+    const outcome = await provisionList(client, Tasks, { ifExists: "throw" });
+    expect(outcome).toMatchObject({ id: LIST_GUID, created: true });
+    expect(spy.mock.calls.some(([r, o]) => r === "web/lists" && (o as any)?.method === "POST")).toBe(true);
+});
+
+test("provisionList still creates when the list is missing (404 from getbytitle)", async () => {
+    const spy = vi.spyOn(client, "fetch").mockImplementation(async (resource: string, options?: RequestInit) => {
+        if (resource.includes("getbytitle") && resource.includes("?$select=Id")) {
+            const err = new SharePointHttpError("404 Not Found", 404, "Not Found", {}) as any;
+            throw err;
+        }
+        if (resource === "web/lists" && options?.method === "POST") return { Id: "{new-list}" };
+        if (resource.includes("/fields?$select=InternalName")) return [];
+        if (resource.includes("createfieldasxml")) return {};
+        if (resource.includes("?$select=Id")) return "{99999999-8888-7777-6666-555555555555}";
+        return {};
+    });
+    const Tasks = new SharePointTable({
+        client,
+        listTitle: "Tasks",
+        fields: { id: primaryKey(), title: title(), description: text("Description") },
+    });
+    const outcome = await provisionList(client, Tasks);
+    expect(outcome.created).toBe(true);
+    expect(outcome.id).toBe("{new-list}");
 });

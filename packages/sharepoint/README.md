@@ -201,12 +201,15 @@ The schema doubles as deployment metadata: per-kind pure definers emit CAML `<Fi
 ```typescript
 import { defineField, createList, applyListFields, defineText, defineNumber }; // ← import only the definers you need
 
-// Whole-table provisioning (creates the list — 100, or 101 when the table
-// declares a document() field — then applies every column idempotently):
+// Whole-table provisioning — idempotent, safe to run on every deploy:
+// creates the list (100, or 101 when the table declares a document() field)
+// if missing, reuses it otherwise; applies every column, skipping existing
+// matching ones and throwing on type drift.
 import { provisionList, resolveListId } from "sharepoint-schema";
-await provisionList(client, Tasks, {
+const outcome = await provisionList(client, Tasks, {
   lookupListIds: { project: await resolveListId(client, "Projects") },
 });
+// outcome → { id, created, added, skipped }
 
 // Or apply definitions to an existing list (idempotent: skips existing
 // matching columns, throws on type drift):
