@@ -59,8 +59,8 @@ test("lookup definers require listId and embed it with ShowField", () => {
     expect(xml).toContain(`Type="Lookup"`);
     expect(xml).toContain(`List="{11111111-2222-3333-4444-555555555555}"`);
     expect(xml).toContain(`ShowField="Title"`);
-    expect(defineMultiLookup(multiLookup("ConcurCodes"), { listId: "{a}" })).toContain(`Mult="TRUE"`);
-    expect(defineLookup(lookup("RefId"), { listId: "{a}", showField: "Name" })).toContain(`ShowField="Name"`);
+    expect(defineMultiLookup(multiLookup("ConcurCodes"), { listId: "{11111111-2222-3333-4444-555555555555}" })).toContain(`Mult="TRUE"`);
+    expect(defineLookup(lookup("RefId"), { listId: "{11111111-2222-3333-4444-555555555555}", showField: "Name" })).toContain(`ShowField="Name"`);
 });
 
 test("XML escapes names and choices", () => {
@@ -74,7 +74,7 @@ test("XML escapes names and choices", () => {
 test("defineField fans out by kind; built-ins and document fields skip", () => {
     expect(defineField(text("Description"))).toContain(`Type="Text"`);
     expect(defineField(json("Meta0"))).toContain(`Type="Note"`);
-    expect(defineField(lookup("RefId"), { listId: "{a}" })).toContain(`Type="Lookup"`);
+    expect(defineField(lookup("RefId"), { listId: "{11111111-2222-3333-4444-555555555555}" })).toContain(`Type="Lookup"`);
     expect(defineField(title())).toBeUndefined();
     expect(defineField(primaryKey())).toBeUndefined();
     expect(defineField(document())).toBeUndefined();
@@ -89,14 +89,14 @@ function mockFetch() {
             return [{ InternalName: "Amount0", FieldTypeKind: 9 }, { InternalName: "Old", FieldTypeKind: 4 }];
         }
         if (resource === "web/lists" && options?.method === "POST") return { Id: "{list-guid}" };
-        if (resource.includes("?$select=Id")) return "{target-guid}";
+        if (resource.includes("?$select=Id")) return "{99999999-8888-7777-6666-555555555555}";
         return {};
     });
 }
 
 test("resolveListId returns the list GUID", async () => {
     const spy = mockFetch();
-    expect(await resolveListId(client, "Projects")).toBe("{target-guid}");
+    expect(await resolveListId(client, "Projects")).toBe("{99999999-8888-7777-6666-555555555555}");
     expect(spy.mock.calls[0]![0]).toContain("web/lists/getbytitle('Projects')?$select=Id");
 });
 
@@ -165,7 +165,7 @@ test("provisionList wires list + all schema columns; doc-lib tables pick 101 and
             ref: lookup("RefId"),
         },
     });
-    const outcome = await provisionList(client, Tasks, { lookupListIds: { ref: "{target-guid}" } });
+    const outcome = await provisionList(client, Tasks, { lookupListIds: { ref: "{99999999-8888-7777-6666-555555555555}" } });
     expect(outcome.id).toBe("{list-guid}");
     expect(outcome.added).toEqual(["Description", "RefId"]); // Amount0 already exists (kind 9) → skipped
     // every column went through createfieldasxml with the resolved lookup guid:
@@ -183,4 +183,17 @@ test("provisionList picks template 101 for document libraries", async () => {
     await provisionList(client, Docs);
     const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
     expect(body.BaseTemplate).toBe(101);
+});
+
+test("lookup listId accepts GUID string or { Id } entity, throws loudly on junk (no [object Object])", () => {
+    const Ref = lookup("RefId");
+    expect(defineLookup(Ref, { listId: "{11111111-2222-3333-4444-555555555555}" })).toContain(`List="{11111111-2222-3333-4444-555555555555}"`);
+    // bare unbracketed GUID is normalized with the braces SP expects:
+    expect(defineLookup(Ref, { listId: "11111111-2222-3333-4444-555555555555" })).toContain(`List="{11111111-2222-3333-4444-555555555555}"`);
+    // an { Id } list entity works (e.g. a fetched list object):
+    expect(defineLookup(Ref, { listId: { Id: "{11111111-2222-3333-4444-555555555555}" } } as any)).toContain(`List="{11111111-2222-3333-4444-555555555555}"`);
+    // never emit [object Object] — throw naming the field instead:
+    expect(() => defineLookup(Ref, { listId: { title: "Projects" } } as any)).toThrow('lookup field "RefId"');
+    expect(() => defineLookup(Ref, { listId: { title: "Projects" } } as any)).not.toThrow("[object Object]");
+    expect(() => defineLookup(Ref, { listId: "Projects" })).toThrow('lookup field "RefId"');
 });

@@ -34,11 +34,31 @@ export type FieldSchemaXml = string;
 
 /** Options per definer where the field class alone is not enough. */
 export type DefineFieldOptions = {
-    /** Target list id (GUID) — required for lookup fields (`List="{...}"`). */
-    listId?: string;
+    /** Target list id (GUID) — required for lookup fields (`List="{...}"`). Also accepts an `{ Id }`-shaped list entity. */
+    listId?: string | { Id: string };
     /** The lookup display column (default `"Title"`). */
     showField?: string;
 };
+
+/**
+ * Normalizes the lookup target to the GUID string the `List="..."` XML
+ * attribute needs. Validates loudly — interpolating a non-GUID (e.g. a whole
+ * list object stringified as "[object Object]") makes SharePoint fail with
+ * "Value does not fall within the expected range".
+ */
+function targetListId(listId: DefineFieldOptions["listId"], fieldName: string): string {
+    if (typeof listId === "string") {
+        const guid = listId.trim();
+        if (!/^\{?[0-9A-Fa-f-]{36}\}?$/.test(guid)) {
+            throw new Error(`lookup field "${fieldName}" needs the target list's GUID for options.listId — got "${guid}"`);
+        }
+        return /^\{/.test(guid) ? guid : `{${guid}}`;
+    }
+    if (listId && typeof listId === "object" && "Id" in listId) {
+        return targetListId(listId.Id, fieldName);
+    }
+    throw new Error(`lookup field "${fieldName}" needs the target list's GUID for options.listId — got ${listId === undefined ? "undefined" : "an object without an Id"}`);
+}
 
 // --- shared XML assembly (pure, leaf-level — tree-shaking friendly) ---
 
@@ -123,12 +143,12 @@ export function definePeople(field: PeopleField): FieldSchemaXml {
 
 export function defineLookup(field: LookupField, options: DefineFieldOptions = {}): FieldSchemaXml {
     if (!options.listId) throw new Error(`lookup field "${field.name}" requires options.listId (the target list's GUID)`);
-    return flatField(field, "Lookup", { List: options.listId, ShowField: options.showField ?? "Title" });
+    return flatField(field, "Lookup", { List: targetListId(options.listId, field.name), ShowField: options.showField ?? "Title" });
 }
 
 export function defineMultiLookup(field: MultiLookupField, options: DefineFieldOptions = {}): FieldSchemaXml {
     if (!options.listId) throw new Error(`multiLookup field "${field.name}" requires options.listId (the target list's GUID)`);
-    return flatField(field, "Lookup", { List: options.listId, Mult: "TRUE", ShowField: options.showField ?? "Title" });
+    return flatField(field, "Lookup", { List: targetListId(options.listId, field.name), Mult: "TRUE", ShowField: options.showField ?? "Title" });
 }
 
 /**
