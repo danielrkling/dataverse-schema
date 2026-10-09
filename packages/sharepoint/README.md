@@ -147,7 +147,7 @@ const draft = await Tasks.query()
 
 A bare `/Items` response only serves `[Field]Id` numbers for reference columns. So the library **always explicitly selects and expands** by default:
 
-- with no `.select()`, the builder defaults to the full declaration: every plain field, the file field's `FileRef` mirror, and references expanded with their carve-outs
+- with no `.select()`, the builder defaults to the full declaration: every plain field, the file channel's `FileLeafRef` + `FileRef`, and references expanded with their carve-outs
 - the table's plain `getRecord(id)` / `getRecords()` use the same projection via `defaultQuery(table)` — the documented `{ id, title? }` / `{ id, name?, email? }` reference shapes hold everywhere without N+1 fallback fetches
 - an explicit query string or narrow `.select()` passes through untouched, opting into exactly what it selects (reference reads degrade to `{ id }` if you don't expand)
 

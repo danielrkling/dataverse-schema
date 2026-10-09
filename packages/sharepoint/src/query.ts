@@ -300,7 +300,7 @@ export function defaultProjection(table: SharePointTable<any>): { select: string
             continue; // references ride $expand, not $select
         }
         if (field instanceof FileField) {
-            select.push(field.name, "FileRef"); // the url mirror the table's file reads rely on
+            select.push("FileLeafRef", "FileRef"); // the file channel reads hardcode these wire names
             continue;
         }
         select.push(field.name);

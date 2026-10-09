@@ -121,8 +121,8 @@ test("create with file content uploads via Files/Add, merges metadata, then fetc
     expect(mergeHeaders?.["X-HTTP-Method"]).toBe("MERGE");
 
     // returned record is the fetched item, file url absolutized
-    expect(record.id).toBe(99);
-    expect(record.file).toEqual({ name: "report.pdf", url: "https://x/Documents/report.pdf" });
+    expect(record!.id).toBe(99);
+    expect(record!.file).toEqual({ name: "report.pdf", url: "https://x/Documents/report.pdf" });
 
 });
 

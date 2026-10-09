@@ -244,9 +244,10 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
                     ...this.transformValueToSharePoint(metadataValues),
                 }, { ifMatch: "*" });
             }
-            const wire = await this.client.getRecord(this.listTitle, itemId);
-            // content already uploaded inline — no further afterSave pass
-            return this.transformItemFromSharePoint(wire);
+            // content already uploaded inline — no further afterSave pass.
+            // Re-read through the table's getRecord (default projection) so
+            // the file channel (FileLeafRef/FileRef) is guaranteed on the wire.
+            return await this.getRecord(itemId);
         }
         const wire = await this.client.postRecord(this.listTitle, {
             __metadata: { type: await this.getType() },
