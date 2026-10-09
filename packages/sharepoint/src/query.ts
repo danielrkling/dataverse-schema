@@ -124,7 +124,7 @@ type ReadValueOf<F extends FieldBase<any>> =
     F extends BooleanField ? boolean :
     F extends DateField<any> | DatetimeField<any> ? Date | null :
     F extends JsonField<infer J> ? J :
-    F extends FileField ? FileRef | null :
+    F extends FileField ? FileRef :
     never;
 
 /** A `.select()` pick: each ref maps to its read value type under the same key. */

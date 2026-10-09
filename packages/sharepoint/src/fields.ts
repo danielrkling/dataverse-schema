@@ -492,12 +492,15 @@ export type TransformContext = {
  *   value — the field never appears in an item body (metadata MERGE and Files
  *   upload are separate REST surfaces).
  * - read: `{ name, url }` — `name` from the item's `FileLeafRef`, `url` from
- *   `FileRef` (absolute, built from the client's site URL).
+ *   `FileRef` (absolute, built from the client's site URL). Non-null: every
+ *   item of a document library *is* a file, so the absent-`FileRef` case
+ *   (wrongly declared on a plain list, or a narrow read without `FileRef`)
+ *   throws instead of surfacing a hollow `null`.
  * - delete: removing the content = deleting the item (`deleteRecord`); there
  *   is no "clear file" operation like Dataverse's `data: null` channel.
  * - large-file resumable sessions are out of scope for the flat surface.
  */
-export class FileField extends FieldBase<FileRef | null> {
+export class FileField extends FieldBase<FileRef> {
     /**
      * Content overwrite policy for the Files/Add channel (both create and
      * update paths). Default `true` — passing `{ data }` to save *is* the
@@ -506,17 +509,17 @@ export class FileField extends FieldBase<FileRef | null> {
      */
     readonly overwrite: boolean;
 
-    constructor(name: string = "FileLeafRef", options: FieldOptions<FileRef | null> & { overwrite?: boolean } = {}) {
+    constructor(name: string = "FileLeafRef", options: FieldOptions<FileRef> & { overwrite?: boolean } = {}) {
         super(name, "file", options);
         this.overwrite = options.overwrite !== false;
     }
     /** Never part of an item body — content goes through the Files/Add upload channel. */
-    override toSharePoint(_value: FileRef | null): undefined {
+    override toSharePoint(_value: FileRef): undefined {
         return undefined;
     }
 }
 
-export function document(name: string = "FileLeafRef", options?: FieldOptions<FileRef | null> & { overwrite?: boolean }) {
+export function document(name: string = "FileLeafRef", options?: FieldOptions<FileRef> & { overwrite?: boolean }) {
     return new FileField(name, options);
 }
 

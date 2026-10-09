@@ -166,7 +166,9 @@ const Docs = new SharePointTable({
 // create: upload-first (Files/Add), then metadata MERGE with If-Match: *
 await Docs.createRecord({ title: "Report", file: { name: "report.pdf", data: blob } });
 
-// read: { name, url }
+// read: { name, url } — always non-null: every doc-lib item is a file.
+//     If the item has no file channel (document() wrongly declared on a
+//     plain list), the read throws instead of returning null.
 const doc = await Docs.getRecord(4);
 const bytes = await Docs.getDocumentContent(4); // Blob
 

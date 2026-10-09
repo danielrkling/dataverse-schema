@@ -171,3 +171,12 @@ test("update without file content issues no Files/Add", async () => {
     await Docs.updateRecord(5, { title: "Q3" } as any);
     expect(mock.mock.calls.every(([u]) => !String(u).includes("Files/Add"))).toBe(true);
 });
+
+test("document read throws when the item has no file channel (wrong list type)", () => {
+    const Docs = new SharePointTable({
+        client: new SharePointClient({ url: "https://contoso.sharepoint.com/sites/dev", token: "T" }),
+        listTitle: "NotADocLib",
+        fields: { id: primaryKey(), file: document() },
+    });
+    expect(() => Docs.transformItemFromSharePoint({ Id: 5 })).toThrow("no file channel");
+});

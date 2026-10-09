@@ -99,7 +99,11 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             if (field instanceof FileField) {
                 // Doc-lib content: name/url come from two item properties
                 // (FileLeafRef/FileRef), not from one field's wire value.
-                out[tsKey] = this.fileRefFromWire(wire);
+                const fileRef = this.fileRefFromWire(wire);
+                if (!fileRef) {
+                    throw new Error(`document field "${tsKey}" read no file channel on the item — document fields require a document library (FileLeafRef/FileRef absent)`);
+                }
+                out[tsKey] = fileRef;
                 continue;
             }
             out[tsKey] = field.fromSharePoint(wire[field.name]);
