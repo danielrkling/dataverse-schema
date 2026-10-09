@@ -63,10 +63,9 @@ test("lookup definers require listId and embed it with ShowField", () => {
     expect(defineLookup(lookup("RefId"), { listId: "{11111111-2222-3333-4444-555555555555}", showField: "Name" })).toContain(`ShowField="Name"`);
 });
 
-test("XML escapes names and choices", () => {
-    const xml = defineChoice(choice("Esc<x>&", { choices: [`Tag<1>"]`] as const }));
-    expect(xml).toContain(`Name="Esc&lt;x&gt;&amp;"`);
-    expect(xml).toContain(`<CHOICE>Tag&lt;1&gt;&quot;]</CHOICE>`);
+test("XML escapes choice values", () => {
+    const xml = defineChoice(choice("Esc", { choices: [`Tag<1>"]&`] as const }));
+    expect(xml).toContain(`<CHOICE>Tag&lt;1&gt;&quot;]&amp;</CHOICE>`);
 });
 
 // --- dispatcher ---
@@ -274,4 +273,13 @@ test("provisionList still creates when the list is missing (404 from getbytitle)
     const outcome = await provisionList(client, Tasks);
     expect(outcome.created).toBe(true);
     expect(outcome.id).toBe("{new-list}");
+});
+
+test("definers reject internal names the server would silently mangle (spaces etc)", () => {
+    expect(() => defineText(text("Decision At"))).toThrow('field "Decision At": "Decision At" is not a valid SharePoint internal name');
+    expect(() => defineText(text("Decision At"))).toThrow("Decision_x0020_At");
+    expect(() => defineNumber(number("Price (USD)"))).toThrow("Price_x0020__x0028_USD_x0029_");
+    // clean names pass through untouched:
+    expect(defineText(text("DecisionAt"))).toContain(`Name="DecisionAt"`);
+    expect(defineText(text("Decision_x0020_At"))).toContain(`Name="Decision_x0020_At"`);
 });

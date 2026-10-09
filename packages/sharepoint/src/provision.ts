@@ -62,16 +62,34 @@ function targetListId(listId: DefineFieldOptions["listId"], fieldName: string): 
 
 // --- shared XML assembly (pure, leaf-level — tree-shaking friendly) ---
 
+/**
+ * SharePoint derives a column's internal name from the `Name` attribute as
+ * given — but silently sanitizes spaces/special characters when creating
+ * (`Name="Decision At"` stores as `Decision_x0020_At`). Reads then fail with
+ * "The expression ... is not valid" because the wire name no longer matches.
+ * So: reject illegal internal names AT DEFINITION TIME (strictness) with the
+ * exact substitution to use — never let a mangled column ship.
+ */
+function validateInternalName(name: string, fieldName: string): string {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return name;
+    const encoded = name.replace(/[^A-Za-z0-9_]/g, (c) => `_x${c.charCodeAt(0).toString(16).padStart(4, "0")}_`);
+    throw new Error(
+        `field "${fieldName}": "${name}" is not a valid SharePoint internal name (illegal characters — the server would store it as "${encoded}"). ` +
+        `Pick a clean internal name, or provision with the encoded form ("${encoded}")`,
+    );
+}
+
 function xmlEscape(value: string): string {
     return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function fieldAttrs(field: FieldBase<any>, type: string, extra: Record<string, string | undefined> = {}): string {
+    const name = validateInternalName(field.name, field.name);
     const attrs = [
         `Type="${type}"`,
-        `Name="${xmlEscape(field.name)}"`,
-        `StaticName="${xmlEscape(field.name)}"`,
-        `DisplayName="${xmlEscape(field.name)}"`,
+        `Name="${xmlEscape(name)}"`,
+        `StaticName="${xmlEscape(name)}"`,
+        `DisplayName="${xmlEscape(name)}"`,
         ...(field.options.readonly ? [`Readonly="TRUE"`] : []),
         ...Object.entries(extra)
             .filter(([, v]) => v !== undefined)
