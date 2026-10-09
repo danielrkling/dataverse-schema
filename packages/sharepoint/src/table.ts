@@ -127,9 +127,13 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     }
 
     /** Builds `{ name, url }` for the doc-lib field from the item wire (`FileLeafRef` + `FileRef`). */
-    fileRefFromWire(wire: any): FileRef {
+    fileRefFromWire(wire: any): FileRef | null {
         const name = wire["FileLeafRef"] ?? wire["FileLeafRef0"];
         const serverRelative = wire["FileRef"];
+        // No file channel on this wire (e.g. document() declared on a plain
+        // list) → genuinely null. Every item in a real document library
+        // carries both properties, so reads there are always full objects.
+        if (name == null && !serverRelative) return null;
         return {
             ...(name != null ? { name: String(name) } : {}),
             // FileRef is server-relative ("/sites/dev/...") — resolve against
