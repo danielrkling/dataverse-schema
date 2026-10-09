@@ -170,8 +170,8 @@ function listPath(listTitle: string): string {
 
 /** Looks up a list by title for its GUID — what lookup definers need as `listId`. */
 export async function resolveListId(client: SharePointClient, listTitle: string): Promise<string> {
-    const info = await client.fetch(`${listPath(listTitle)}?$select=Id`);
-    return info.d.Id as string;
+    // client.fetch unwraps the verbose `d` envelope
+    return (await client.fetch(`${listPath(listTitle)}?$select=Id`)) as string;
 }
 
 /** Creates a list (`BaseTemplate 100`) or a document library (`101`). */
@@ -187,8 +187,8 @@ export async function createList(
         Title: options.title,
         ...(options.description ? { Description: options.description } : {}),
     };
-    const result = await client.fetch("web/lists", { method: "POST", body: JSON.stringify(body) });
-    return { id: result.d.Id as string };
+    const result = (await client.fetch("web/lists", { method: "POST", body: JSON.stringify(body) })) as { Id: string };
+    return { id: result.Id };
 }
 
 /** Deletes a list via `POST` + `X-HTTP-Method: DELETE` (`If-Match: *`). */
@@ -247,8 +247,10 @@ export async function applyListFields(
     const valid = definitions.filter((d): d is FieldSchemaXml => d !== undefined);
     if (valid.length === 0) return { added: [], skipped: [] };
 
-    const existing = await client.fetch(`${listPath(listTitle)}/fields?$select=InternalName,FieldTypeKind`);
-    const rows: { InternalName: string; FieldTypeKind: number }[] = existing.d.results ?? [existing.d];
+    // client.fetch unwraps: collection reads yield the results array, single-entity reads the entity itself
+    const existing = (await client.fetch(`${listPath(listTitle)}/fields?$select=InternalName,FieldTypeKind`)) as
+        { InternalName: string; FieldTypeKind: number }[] | { InternalName: string; FieldTypeKind: number };
+    const rows = Array.isArray(existing) ? existing : [existing];
     const existingByName = new Map<string, number>(rows.map((f) => [f.InternalName, f.FieldTypeKind]));
 
     const added: string[] = [];

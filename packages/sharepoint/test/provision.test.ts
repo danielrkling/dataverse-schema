@@ -84,12 +84,12 @@ test("defineField fans out by kind; built-ins and document fields skip", () => {
 
 function mockFetch() {
     return vi.spyOn(client, "fetch").mockImplementation(async (resource: string, options?: RequestInit) => {
+        // NOTE: shapes match the real client.fetch — it unwraps the `d` envelope
         if (resource.includes("/fields?$select=InternalName")) {
-            // one existing matching Number column ("Amount0" = kind 9) and one drifted (Title misuse)
-            return { d: { results: [{ InternalName: "Amount0", FieldTypeKind: 9 }, { InternalName: "Old", FieldTypeKind: 4 }] } };
+            return [{ InternalName: "Amount0", FieldTypeKind: 9 }, { InternalName: "Old", FieldTypeKind: 4 }];
         }
-        if (resource === "web/lists" && options?.method === "POST") return { d: { Id: "{list-guid}" } };
-        if (resource.includes("?$select=Id")) return { d: { Id: "{target-guid}" } };
+        if (resource === "web/lists" && options?.method === "POST") return { Id: "{list-guid}" };
+        if (resource.includes("?$select=Id")) return "{target-guid}";
         return {};
     });
 }
