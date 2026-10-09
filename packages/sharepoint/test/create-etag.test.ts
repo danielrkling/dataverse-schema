@@ -60,3 +60,28 @@ test("create with content: metadata MERGE is unconditional (If-Match: *)", async
         "Concur_x0020_CodesId": { results: [7] },
     });
 });
+
+test("updateRecord: blank-string $etag counts as absent → unconditional If-Match * (no 412)", async () => {
+    const calls: Array<{ headers: Record<string, string> }> = [];
+    const Types = new SharePointTable({
+        client: new SharePointClient({ url: "https://x", token: "T" }),
+        listTitle: "Tasks",
+        listItemEntityTypeFullName: "SP.Data.TasksListItem",
+        fields: { id: primaryKey(), title: text("Title") },
+    });
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ headers: (init.headers ?? {}) as Record<string, string> });
+        return new Response("{}", { status: 200, headers: { "Content-Type": "application/json;odata=verbose;charset=utf-8" } });
+    }));
+    await Types.updateRecord(12, { title: "x", $etag: "" } as any);
+    expect(calls[0]!.headers).toMatchObject({ "If-Match": "*" });
+
+    // explicit blank ifMatch behaves identically:
+    await Types.updateRecord(12, { title: "x" }, { ifMatch: "   " });
+    expect(calls[1]!.headers).toMatchObject({ "If-Match": "*" });
+
+    // a real etag still passes through:
+    await Types.updateRecord(12, { title: "x", $etag: '"7"' } as any);
+    expect(calls[2]!.headers).toMatchObject({ "If-Match": '"7"' });
+    vi.unstubAllGlobals();
+});

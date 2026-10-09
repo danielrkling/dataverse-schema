@@ -269,10 +269,16 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      */
     async updateRecord(id: ListItemId | number, value: Partial<InferRecord<TFields>> & { $type?: string; $etag?: string }, options: UpsertRecordOptions = {}) {
         const metadata = await this.metadata(value);
+        // A MERGE without any If-Match makes the legacy surface evaluate a
+        // precondition against an implicit (blank) etag → 412. Blank-string
+        // etags (stale bookkeeping) count as absent; with no etag the merge
+        // is unconditional ("*") — MERGE keeps properties it doesn't carry.
+        const provided = options.ifMatch ?? value.$etag;
+        const ifMatch = provided?.trim() ? provided : "*";
         await this.client.mergeRecord(this.listTitle, id, {
             __metadata: metadata,
             ...this.transformValueToSharePoint(value as Record<string, unknown>),
-        }, { ifMatch: options.ifMatch ?? value.$etag, signal: options.signal });
+        }, { ifMatch, signal: options.signal });
         await this._afterSave({ table: this, client: this.client, recordId: id }, value);
         // MERGE has no return representation; sync-engine etag bookkeeping
         // fetches freshness itself (see @dataverse-schema/sync).
