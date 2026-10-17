@@ -6,9 +6,9 @@ export * from "./types";
 export * from "./provision";
 
 // Compile-time check: SharePointTable structurally satisfies the sync
-// engine's generic table contract, so @dataverse-schema/sync's SyncEngine
+// engine's generic table contract, so dataverse-schema-sync's SyncEngine
 // works over SharePoint lists unchanged.
-import type { SyncTable } from "@dataverse-schema/sync";
+import type { SyncTable } from "dataverse-schema-sync";
 import type { SharePointTable } from "./table";
 import type { GenericProperties } from "./types";
 

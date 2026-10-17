@@ -36,7 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dataverse-schema/sync": "^0.1.0",
+    "dataverse-schema-sync": "^0.1.0",
     "@standard-schema/spec": "^1.1.0"
   },
   "devDependencies": {

@@ -10,7 +10,7 @@
  */
 
 import { SharePointClient, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
-import { FieldBase, FileField, type FileRef, type InferRecord, type TransformContext } from "./fields";
+import { CommentsField, FieldBase, FileField, type Comment, type CommentMention, type FileRef, type InferRecord, type TransformContext } from "./fields";
 import { SPQuery, spQuery, defaultQuery, type QueryProxy } from "./query";
 import type { ListItemId, GenericProperties } from "./types";
 
@@ -67,7 +67,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     /**
      * The engine/queue-facing identity of this table — for SharePoint that is
      * the list title, matching the store name convention the generic sync
-     * engine uses (see @dataverse-schema/sync SyncTable).
+     * engine uses (see dataverse-schema-sync SyncTable).
      */
     get entitySetName(): string {
         return this.listTitle;
@@ -106,6 +106,13 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
                 out[tsKey] = fileRef;
                 continue;
             }
+            if (field instanceof CommentsField) {
+                // Comments never ride the item wire (no column, no $select) —
+                // only `getRecord` (via a follow-up Comments call) and the
+                // explicit `getComments` surface populate the key; list reads
+                // leave it absent rather than surfacing a hollow `[]`.
+                continue;
+            }
             out[tsKey] = field.fromSharePoint(wire[field.name]);
         }
         const meta = wire.__metadata as ItemMetadata | undefined;
@@ -124,6 +131,16 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             const field = (this.fields as Record<string, FieldBase<any>>)[tsKey];
             if (!field) continue; // unknown/$-keys (e.g. $etag) are metadata-only
             if (field instanceof FileField) continue; // content flows through afterSave, never the item body
+            if (field instanceof CommentsField) {
+                // Comments are append-only on their own REST surface; the item
+                // body can never carry them. A spread of a full getRecord
+                // shape (comments: [] or undefined) passes through silently —
+                // an actual value is a write the caller expects to happen.
+                if (raw != null && raw !== undefined) {
+                    throw new Error(`comments field "${tsKey}" is append-only — use addComment/deleteComment (the REST surface has no comment update)`);
+                }
+                continue;
+            }
             const fieldWithWrite = field as FieldBase<any>;
             wire[fieldWithWrite.writeName] = fieldWithWrite.toSharePoint(raw);
         }
@@ -189,7 +206,11 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             query: query ?? defaultQuery(this), // always select+expand — a bare fetch only serves [Field]Id numbers for references
             signal: options.signal,
         });
-        return wire ? this.transformItemFromSharePoint(wire) : null;
+        if (!wire) return null;
+        const record = this.transformItemFromSharePoint(wire);
+        const commentsKey = this._commentsFieldKey();
+        if (commentsKey) (record as Record<string, unknown>)[commentsKey] = await this.getComments(id, { signal: options.signal });
+        return record;
     }
 
     /**
@@ -282,7 +303,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         }, { ifMatch, signal: options.signal });
         await this._afterSave({ table: this, client: this.client, recordId: id }, value);
         // MERGE has no return representation; sync-engine etag bookkeeping
-        // fetches freshness itself (see @dataverse-schema/sync).
+        // fetches freshness itself (see dataverse-schema-sync).
     }
 
     /**
@@ -316,6 +337,80 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             if (f instanceof FileField) return k;
         }
         return undefined;
+    }
+
+    /** Key of the first CommentsField in the fields map, if any. */
+    private _commentsFieldKey(): string | undefined {
+        for (const [k, f] of Object.entries(this.fields) as [string, FieldBase<any>][]) {
+            if (f instanceof CommentsField) return k;
+        }
+        return undefined;
+    }
+
+    // --- comments (item-level channel, append-only — see CommentsField) ---
+
+    /**
+     * Flattens one `Microsoft.SharePoint.Comments.comment` wire object into
+     * the table's {@link Comment} read shape.
+     */
+    private _commentFromWire(wire: any): Comment {
+        const author = (wire?.author ?? {}) as Record<string, unknown>;
+        const mentions = Array.isArray(wire?.mentions?.results) ? wire.mentions.results : [];
+        return {
+            id: String(wire?.id),
+            text: String(wire?.text ?? ""),
+            author: {
+                id: Number(author.id),
+                ...(author.name ? { name: String(author.name) } : {}),
+                ...(author.email ? { email: String(author.email) } : {}),
+            },
+            createdDate: new Date(wire?.createdDate),
+            parentId: String(wire?.parentId ?? "0"),
+            isReply: wire?.isReply === true,
+            replyCount: Number(wire?.replyCount ?? 0),
+            likeCount: Number(wire?.likeCount ?? 0),
+            mentions: mentions.map((m: Record<string, unknown>) => ({
+                ...(m.email ? { email: String(m.email) } : {}),
+                ...(m.name ? { name: String(m.name) } : {}),
+            })) as CommentMention[],
+        };
+    }
+
+    /**
+     * Reads the comments of a list item (the modern activity feed). Comments
+     * live outside the item object — a separate REST surface no `$select`
+     * reaches — so this is one follow-up call per item; `getRecords` never
+     * fetches comments (N+1), only `getRecord` does.
+     *
+     * @example
+     * const comments = await Tasks.getComments(12); // Comment[]
+     */
+    async getComments(id: ListItemId | number, options: RequestOptions = {}): Promise<Comment[]> {
+        const wire = await this.client.getComments(this.listTitle, id, options);
+        return wire.map((c: any) => this._commentFromWire(c));
+    }
+
+    /**
+     * Posts a comment on a list item and returns it flattened. The author is
+     * always the authenticated caller; `mentions` are email addresses, each
+     * mapping to an `@mention{N}` placeholder positionally (write
+     * `@mention{0}` in the text to tag the first email).
+     *
+     * @example
+     * await Tasks.addComment(12, "Take a look @mention{0}!", ["a@contoso.com"]);
+     */
+    async addComment(id: ListItemId | number, text: string, mentions?: string[], options: RequestOptions = {}): Promise<Comment> {
+        const wire = await this.client.addComment(this.listTitle, id, { text, mentions }, options);
+        return this._commentFromWire(wire);
+    }
+
+    /**
+     * Deletes one comment of a list item. The REST surface has no comment
+     * update — editing means delete + re-add (which changes authorship), so
+     * no `updateComment` exists here.
+     */
+    async deleteComment(id: ListItemId | number, commentId: string | number, options: RequestOptions = {}) {
+        await this.client.deleteComment(this.listTitle, id, commentId, options);
     }
 
     /** The FileRef to upload for this save, or null when nothing to upload. */

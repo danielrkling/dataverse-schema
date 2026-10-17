@@ -18,7 +18,7 @@
 
 import type { SharePointTable } from "./table";
 import type { QueryRequestOptions } from "./client";
-import { ChoiceField, DateField, DatetimeField, FileField, JsonField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase, type InferRecord, type FileRef } from "./fields";
+import { ChoiceField, CommentsField, DateField, DatetimeField, FileField, JsonField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase, type Comment, type InferRecord, type FileRef } from "./fields";
 
 // --- field refs -----------------------------------------------------------
 
@@ -125,6 +125,7 @@ type ReadValueOf<F extends FieldBase<any>> =
     F extends DateField<any> | DatetimeField<any> ? Date | null :
     F extends JsonField<infer J> ? J :
     F extends FileField ? FileRef :
+    F extends CommentsField ? Comment[] :
     never;
 
 /** A `.select()` pick: each ref maps to its read value type under the same key. */
@@ -166,6 +167,9 @@ export class SPQuery<
         this._select = Object.values(fields(this.proxy()) ?? {})
             .map((entry) => {
                 if (!entry) return undefined;
+                if (entry.field instanceof CommentsField) {
+                    return undefined; // comments have no $select presence — read via getRecord/getComments
+                }
                 if (DEFAULT_CARVE_OUTS.has(entry.field.constructor as Function)) {
                     // Reference fields expand themselves: the carve-outs are the
                     // same for every column of that kind (person: Id/Title/EMail;
@@ -298,6 +302,9 @@ export function defaultProjection(table: SharePointTable<any>): { select: string
         if (carve) {
             expand[key] = carve;
             continue; // references ride $expand, not $select
+        }
+        if (field instanceof CommentsField) {
+            continue; // comments have no column — their channel is a per-item follow-up call, never $select
         }
         if (field instanceof FileField) {
             select.push("FileLeafRef", "FileRef"); // the file channel reads hardcode these wire names

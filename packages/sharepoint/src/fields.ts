@@ -19,7 +19,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { ListItemId } from "./types";
 import type { SharePointClient } from "./client";
 
-export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "people" | "lookup" | "lookupCollection" | "choice" | "multiChoice" | "file";
+export type FieldKind = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "person" | "people" | "lookup" | "lookupCollection" | "choice" | "multiChoice" | "file" | "comments";
 
 export type FieldOptions<T> = {
     /** Standard-Schema (valibot/Zod/ArkType) schema for the field's read value. */
@@ -357,10 +357,13 @@ export function lookup(name: string, options?: ReferenceFieldOptions<Lookup | nu
 export function title(name: string = "Title", options?: FieldOptions<string>) { return new StringField(name, options); }
 
 /**
- * Primary key field — SharePoint list items expose an integer `Id`.
- * `name` defaults to `"Id"` (the internal column SharePoint REST returns).
+ * Primary key field — SharePoint list items expose an integer `Id`. `name`
+ * defaults to `"Id"` (the internal column SharePoint REST returns). Pinned to
+ * non-null: a fetched item always carries its numeric Id (the nullable
+ * `NumberField` default would force pointless null-checks on a value that
+ * can't occur).
  */
-export function primaryKey(name: string = "Id") { return new NumberField(name, { readonly: true }); }
+export function primaryKey(name: string = "Id") { return new NumberField<number>(name, { readonly: true }); }
 
 // --- choice ---
 
@@ -521,6 +524,79 @@ export class FileField extends FieldBase<FileRef> {
 
 export function document(name: string = "FileLeafRef", options?: FieldOptions<FileRef> & { overwrite?: boolean }) {
     return new FileField(name, options);
+}
+
+// --- comments (item-level channel, not a list column) ---
+
+/** The author of an item comment — the same flattened principal as `person` reads. */
+export type CommentAuthor = { id: number; name?: string; email?: string };
+
+/** A `@mention` inside a comment text (placeholder `@mention{0}` on the wire). */
+export type CommentMention = { name?: string; email?: string };
+
+/**
+ * A list-item comment (`Microsoft.SharePoint.Comments.comment`). Comments live
+ * OUTSIDE the list item object — a separate REST surface
+ * (`.../Items(id)/Comments`) that no `$select` can reach — so this type is the
+ * flattened read shape of that surface, not of a column value.
+ */
+export type Comment = {
+    /** Comment id as served (a numeric string). */
+    id: string;
+    text: string;
+    author: CommentAuthor;
+    createdDate: Date;
+    /** `"0"` for top-level comments, the parent id for replies. */
+    parentId: string;
+    isReply: boolean;
+    replyCount: number;
+    likeCount: number;
+    mentions: CommentMention[];
+};
+
+/**
+ * Item comments channel for the modern list "activity feed". Like
+ * {@link FileField}, the value never rides the item body — comments have no
+ * column at all, they are a separate REST surface
+ * (`.../Items(id)/Comments`):
+ *
+ * - read: `table.getRecord` populates the field via a follow-up
+ *   `GET .../Comments` call; `getRecords` never fetches comments (N+1), and
+ *   the key is simply absent from its records. `table.getComments(id)` is the
+ *   explicit read.
+ * - write: append-only. `table.addComment(id, text, mentions?)` POSTs the
+ *   comment (author is always the authenticated caller — the surface has no
+ *   post-on-behalf), `table.deleteComment(id, commentId)` removes one. There
+ *   is no update: a PUT/PATCH surface does not exist (editing = delete +
+ *   re-add, which changes authorship — not sugar-coated here).
+ * - the item body can never carry a comments value: passing one to
+ *   `createRecord`/`updateRecord` throws (see
+ *   `SharePointTable.transformValueToSharePoint`).
+ * - provisioning: nothing to define — comments are a platform feature of the
+ *   list, not a schema column.
+ * - replies/likes are out of scope for the flat surface (reachable via
+ *   `client.getComments` + `$expand=replies` raw).
+ */
+export class CommentsField extends FieldBase<Comment[]> {
+    /**
+     * @param name informational only — comments have no wire name (no column,
+     *   no `$select` presence). Defaults to `"Comments"`.
+     */
+    constructor(name: string = "Comments") {
+        super(name, "comments");
+    }
+    /** Never part of an item body — comments ride their own REST surface. */
+    override toSharePoint(_value: Comment[]): undefined {
+        return undefined;
+    }
+    /** Only reachable via the explicit comments channel, never the item wire. */
+    override fromSharePoint(_wire: unknown): Comment[] {
+        throw new Error(`comments field "${this.name}" does not ride the item wire — read via table.getRecord or table.getComments`);
+    }
+}
+
+export function comments(name?: string) {
+    return new CommentsField(name);
 }
 
 /** Infers the TS record type from a fields map. */

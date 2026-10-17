@@ -192,7 +192,7 @@ Notes:
 
 ## Tables and the sync engine
 
-`SharePointTable` structurally satisfies the generic offline sync engine's `SyncTable` contract (`@dataverse-schema/sync`), so the offline mutation queue works over lists unchanged — see that package's docs.
+`SharePointTable` structurally satisfies the generic offline sync engine's `SyncTable` contract (`dataverse-schema-sync`), so the offline mutation queue works over lists unchanged — see that package's docs.
 
 ## Provisioning lists and columns
 

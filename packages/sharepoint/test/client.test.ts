@@ -83,7 +83,17 @@ test("itemsPath URL-encodes the list title", () => {
     );
 });
 
-// --- current user ---
+// --- custom fetch option ---
+
+test("options.fetch is used instead of the global fetch", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+        jsonResponse({ d: { Id: 42, Title: "Jane", LoginName: "i:0#.f|x|jane", Email: "jane@x" } }),
+    );
+    const client = new SharePointClient({ url: "https://x", token: "T", fetch: fetchImpl });
+    expect(await client.getCurrentUser()).toEqual({ id: 42, name: "Jane", loginName: "i:0#.f|x|jane", email: "jane@x" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0][0]).toBe("https://x/_api/Web/CurrentUser?$select=Id,Title,LoginName,Email");
+});
 
 test("getCurrentUser maps the Web/CurrentUser shape", async () => {
     const client = new SharePointClient({ url: "https://x", token: "T" });

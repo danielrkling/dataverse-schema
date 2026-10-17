@@ -36,6 +36,12 @@ export type SharePointClientOptions = {
     requestDigest?: () => Promise<string>;
     /** Additional headers merged into every request. */
     headers?: Record<string, string>;
+    /**
+     * Custom fetch implementation used for every HTTP call (defaults to the
+     * global `fetch`). Useful for token-refresh wrappers, retries, or
+     * platform-provided clients (e.g. SPFx `HttpClient`).
+     */
+    fetch?: typeof fetch;
 };
 
 export type RequestOptions = { signal?: AbortSignal };
@@ -106,7 +112,7 @@ export class SharePointClient {
                 ? `${this.options.url}/${resource}`.replace(/\/_api\/\/_api\//, "/_api/")
                 : `${this.api}${resource.startsWith("/") ? "" : "/"}${resource}`;
 
-        const { token, requestDigest, headers: baseHeaders } = this.options;
+        const { token, requestDigest, headers: baseHeaders, fetch: fetchImpl = globalThis.fetch } = this.options;
         const method = (fetchOptions.method ?? "GET").toUpperCase();
         const isWrite = method !== "GET" && method !== "HEAD";
 
@@ -127,7 +133,7 @@ export class SharePointClient {
             headers["X-RequestDigest"] = await this.getFormDigest();
         }
 
-        const response = await fetch(url, { ...fetchOptions, headers });
+        const response = await fetchImpl(url, { ...fetchOptions, headers });
 
         if (raw) return response;
 
@@ -169,7 +175,8 @@ export class SharePointClient {
             this._digestFetched = Date.now();
             return digest;
         }
-        const response = await fetch(`${this.api}/contextinfo`, {
+        const { fetch: fetchImpl = globalThis.fetch } = this.options;
+        const response = await fetchImpl(`${this.api}/contextinfo`, {
             method: "POST",
             headers: {
                 Accept: "application/json;odata=verbose",
@@ -393,7 +400,7 @@ export class SharePointClient {
      * the `Web/CurrentUser` REST surface.
      *
      * @example
-     * const me = await client.getCurrentUser(); // { id, name, loginName, email }
+     * await client.getCurrentUser(); // { id, name, loginName, email }
      */
     async getCurrentUser(): Promise<{ id: number; name: string; loginName: string; email: string }> {
         const data = await this.fetch("Web/CurrentUser?$select=Id,Title,LoginName,Email") ?? {};
@@ -412,6 +419,74 @@ export class SharePointClient {
             loginName: String((data as any).LoginName ?? ""),
             email: String((data as any).Email ?? ""),
         };
+    }
+
+    //
+    // --- COMMENTS (item-level channel — no column exists on the item) ---
+
+    /** The REST comments path for one item: `.../Items(<id>)/Comments`. */
+    commentsPath(listTitle: string, id: ListItemId | number): string {
+        return `${this.itemsPath(listTitle)}(${id})/Comments`;
+    }
+
+    /**
+     * Reads all comments of a list item (the modern activity feed).
+     * Comments live outside the item object — `$select` cannot reach them.
+     * Verbose responses unwrap to the results array via `fetch`.
+     *
+     * @example
+     * await client.getComments("Tasks", 12); // Microsoft.SharePoint.Comments.comment[]
+     */
+    async getComments(listTitle: string, id: ListItemId | number, options: RequestOptions = {}): Promise<any[]> {
+        const result = await this.fetch(this.commentsPath(listTitle, id), { signal: options.signal });
+        if (Array.isArray(result)) return result;
+        return result?.results ?? (result ? [result] : []);
+    }
+
+    /**
+     * Posts a comment on a list item. The author is always the authenticated
+     * caller — the surface has no post-on-behalf. Mentions are email
+     * addresses; each becomes an `@mention{N}` placeholder positionally
+     * (`{ email: string[] }` sugar for the `Collection(…Identity)` results
+     * envelope). Returns the created comment (verbose response).
+     *
+     * @example
+     * await client.addComment("Tasks", 12, { text: "Take a look @mention{0}!", mentions: ["a@contoso.com"] });
+     */
+    async addComment(
+        listTitle: string,
+        id: ListItemId | number,
+        comment: { text: string; mentions?: string[] },
+        options: RequestOptions = {},
+    ) {
+        const body: Record<string, unknown> = {
+            __metadata: { type: "Microsoft.SharePoint.Comments.comment" },
+            text: comment.text,
+        };
+        if (comment.mentions?.length) {
+            body["mentions"] = {
+                __metadata: { type: "Collection(Microsoft.SharePoint.Comments.Client.Identity)" },
+                results: comment.mentions,
+            };
+        }
+        return this.fetch(this.commentsPath(listTitle, id), {
+            method: "POST",
+            body: JSON.stringify(body),
+            signal: options.signal,
+        });
+    }
+
+    /**
+     * Deletes one comment of a list item (`POST` + `X-HTTP-Method: DELETE`,
+     * consistent with the legacy surface's other deletes). There is no
+     * update surface: editing a comment = delete + re-add (authorship changes).
+     */
+    async deleteComment(listTitle: string, id: ListItemId | number, commentId: string | number, options: RequestOptions = {}) {
+        return this.fetch(`${this.commentsPath(listTitle, id)}(${commentId})`, {
+            method: "POST",
+            headers: { "X-HTTP-Method": "DELETE" },
+            signal: options.signal,
+        });
     }
 }
 
