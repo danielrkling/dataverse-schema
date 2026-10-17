@@ -12,7 +12,7 @@ export default defineConfig({
   // 3. Enable automatic isolated type-bundling
   dts: true,
   deps:{
-    neverBundle:['@tanstack/db', 'valibot', '@dataverse-schema/sync']
+    neverBundle:['valibot', 'dataverse-schema-sync']
   }, 
 
   // 5. Build configuration optimization

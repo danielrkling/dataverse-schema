@@ -1,46 +1,60 @@
 import { BTreeIndex, type Collection, type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
-import { getEtag, type DataverseTable, type GenericProperties, type Infer, type ODataTableQueryOptions } from "./index";
-import { SyncEngine, plainClone, type QueuedMutation, isConcurrencyError, isKeyViolation } from "./sync";
+import { SyncEngine, plainClone, type EtagReader, type QueuedMutation, type SyncTable } from "../index";
 
-// Convenience re-exports so consumers (tests, browser harness) can access the
-// offline engine's public API through this entry point.
-export { SyncEngine, plainClone, type QueuedMutation, isConcurrencyError, isKeyViolation, MutationPersistenceError } from "./sync";
-
+/**
+ * TanStack DB collection adapters over the generic {@link SyncEngine} (and a
+ * plain online pull). This module is product-agnostic: the table is addressed
+ * through the engine's {@link SyncTable} contract extended with the two read
+ * channels (`getRecords` for offline pulls, `iterateRecords` for online
+ * streaming pulls), and the concurrency token is read through the injected
+ * {@link EtagReader}. Product packages (dataverse-schema, sharepoint-schema)
+ * wrap these factories with their own table/query types.
+ *
+ * Peer dependency: `@tanstack/db`. Import this entry (`dataverse-schema-sync/adapters/tanstack`)
+ * only in apps that use TanStack DB.
+ */
 
 const DEFAULT_SYNC_INTERVAL = 30000;
 const DEFAULT_POLL_INTERVAL = 30000;
 
 /**
- * Creates indexes on the collection for the primary key and every `lookupId`
- * field of the table. These are the columns correlated joins/live subqueries
+ * The table contract the TanStack adapters need — the engine's {@link SyncTable}
+ * write surface plus the two read channels used for remote pulls.
+ */
+export type TanstackSyncTable = SyncTable & {
+    getRecords(query?: unknown, options?: { signal?: AbortSignal }): Promise<any[]>;
+    iterateRecords(query?: unknown, options?: { signal?: AbortSignal }): AsyncIterable<any>;
+};
+
+/** Reads the concurrency token from a record. Defaults to the `$etag` record convention. */
+const defaultGetEtag: EtagReader = (value) => value?.["$etag"];
+
+/**
+ * Creates indexes on the collection for the primary key plus every key listed
+ * in `indexKeys`. These are the columns correlated joins/live subqueries
  * (`materialize`) filter on, so having them indexed keeps the includes
  * materialization fast and avoids the known "empty snapshot when the driving
  * collection is indexed" lazy-load pitfalls in the other direction.
  */
-function createDefaultIndexes(table: DataverseTable<GenericProperties>, collection: Collection<any, any, any>): void {
-  const fields = Object.entries(table.fields);
-  const indexedKeys = new Set<string>([table.primaryKey.key]);
-  for (const [key, field] of fields) {
-    if (key === table.primaryKey.key) continue;
-    if (field.type === "lookupId") indexedKeys.add(key);
-  }
-  for (const key of indexedKeys) {
-    try {
-      collection.createIndex((row: any) => row[key], { indexType: BTreeIndex });
-    } catch (err) {
-      // Index creation is best-effort — a duplicate index or unsupported key
-      // should never break syncing.
-      console.warn(`[dataverse-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
+function createDefaultIndexes(table: SyncTable, collection: Collection<any, any, any>, indexKeys: string[]): void {
+    const indexedKeys = new Set<string>([table.primaryKey.key, ...indexKeys]);
+    for (const key of indexedKeys) {
+        try {
+            collection.createIndex((row: any) => row[key], { indexType: BTreeIndex });
+        } catch (err) {
+            // Index creation is best-effort — a duplicate index or unsupported key
+            // should never break syncing.
+            console.warn(`[sync-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
+        }
     }
-  }
-  // Debug aid: list every index now registered on the collection. The paths
-  // printed here must match the field named in any TanStack DB
-  // "Join requires an index on ..." warning for that collection id.
-  const indexes = [...collection.indexes.values()].map((i: any) => i.expression?.path);
+    // Debug aid: list every index now registered on the collection. The paths
+    // printed here must match the field named in any TanStack DB
+    // "Join requires an index on ..." warning for that collection id.
+    const indexes = [...collection.indexes.values()].map((i: any) => i.expression?.path);
 }
 
-export type DataverseCollectionConfig<T extends GenericProperties> = {
-    table: DataverseTable<T>;
+export type SyncCollectionConfig<TRow extends object> = {
+    table: TanstackSyncTable;
     /**
      * Unique collection id. Defaults to the table's entitySetName — provide an
      * explicit id when creating multiple collections over the same entity
@@ -49,26 +63,34 @@ export type DataverseCollectionConfig<T extends GenericProperties> = {
     id?: string;
     /**
      * Query options limiting which records the collection syncs (filter,
-     * select, orderby, …). Applied to every remote sync pull.
+     * select, orderby, …). Opaque here — product packages type it. Applied to
+     * every remote sync pull.
      */
-    query?: ODataTableQueryOptions<T>;
+    query?: unknown;
     syncInterval?: number;
     /** When true, the collection rejects all insert/update/delete mutations. */
     readonly?: boolean;
+    /** When true, the offline collection rejects mutations while offline. */
     readOnlyWhenOffline?: boolean;
+    /**
+     * Additional row keys to index beyond the primary key (e.g. lookup keys —
+     * the columns correlated joins filter on).
+     */
+    indexKeys?: string[];
+    /** Reads the concurrency token from server records. Defaults to `$etag`. */
+    getEtag?: EtagReader;
     // NOTE: The passthrough options use `any` for the row type on purpose.
-    // Referencing `Infer<T>` here breaks generic inference of `T` from `table`
-    // (TypeScript collapses `T` to `never` when the table is widened to
-    // `DataverseTable<GenericProperties>`), which in turn made the resulting
-    // collection query resolve to `never[]`.
+    // Referencing an inferred row type here breaks generic inference from
+    // `table` (TypeScript collapses the row type when the table is widened),
+    // which in turn made the resulting collection query resolve to `never[]`.
 } & Omit<CollectionConfig<any>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
 
-export interface DataverseCollectionUtils<T extends GenericProperties> extends UtilsRecord {
+export interface SyncCollectionUtils<TRow extends object> extends UtilsRecord {
     forceSync: () => Promise<void>;
-    table: DataverseTable<T>
+    table: TanstackSyncTable;
 }
 
-export type DataverseOfflineCollectionConfig<T extends GenericProperties> = DataverseCollectionConfig<T> & {
+export type OfflineCollectionConfig<TRow extends object> = SyncCollectionConfig<TRow> & {
     /**
      * When true (default), remote syncing/flushing only runs while the document
      * is visible. Set to false to sync regardless of `visibilityState` (e.g. in a
@@ -77,20 +99,21 @@ export type DataverseOfflineCollectionConfig<T extends GenericProperties> = Data
     requireVisible?: boolean;
 };
 
-
-export function dataverseCollectionOptions<T extends GenericProperties>(
-    config: DataverseCollectionConfig<T>,
-): CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>> {
+export function syncCollectionOptions<TRow extends object>(
+    config: SyncCollectionConfig<TRow>,
+): CollectionConfig<TRow, string | number, never, SyncCollectionUtils<TRow>> {
     const {
         table,
         id: explicitId,
         query,
         syncInterval = DEFAULT_SYNC_INTERVAL,
         readonly = false,
+        indexKeys = [],
+        getEtag = defaultGetEtag,
         ...rest
     } = config;
     const pk = table.primaryKey;
-    const getKey = ((item: Infer<T>) => (item as any)[pk.key]);
+    const getKey = ((item: TRow) => (item as any)[pk.key]);
     // Multiple collections may target the same entitySet with different
     // filters — the id (explicit or derived) is what keeps them distinct.
     const collectionId = explicitId ?? table.entitySetName;
@@ -117,31 +140,31 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         channel.postMessage({ type: "MUTATIONS_ADDED", mutations });
     };
 
-    const defaultOnInsert: InsertMutationFn<Infer<T>> = async ({ transaction }) => {
+    const defaultOnInsert: InsertMutationFn<TRow> = async ({ transaction }) => {
         if (readonly) throw new Error("Collection is read-only");
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {
             const record = await table.createRecord(mutation.modified);
-            const guid = table.getPrimaryId(record)!;
-            results.push(guid);
-            serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: record, entitySetName: collectionId });
+            const key = table.getPrimaryId(record)!;
+            results.push(key);
+            serialized.push({ id: mutation.mutationId, type: "insert", key, value: record, entitySetName: collectionId });
         }
         broadcastMutations(serialized);
         return results;
     };
 
-    const defaultOnUpdate: UpdateMutationFn<Infer<T>> = async ({ transaction }) => {
+    const defaultOnUpdate: UpdateMutationFn<TRow> = async ({ transaction }) => {
         if (readonly) throw new Error("Collection is read-only");
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
         for (const mutation of transaction.mutations) {
             const record = await table.updateRecord(mutation.key, mutation.changes);
-            const guid = table.getPrimaryId(record)!;
-            results.push(guid);
-            // The returned record already carries the fresh $etag, so the
-            // cross-tab broadcast keeps sibling tabs' optimistic state current.
-            serialized.push({ id: mutation.mutationId, type: "update", key: guid, value: record, entitySetName: collectionId });
+            const key = table.getPrimaryId(record)!;
+            results.push(key);
+            // The returned record already carries the fresh concurrency token,
+            // so the cross-tab broadcast keeps sibling tabs' optimistic state current.
+            serialized.push({ id: mutation.mutationId, type: "update", key, value: record, entitySetName: collectionId });
         }
         broadcastMutations(serialized);
         // Re-pull so the collection row's etag is refreshed from the server.
@@ -151,7 +174,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         return results;
     };
 
-    const defaultOnDelete: DeleteMutationFn<Infer<T>> = async ({ transaction }) => {
+    const defaultOnDelete: DeleteMutationFn<TRow> = async ({ transaction }) => {
         if (readonly) throw new Error("Collection is read-only");
         const results: (string | number)[] = [];
         const serialized: Array<{ id: string; type: string; key: any; value: any; entitySetName: string }> = [];
@@ -164,9 +187,9 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         return results;
     };
 
-    const syncConfig: SyncConfig<Infer<T>> = {
+    const syncConfig: SyncConfig<TRow> = {
         sync: ({ begin, write, commit, markReady, collection }) => {
-            createDefaultIndexes(table as DataverseTable<GenericProperties>, collection);
+            createDefaultIndexes(table, collection, indexKeys);
             const handleTabMessage = (event: MessageEvent) => {
                 if (disposed) return;
                 if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
@@ -245,7 +268,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
                     commit();
 
                 } catch (err) {
-                    console.warn(`[dataverse-collection] sync failed for "${collectionId}":`, err);
+                    console.warn(`[sync-collection] sync failed for "${collectionId}":`, err);
                 } finally {
                     syncInFlight = false;
                     syncController = undefined;
@@ -273,7 +296,7 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
         rowUpdateMode: "partial",
     };
 
-    const utils: DataverseCollectionUtils<T> = {
+    const utils: SyncCollectionUtils<TRow> = {
         forceSync: async () => {
             await syncFn?.();
         },
@@ -297,14 +320,6 @@ export function dataverseCollectionOptions<T extends GenericProperties>(
 }
 
 /**
- * TanStack DB adapter for the vanilla {@link SyncEngine} offline engine.
- * The engine (src/sync) owns all queue persistence, flushing, retry and
- * conflict-resolution logic; the adapter only translates TanStack
- * {@link PendingMutation}s into the engine's {@link QueuedMutation} format
- * and wires the engine's state into TanStack collection configs.
- */
-
-/**
  * Translates a TanStack `PendingMutation` into the offline engine's durable
  * {@link QueuedMutation} format. For updates, persists only the changed
  * columns (`changes`) rather than the entire row (`modified`). This keeps the
@@ -322,7 +337,7 @@ export function serializeMutation(engine: SyncEngine, mutation: PendingMutation<
         timestamp: mutation.createdAt.valueOf(),
         sequence: engine.nextSequence(),
         attempts: 0,
-        ifMatch: getEtag(mutation.modified),
+        ifMatch: engine.getEtag(mutation.modified),
     };
 }
 
@@ -333,10 +348,10 @@ export function serializeMutation(engine: SyncEngine, mutation: PendingMutation<
  * hydrating the collection from the IDB cache, remote pulls, and enqueueing
  * optimistic mutations into the engine's durable queue.
  */
-export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
+export function offlineCollectionOptions<TRow extends object>(
     engine: SyncEngine,
-    config: DataverseOfflineCollectionConfig<T>,
-): CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>> {
+    config: OfflineCollectionConfig<TRow>,
+): CollectionConfig<TRow, string | number, never, SyncCollectionUtils<TRow>> {
     if (engine.isClosed) throw new Error("SyncEngine is closed");
     const {
         table,
@@ -346,13 +361,15 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
         readOnlyWhenOffline = false,
         readonly = false,
         requireVisible = true,
+        indexKeys = [],
+        getEtag = defaultGetEtag,
         ...rest
     } = config;
     // Widened deliberately: the sync DB stores heterogeneous tables.
-    const widenedTable = table as DataverseTable<GenericProperties>;
+    const widenedTable = table as SyncTable;
     engine.tables.set(table.entitySetName, widenedTable);
     const pk = table.primaryKey;
-    const getKey = (item: Infer<T>) => (item as any)[pk.key];
+    const getKey = (item: TRow) => (item as any)[pk.key];
     // Multiple collections may target the same entitySet with different
     // filters — the id (explicit or derived) is what keeps them distinct.
     // The IndexedDB cache store is also keyed by this id so two filtered
@@ -368,7 +385,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
     void cacheReady;
 
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
-    let syncFromDataverse: ((signal: AbortSignal) => Promise<void>);
+    let syncFromBackend: ((signal: AbortSignal) => Promise<void>);
     let syncController: AbortController | undefined;
     let activeSync: Promise<void> | undefined;
     let syncQueued = false;
@@ -383,7 +400,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
 
         syncController = new AbortController();
         engine.trackActiveFetch(syncController);
-        activeSync = syncFromDataverse(syncController.signal).finally(() => {
+        activeSync = syncFromBackend(syncController.signal).finally(() => {
             engine.untrackActiveFetch(syncController!);
             syncController = undefined;
             activeSync = undefined;
@@ -418,9 +435,9 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
         }
     }
 
-    const syncConfig: SyncConfig<Infer<T>> = {
+    const syncConfig: SyncConfig<TRow> = {
         sync: ({ begin, write, commit, markReady, collection }) => {
-            createDefaultIndexes(table as DataverseTable<GenericProperties>, collection);
+            createDefaultIndexes(table, collection, indexKeys);
             // The collection must become ready even when the remote sync is
             // skipped (offline at load, hidden tab). Otherwise anything
             // awaiting collection readiness hangs forever.
@@ -432,7 +449,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
                 }
             };
 
-            syncFromDataverse = async (signal: AbortSignal) => {
+            syncFromBackend = async (signal: AbortSignal) => {
                 try {
                     await cacheReady;
                     // Pass down signal to underlying API client
@@ -451,15 +468,15 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
                         const existingRecord = collection.get(key);
                         if (existingRecord) {
                             if (getEtag(record) !== getEtag(existingRecord)) {
-                                write({ type: "update", value: record, metadata: { source: "dv" } });
+                                write({ type: "update", value: record, metadata: { source: "backend" } });
                             }
                             keysToDelete.delete(key);
                         } else {
-                            write({ type: "insert", value: record, metadata: { source: "dv" } });
+                            write({ type: "insert", value: record, metadata: { source: "backend" } });
                         }
                     }
                     for (const key of keysToDelete) {
-                        write({ type: "delete", value: collection.get(key)!, metadata: { source: "dv" } });
+                        write({ type: "delete", value: collection.get(key)!, metadata: { source: "backend" } });
                     }
                     commit();
                     const db = await engine.getDB();
@@ -471,7 +488,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
                     await tx.done;
                 } catch (err: any) {
                     if (err?.name !== "AbortError" && !signal.aborted) {
-                        console.warn(`[dataverse-offline] Remote sync failed for "${collectionId}":`, err);
+                        console.warn(`[sync-offline] Remote sync failed for "${collectionId}":`, err);
                     }
                 } finally {
                     markReadyOnce();
@@ -513,7 +530,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
             const syncFromIDB = async () => {
                 await cacheReady;
                 const db = await engine.getDB();
-                const cached = (await db.getAll(collectionId)) as Infer<T>[];
+                const cached = (await db.getAll(collectionId)) as TRow[];
                 if (!disposed && cached.length > 0) {
                     begin();
                     for (const item of cached) {
@@ -525,7 +542,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
 
             syncFromIDB().then(flushAndSync).catch((err) => {
                 if (!disposed) {
-                    console.warn(`[dataverse-offline] Cache sync failed for "${collectionId}":`, err);
+                    console.warn(`[sync-offline] Cache sync failed for "${collectionId}":`, err);
                 }
             }).finally(() => {
                 // Hydration finished (or failed) — the collection is usable
@@ -577,10 +594,10 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
         }
     };
 
-    const utils: DataverseCollectionUtils<T> = {
+    const utils: SyncCollectionUtils<TRow> = {
         forceSync: async () => {
             // Flush any queued local mutations, then pull fresh state from
-            // Dataverse (mirrors the online adapter's forceSync utility).
+            // the backend (mirrors the online adapter's forceSync utility).
             await engine.flushQueue();
             await runSync();
         },
@@ -600,7 +617,7 @@ export function dataverseOfflineCollectionOptions<T extends GenericProperties>(
         // Begin syncing immediately on creation rather than waiting for the
         // first subscriber to attach (the default for @tanstack/db collections).
         startSync: true,
-    } as CollectionConfig<Infer<T>, string | number, never, DataverseCollectionUtils<T>>;
+    } as CollectionConfig<TRow, string | number, never, SyncCollectionUtils<TRow>>;
 }
 
 export type ReadonlyStorageConfig<T extends object, TKey extends string | number> = {

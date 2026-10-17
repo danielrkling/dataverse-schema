@@ -1,4 +1,4 @@
-import { SyncEngine, type SyncEngineOptions } from "@dataverse-schema/sync";
+import { SyncEngine, type SyncEngineOptions } from "dataverse-schema-sync";
 import { type DataverseTable } from "../table";
 import { type GenericProperties } from "../types";
 import { getEtag } from "../util";

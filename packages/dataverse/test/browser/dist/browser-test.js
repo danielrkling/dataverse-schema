@@ -90,9 +90,10 @@
         consistency,
         solutionUniqueName,
         suppressDuplicateDetection,
-        bypassCustomPluginExecution
+        bypassCustomPluginExecution,
+        fetch: fetchImpl = globalThis.fetch
       } = this.options;
-      const response = await fetch(url, {
+      const response = await fetchImpl(url, {
         ...fetchOptions,
         headers: {
           ...raw ? {} : {
@@ -4007,7 +4008,7 @@ ${stackOf(e)}` : messageOf$1(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T14:12:20.452Z"}
+      meta.textContent = `build ${"2026-10-17T14:20:39.875Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -4100,7 +4101,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T14:12:20.452Z",
+          build: "2026-10-17T14:20:39.875Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -4119,7 +4120,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T14:12:20.452Z"}\``,
+        `Build: \`${"2026-10-17T14:20:39.875Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""

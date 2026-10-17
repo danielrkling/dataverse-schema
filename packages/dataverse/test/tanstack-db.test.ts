@@ -4,7 +4,8 @@ import { expect, test } from "vitest";
 // no indexedDB global, so the in-memory shim (installed as a dev dependency)
 // stands in for the browser API.
 import "fake-indexeddb/auto";
-import { isConcurrencyError, isKeyViolation, dataverseOfflineCollectionOptions, serializeMutation, SyncEngine, type QueuedMutation } from "../src/tanstack-db";
+import { serializeMutation } from "dataverse-schema-sync/adapters/tanstack";
+import { isConcurrencyError, isKeyViolation, SyncEngine, type QueuedMutation } from "../src/sync";
 import { DataverseHttpError } from "../src";
 import { DataverseClient } from "../src/client";
 import { DataverseTable, file, image, primaryKey, string } from "../src";

@@ -1,5 +1,5 @@
 {
-  "name": "@dataverse-schema/sync",
+  "name": "dataverse-schema-sync",
   "version": "0.1.0",
   "description": "Generic offline sync engine (durable IndexedDB mutation queue with flush/retry/conflict machinery) for the dataverse-schema family",
   "type": "module",
@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./adapters/tanstack": {
+      "types": "./dist/adapters/tanstack.d.ts",
+      "import": "./dist/adapters/tanstack.js"
     }
   },
   "keywords": [
@@ -34,7 +38,16 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "peerDependencies": {
+    "@tanstack/db": "^0.8.7"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/db": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@tanstack/db": "^0.8.7",
     "fake-indexeddb": "^6.2.5",
     "tsdown": "^0.22.14"
   }

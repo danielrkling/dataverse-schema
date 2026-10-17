@@ -1,5 +1,6 @@
 import { createCollection } from "@tanstack/db"
-import { SyncEngine, dataverseOfflineCollectionOptions } from "../../../../src/tanstack-db"
+import { SyncEngine } from "dataverse-schema-sync"
+import { offlineCollectionOptions } from "dataverse-schema-sync/adapters/tanstack"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -30,8 +31,8 @@ export const crossTabSuite: Suite = {
         const restoreVis = forceVisible()
         let a: any, b: any
         try {
-          a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable })) as any
-          b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable })) as any
+          a = createCollection(offlineCollectionOptions(dbA, { table: ctx.tables.TestTable })) as any
+          b = createCollection(offlineCollectionOptions(dbB, { table: ctx.tables.TestTable })) as any
           await waitFor(() => a.size >= 1 && b.size >= 1, 8000)
           const name = ctx.fx.name("xtab")
           const id = crypto.randomUUID()
@@ -58,8 +59,8 @@ export const crossTabSuite: Suite = {
         const restoreVis = forceVisible()
         let a: any, b: any
         try {
-          a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable })) as any
-          b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable })) as any
+          a = createCollection(offlineCollectionOptions(dbA, { table: ctx.tables.TestTable })) as any
+          b = createCollection(offlineCollectionOptions(dbB, { table: ctx.tables.TestTable })) as any
           await waitFor(() => a.size >= 1 && b.size >= 1, 8000)
           const name = ctx.fx.name("xtab-abort")
           const id = crypto.randomUUID()

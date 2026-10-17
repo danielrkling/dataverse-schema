@@ -1,5 +1,5 @@
 import { createCollection } from "@tanstack/db"
-import { dataverseCollectionOptions } from "../../../../src/tanstack-db"
+import { syncCollectionOptions } from "dataverse-schema-sync/adapters/tanstack"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals, assertInstanceOf } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -13,9 +13,9 @@ export const onlineCollectionSuite: Suite = {
   },
   tests: (ctx) => [
     {
-      name: "dataverseCollectionOptions builds a usable Collection",
+      name: "syncCollectionOptions builds a usable Collection",
       fn: async () => {
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable })
         const collection = createCollection(config) as any
         // The initial sync pulls rows asynchronously; poll until populated.
         await waitFor(() => collection.size >= 1, 8000)
@@ -28,7 +28,7 @@ export const onlineCollectionSuite: Suite = {
     {
       name: "insert through the collection persists to Dataverse",
       fn: async () => {
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable })
         const collection = createCollection(config) as any
         await waitFor(() => collection.size >= 1, 8000)
         const name = ctx.fx.name("coll-insert")
@@ -51,7 +51,7 @@ export const onlineCollectionSuite: Suite = {
     {
       name: "update through the collection persists to Dataverse",
       fn: async () => {
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable })
         const collection = createCollection(config) as any
         await waitFor(() => collection.get(ctx.state.row) != null, 8000)
         const entry = collection.get(ctx.state.row)
@@ -69,7 +69,7 @@ export const onlineCollectionSuite: Suite = {
       name: "delete through the collection removes from Dataverse",
       fn: async () => {
         const id = await seedRow(ctx, { int: 5, text: "coll-del" })
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable })
         const collection = createCollection(config) as any
         await waitFor(() => collection.get(id) != null, 8000)
         collection.delete(id)
@@ -81,7 +81,7 @@ export const onlineCollectionSuite: Suite = {
     {
       name: "forceSync pulls external changes into the collection",
       fn: async () => {
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable })
         const collection = createCollection(config) as any
         await waitFor(() => collection.get(ctx.state.row) != null, 8000)
         // Mutate directly in Dataverse (bypassing the collection).
@@ -95,7 +95,7 @@ export const onlineCollectionSuite: Suite = {
     {
       name: "utils.table references the configured table",
       fn: async () => {
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable })
         const collection = createCollection(config) as any
         await new Promise((r) => setTimeout(r, 300))
         const utils = collection.utils as { table: unknown }

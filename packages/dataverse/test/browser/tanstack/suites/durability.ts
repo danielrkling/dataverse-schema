@@ -1,5 +1,6 @@
 import { createCollection } from "@tanstack/db"
-import { SyncEngine, dataverseOfflineCollectionOptions } from "../../../../src/tanstack-db"
+import { SyncEngine } from "dataverse-schema-sync"
+import { offlineCollectionOptions } from "dataverse-schema-sync/adapters/tanstack"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -27,7 +28,7 @@ export const durabilitySuite: Suite = {
         const restoreVis1 = forceVisible()
         let collection1: any
         try {
-          collection1 = createCollection(dataverseOfflineCollectionOptions(db1, { table: ctx.tables.TestTable })) as any
+          collection1 = createCollection(offlineCollectionOptions(db1, { table: ctx.tables.TestTable })) as any
           await waitFor(() => collection1.size >= 0, 3000)
           const id = crypto.randomUUID()
           collection1.insert({ id, name, int: 55, text: "durable" })
@@ -48,7 +49,7 @@ export const durabilitySuite: Suite = {
           assert(q2.length === 1, `mutation survived reload in IndexedDB (got ${q2.length})`)
           assertEquals(q2[0].entitySetName, ctx.tables.TestTable.entitySetName, "survived mutation targets right entity")
 
-          const collection2 = createCollection(dataverseOfflineCollectionOptions(db2, { table: ctx.tables.TestTable })) as any
+          const collection2 = createCollection(offlineCollectionOptions(db2, { table: ctx.tables.TestTable })) as any
           // Online now (default), so the initial flush picks up the persisted queue.
           await waitFor(async () => {
             const queue = await readQueue(db2)
@@ -69,7 +70,7 @@ export const durabilitySuite: Suite = {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const restoreVis = forceVisible()
         const id = await seedRow(ctx, { int: 7, text: "cache-me" })
-        const collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })) as any
+        const collection = createCollection(offlineCollectionOptions(db, { table: ctx.tables.TestTable })) as any
         try {
           await waitFor(async () => {
             const idb = await (db as any).getDB()

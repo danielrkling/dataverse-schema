@@ -1,5 +1,6 @@
 import { createCollection } from "@tanstack/db"
-import { SyncEngine, dataverseCollectionOptions, dataverseOfflineCollectionOptions } from "../../../../src/tanstack-db"
+import { SyncEngine } from "dataverse-schema-sync"
+import { syncCollectionOptions, offlineCollectionOptions } from "dataverse-schema-sync/adapters/tanstack"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals, assertRejects } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -25,7 +26,7 @@ export const optionsSuite: Suite = {
         const restoreVis = forceVisible()
         let collection: any
         try {
-          collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable })) as any
+          collection = createCollection(offlineCollectionOptions(db, { table: ctx.tables.TestTable })) as any
           await waitFor(() => collection.size >= 1, 8000)
           const name = ctx.fx.name("opts-fs")
           const id = crypto.randomUUID()
@@ -63,7 +64,7 @@ export const optionsSuite: Suite = {
         let collection: any
         try {
           collection = createCollection(
-            dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable, requireVisible: false }),
+            offlineCollectionOptions(db, { table: ctx.tables.TestTable, requireVisible: false }),
           ) as any
           await waitFor(() => collection.size >= 1, 8000)
           assert(collection.size >= 1, "collection synced despite hidden visibility (requireVisible:false)")
@@ -77,7 +78,7 @@ export const optionsSuite: Suite = {
     {
       name: "online readonly:true rejects mutations",
       fn: async () => {
-        const config = dataverseCollectionOptions({ table: ctx.tables.TestTable, readonly: true })
+        const config = syncCollectionOptions({ table: ctx.tables.TestTable, readonly: true })
         const collection = createCollection(config) as any
         await waitFor(() => collection.size >= 1, 8000)
         const id = crypto.randomUUID()
@@ -96,7 +97,7 @@ export const optionsSuite: Suite = {
       fn: async () => {
         const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0])
         const collection = createCollection(
-          dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable, readonly: true }),
+          offlineCollectionOptions(db, { table: ctx.tables.TestTable, readonly: true }),
         ) as any
         await waitFor(() => collection.size >= 1, 8000)
         const id = crypto.randomUUID()

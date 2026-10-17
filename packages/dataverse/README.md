@@ -575,19 +575,18 @@ const choices = await RetrieveChoices(client, "gender");
 
 ## @tanstack/db Integration
 
-A separate entry point provides `@tanstack/db` collection options and an offline sync store.
+The TanStack DB integration lives in the separate
+[`dataverse-schema-sync`](../sync) package (entry point
+`dataverse-schema-sync/adapters/tanstack`) — this package ships no TanStack API.
 
 ```typescript
-import { dataverseCollectionOptions, DataverseSyncDB, MutationPersistenceError } from "dataverse-schema/tanstack-db";
+import { SyncEngine, offlineCollectionOptions, syncCollectionOptions } from "dataverse-schema-sync/adapters/tanstack";
+import { Person } from "./tables"; // a DataverseTable satisfies the SyncTable contract
 
-// Live collection backed by Dataverse
-const collection = new Collection({
-  ...dataverseCollectionOptions(Person),
-  // ... @tanstack/db config
-});
+const engine = new SyncEngine({ name: "offline", tables: [Person], version: 1 });
 
 // Offline-first collection with an IndexedDB mutation queue
-const syncDb = new DataverseSyncDB({ databaseName: "offline" });
+const collection = createCollection(offlineCollectionOptions<typeof Person.T>(engine, { table: Person }));
 ```
 
 ## Utilities
@@ -616,10 +615,9 @@ const mapped = mapChoices(rawData);
 
 ## `@tanstack/db` integration
 
-This library also ships a `@tanstack/db` adapter (`dataverse-schema/tanstack-db`) with
-online (polling) and offline-capable (IndexedDB-queued, cross-tab) collection builders.
-See [`src/tanstack-db/README.md`](./src/tanstack-db/README.md) for full usage, options,
-and durability/retry behavior.
+The `@tanstack/db` adapter ships in the separate `dataverse-schema-sync` package
+(`dataverse-schema-sync/adapters/tanstack`) with generic online (polling) and
+offline-capable (IndexedDB-queued, cross-tab) collection builders.
 
 ## Contributions
 

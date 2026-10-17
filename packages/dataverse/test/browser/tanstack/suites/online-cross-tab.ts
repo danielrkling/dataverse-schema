@@ -1,5 +1,5 @@
 import { createCollection } from "@tanstack/db"
-import { dataverseCollectionOptions } from "../../../../src/tanstack-db"
+import { syncCollectionOptions } from "dataverse-schema-sync/adapters/tanstack"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
@@ -23,8 +23,8 @@ export const onlineCrossTabSuite: Suite = {
     {
       name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
       fn: async () => {
-        const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable })
-        const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const cfgA = syncCollectionOptions({ table: ctx.tables.TestTable })
+        const cfgB = syncCollectionOptions({ table: ctx.tables.TestTable })
         const a = createCollection(cfgA) as any
         const b = createCollection(cfgB) as any
         const restoreVis = forceVisible()
@@ -50,8 +50,8 @@ export const onlineCrossTabSuite: Suite = {
     {
       name: "a mutation on one online collection is reflected in a sibling",
       fn: async () => {
-        const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable })
-        const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable })
+        const cfgA = syncCollectionOptions({ table: ctx.tables.TestTable })
+        const cfgB = syncCollectionOptions({ table: ctx.tables.TestTable })
         const a = createCollection(cfgA) as any
         const b = createCollection(cfgB) as any
         const restoreVis = forceVisible()

@@ -43,19 +43,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dataverse-schema/sync": "^0.1.0",
+    "dataverse-schema-sync": "^0.1.0",
     "@standard-schema/spec": "^1.1.0"
   },
-  "peerDependencies": {
-    "@tanstack/db": "^0.8.7"
-  },
-  "peerDependenciesMeta": {
-    "@tanstack/db": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@tanstack/db": "^0.8.7",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.0.0",
     "msw": "^2.14.6",

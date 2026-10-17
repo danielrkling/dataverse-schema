@@ -210,7 +210,7 @@ export class SyncEngine {
     private mutationListeners = new Set<() => void>()
 
     // Injected product adapters (see SyncEngineOptions).
-    private getEtag: EtagReader
+    readonly getEtag: EtagReader
     private isDeterministicFailure: (error: unknown) => boolean
 
     constructor(options: SyncEngineOptions) {

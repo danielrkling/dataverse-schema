@@ -3,7 +3,8 @@ import { expect, test } from "vitest";
 // Engine-level tests exercise real IndexedDB usage — Node has no indexedDB
 // global, so the in-memory shim stands in for the browser API.
 import "fake-indexeddb/auto";
-import { serializeMutation, plainClone } from "../src/tanstack-db";
+import { serializeMutation } from "dataverse-schema-sync/adapters/tanstack";
+import { plainClone } from "../src/sync";
 import { DataverseClient, DataverseHttpError, DataverseTable, SyncEngine, isDeterministicFailure, interpretError, primaryKey, string, number, serializeError, type QueuedMutation } from "../src";
 
 function makeTable(entitySetName = "tasks", logicalName = "task") {

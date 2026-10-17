@@ -15,9 +15,6 @@
     }
     return String(value);
   }
-  function getEtag(v) {
-    return v?.[ETAG];
-  }
   function toTimestampValue(value) {
     return typeof value === "string" ? new Date(value).toISOString() : value.toISOString();
   }
@@ -93,9 +90,10 @@
         consistency,
         solutionUniqueName,
         suppressDuplicateDetection,
-        bypassCustomPluginExecution
+        bypassCustomPluginExecution,
+        fetch: fetchImpl = globalThis.fetch
       } = this.options;
-      const response = await fetch(url, {
+      const response = await fetchImpl(url, {
         ...fetchOptions,
         headers: {
           ...raw ? {} : {
@@ -2738,115 +2736,6 @@
     });
   }
 
-  function serializeError(error) {
-    if (error instanceof DataverseHttpError) {
-      return {
-        name: error.name,
-        message: error.message,
-        status: error.status,
-        statusText: error.statusText,
-        body: error.body
-      };
-    }
-    if (error instanceof Error) {
-      return { name: error.name, message: error.message };
-    }
-    return { name: "UnknownError", value: error };
-  }
-  const KEY_VIOLATION_CODES = /* @__PURE__ */ new Set([
-    "0x80060892",
-    // DuplicateRecordEntityKey
-    "0x80040333"
-    // DuplicateRecordsFound
-  ]);
-  const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
-  function isKeyViolation(error) {
-    if (error instanceof DataverseHttpError) {
-      error = { body: error.body };
-    }
-    const body = error?.body;
-    const code = typeof body?.code === "string" ? body.code.toLowerCase() : void 0;
-    if (code && KEY_VIOLATION_CODES.has(code)) return true;
-    const message = typeof body?.message === "string" ? body.message : void 0;
-    return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
-  }
-
-  const DATVERSE_ERROR_CODES = {
-    "0x80060892": {
-      name: "DuplicateRecordEntityKey",
-      meaning: "Entity key violated: a record with the same unique key values already exists."
-    },
-    "0x80040333": {
-      name: "DuplicateRecordsFound",
-      meaning: "Duplicate detection stopped the create/update: a duplicate of this record already exists."
-    },
-    "0x80060891": {
-      name: "RecordNotFoundByEntityKey",
-      meaning: "No record exists with the specified key values (alternate-key reference resolves to nothing)."
-    }
-  };
-  function readError(error) {
-    if (error instanceof DataverseHttpError) return { status: error.status, body: error.body };
-    const shaped = error;
-    if (!shaped || typeof shaped !== "object") return {};
-    const status = typeof shaped.status === "number" ? shaped.status : void 0;
-    return { status, body: shaped.body };
-  }
-  function interpretError(error) {
-    const { status, body } = readError(error);
-    const bodyCode = body?.code;
-    const code = typeof bodyCode === "string" ? bodyCode.toLowerCase() : void 0;
-    const documented = code ? DATVERSE_ERROR_CODES[code] : void 0;
-    const transient = {
-      category: "transient",
-      resolution: "Network failure (no HTTP status reached the client); the retry cycle is the correct treatment.",
-      deterministic: false
-    };
-    const classified = isKeyViolation(error) ? {
-      category: "key-violation",
-      resolution: "A record with these unique-key values already exists. Edit the key values locally or discard the mutation; Force/Rebase cannot resolve a uniqueness constraint.",
-      deterministic: true
-    } : status === 412 ? {
-      category: "concurrency",
-      resolution: "The server record changed since the mutation was built. Review getConflictDetails, then force (overwrite) or retry with a fresh etag (rebase).",
-      deterministic: true
-    } : documented?.name === "RecordNotFoundByEntityKey" || status === 404 ? {
-      category: "missing-record",
-      resolution: "The target record no longer exists server-side. Discard the mutation (or recreate the record first).",
-      deterministic: true
-    } : status === 429 ? {
-      category: "throttled",
-      resolution: "Dataverse throttled the request; the retry/backoff cycle is the correct treatment. No action needed.",
-      deterministic: false
-    } : status === 401 ? {
-      category: "identity",
-      resolution: "Auth token rejected. Once the app re-authenticates, retry — the payload itself is fine.",
-      deterministic: false
-    } : status === 403 ? {
-      category: "permission",
-      resolution: "Insufficient privileges for this operation. Requires a permission change (or a different user); retrying alone cannot help.",
-      deterministic: true
-    } : status === void 0 ? { ...transient, deterministic: false } : status >= 500 ? {
-      category: "transient",
-      resolution: "Server-side fault; retrying via the normal backoff cycle should succeed once the fault clears.",
-      deterministic: false
-    } : status >= 400 ? {
-      category: "validation",
-      resolution: "Dataverse rejected the request itself (typically an unknown/malformed property or business rule). Correct the mutation payload; identical retries fail identically.",
-      deterministic: true
-    } : void 0;
-    return {
-      category: classified?.category ?? transient.category,
-      resolution: classified?.resolution ?? transient.resolution,
-      deterministic: classified?.deterministic ?? transient.deterministic,
-      codeName: documented?.name,
-      code
-    };
-  }
-  function isDeterministicFailure(error) {
-    return interpretError(error).deterministic;
-  }
-
   function plainClone(value) {
     if (Array.isArray(value)) {
       return value.map(plainClone);
@@ -2897,13 +2786,38 @@
     }
   }
 
+  function serializeError(error) {
+    const shaped = error;
+    if (shaped && typeof shaped === "object" && typeof shaped.status === "number") {
+      return {
+        name: shaped.name ?? "HttpError",
+        message: shaped.message,
+        status: shaped.status,
+        statusText: shaped.statusText,
+        body: shaped.body
+      };
+    }
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message };
+    }
+    return { name: "UnknownError", value: error };
+  }
+  function isDeterministicFailure(error) {
+    const status = error?.status;
+    if (typeof status !== "number") return false;
+    if (status === 412 || status === 404) return true;
+    if (status === 429 || status === 401) return false;
+    if (status === 403) return true;
+    return status >= 400 && status < 500;
+  }
+
+  const defaultGetEtag$1 = (value) => value?.["$etag"];
   const DEFAULT_MAX_MUTATION_ATTEMPTS = 3;
   const DEFAULT_RETRY_BASE_DELAY = 1e3;
   const DEFAULT_RETRY_MAX_DELAY = 6e4;
   class SyncEngine {
     name;
     version;
-    // Widened deliberately: the sync DB stores heterogeneous tables.
     tables = /* @__PURE__ */ new Map();
     MUTATION_QUEUE_NAME = "Mutations";
     ERRORED_MUTATIONS_NAME = "Errored Mutations";
@@ -2935,6 +2849,9 @@
     // Listeners receive no payload — call getQueueCount()/getErroredMutations()
     // to read the current state (see the conflict-dashboard use case).
     mutationListeners = /* @__PURE__ */ new Set();
+    // Injected product adapters (see SyncEngineOptions).
+    getEtag;
+    isDeterministicFailure;
     constructor(options) {
       this.name = options.name;
       this.channel = new BroadcastChannel(options.name);
@@ -2945,6 +2862,8 @@
       this.retryBaseDelay = options.retryBaseDelay ?? DEFAULT_RETRY_BASE_DELAY;
       this.retryMaxDelay = options.retryMaxDelay ?? DEFAULT_RETRY_MAX_DELAY;
       this.flushOnOnline = options.flushOnOnline !== false;
+      this.getEtag = options.getEtag ?? defaultGetEtag$1;
+      this.isDeterministicFailure = options.isDeterministicFailure ?? isDeterministicFailure;
       for (const table of options.tables) this.tables.set(table.entitySetName, table);
       this.channelMessageHandler = (event) => {
         if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
@@ -2960,8 +2879,9 @@
       }
     }
     // Captured from SyncEngineOptions: replay queued inserts with the offline
-    // transaction time as `overriddencreatedon` so `createdon` reflects when
-    // the record was created offline, not when the queue was flushed.
+    // transaction time as `overriddenCreatedOn` (a createRecord option), so
+    // `createdon` reflects when the record was created offline — not when the
+    // queue was flushed.
     overrideCreatedOn = false;
     // Retry budget per mutation before it moves to the errored store.
     maxAttempts;
@@ -3000,7 +2920,7 @@
         try {
           listener();
         } catch (err) {
-          console.warn("[dataverse-offline] listener failed:", err);
+          console.warn("[sync-engine] listener failed:", err);
         }
       }
     }
@@ -3030,7 +2950,7 @@
           },
           blocked(currentVersion, blockedVersion) {
             console.warn(
-              `[dataverse-offline] DB "${self.name}" upgrade to v${blockedVersion} blocked while another tab holds a v${currentVersion} connection`
+              `[sync-engine] DB "${self.name}" upgrade to v${blockedVersion} blocked while another tab holds a v${currentVersion} connection`
             );
           }
         });
@@ -3142,10 +3062,10 @@
       }
     }
     /**
-     * Flushes the mutation queue to Dataverse. After a successful flush the
-     * authoritative server records (carrying fresh etags) are broadcast via the
-     * MUTATIONS_ADDED channel so every collection reconciles its in-memory row
-     * and IDB cache store — see the offline adapter's handleTabMessage.
+     * Flushes the mutation queue to the backend. After a successful flush the
+     * authoritative server records (carrying fresh etags) are broadcast via
+     * MUTATIONS_ADDED so every collection reconciles its in-memory row and IDB
+     * cache store — see the offline adapter's handleTabMessage.
      */
     async flushQueue() {
       await navigator.locks.request(this.name, async () => {
@@ -3183,7 +3103,7 @@
             } else if (mutation.type === "update") {
               const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
               const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
-              const etag = getEtag(record);
+              const etag = this.getEtag(record);
               if (etag) {
                 this.keyEtags.set(mutation.key, etag);
                 mutation.ifMatch = etag;
@@ -3199,10 +3119,10 @@
             changed = true;
           } catch (e) {
             if (!navigator.onLine) break;
-            console.error(`[dataverse-offline] Failed to flush mutation ${mutation.id}:`, e);
+            console.error(`[sync-engine] Failed to flush mutation ${mutation.id}:`, e);
             mutation.error = serializeError(e);
             mutation.lastAttemptAt = Date.now();
-            if (isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
+            if (this.isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
             else mutation.attempts++;
             if (mutation.attempts >= this.maxAttempts) {
               mutation.nextAttemptAt = void 0;
@@ -3302,8 +3222,8 @@
      * - **Force** (`{ force: true }`): re-applied without its `If-Match`
      *   precondition — updates overwrite the server's current state
      *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
-     *   concurrency failure (see {@link isConcurrencyError}) when the local
-     *   changes should win regardless of concurrent server-side edits.
+     *   concurrency failure when the local changes should win regardless of
+     *   concurrent server-side edits.
      * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
      *   record and re-applies the local changes on top of its *fresh* etag
      *   — a "resend my edits, accept the server's state as the base"
@@ -3335,7 +3255,7 @@
           let fresh;
           try {
             const server = await table.getRecord(mutation.key);
-            fresh = server ? getEtag(server) : void 0;
+            fresh = server ? this.getEtag(server) : void 0;
           } catch {
             fresh = this.keyEtags.get(mutation.key);
           }
@@ -3391,7 +3311,7 @@
         await tx.done;
         this.notifyMutationsChanged();
       } catch (e) {
-        console.error("[dataverse-offline] Error writing mutation to IDB:", e);
+        console.error("[sync-engine] Error writing mutation to IDB:", e);
         throw new MutationPersistenceError(
           "Failed to persist offline mutations",
           mutations.map((mutation) => mutation.id),
@@ -3399,6 +3319,24 @@
         );
       }
     }
+  }
+
+  const KEY_VIOLATION_CODES = /* @__PURE__ */ new Set([
+    "0x80060892",
+    // DuplicateRecordEntityKey
+    "0x80040333"
+    // DuplicateRecordsFound
+  ]);
+  const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
+  function isKeyViolation(error) {
+    if (error instanceof DataverseHttpError) {
+      error = { body: error.body };
+    }
+    const body = error?.body;
+    const code = typeof body?.code === "string" ? body.code.toLowerCase() : void 0;
+    if (code && KEY_VIOLATION_CODES.has(code)) return true;
+    const message = typeof body?.message === "string" ? body.message : void 0;
+    return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
   }
 
   const defaults = {
@@ -3793,7 +3731,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-02T14:12:22.702Z"}
+      meta.textContent = `build ${"2026-10-17T14:20:41.870Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3886,7 +3824,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-02T14:12:22.702Z",
+          build: "2026-10-17T14:20:41.870Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3905,7 +3843,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-02T14:12:22.702Z"}\``,
+        `Build: \`${"2026-10-17T14:20:41.870Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -12742,29 +12680,27 @@ tracked records deleted after run: ${summary.cleanedUp}`;
 
   const DEFAULT_SYNC_INTERVAL = 3e4;
   const DEFAULT_POLL_INTERVAL = 3e4;
-  function createDefaultIndexes(table, collection) {
-    const fields = Object.entries(table.fields);
-    const indexedKeys = /* @__PURE__ */ new Set([table.primaryKey.key]);
-    for (const [key, field] of fields) {
-      if (key === table.primaryKey.key) continue;
-      if (field.type === "lookupId") indexedKeys.add(key);
-    }
+  const defaultGetEtag = (value) => value?.["$etag"];
+  function createDefaultIndexes(table, collection, indexKeys) {
+    const indexedKeys = /* @__PURE__ */ new Set([table.primaryKey.key, ...indexKeys]);
     for (const key of indexedKeys) {
       try {
         collection.createIndex((row) => row[key], { indexType: BTreeIndex });
       } catch (err) {
-        console.warn(`[dataverse-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
+        console.warn(`[sync-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
       }
     }
     [...collection.indexes.values()].map((i) => i.expression?.path);
   }
-  function dataverseCollectionOptions(config) {
+  function syncCollectionOptions(config) {
     const {
       table,
       id: explicitId,
       query,
       syncInterval = DEFAULT_SYNC_INTERVAL,
       readonly = false,
+      indexKeys = [],
+      getEtag = defaultGetEtag,
       ...rest
     } = config;
     const pk = table.primaryKey;
@@ -12787,9 +12723,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const serialized = [];
       for (const mutation of transaction.mutations) {
         const record = await table.createRecord(mutation.modified);
-        const guid = table.getPrimaryId(record);
-        results.push(guid);
-        serialized.push({ id: mutation.mutationId, type: "insert", key: guid, value: record, entitySetName: collectionId });
+        const key = table.getPrimaryId(record);
+        results.push(key);
+        serialized.push({ id: mutation.mutationId, type: "insert", key, value: record, entitySetName: collectionId });
       }
       broadcastMutations(serialized);
       return results;
@@ -12800,9 +12736,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const serialized = [];
       for (const mutation of transaction.mutations) {
         const record = await table.updateRecord(mutation.key, mutation.changes);
-        const guid = table.getPrimaryId(record);
-        results.push(guid);
-        serialized.push({ id: mutation.mutationId, type: "update", key: guid, value: record, entitySetName: collectionId });
+        const key = table.getPrimaryId(record);
+        results.push(key);
+        serialized.push({ id: mutation.mutationId, type: "update", key, value: record, entitySetName: collectionId });
       }
       broadcastMutations(serialized);
       void utils.forceSync();
@@ -12822,7 +12758,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     };
     const syncConfig = {
       sync: ({ begin, write, commit, markReady, collection }) => {
-        createDefaultIndexes(table, collection);
+        createDefaultIndexes(table, collection, indexKeys);
         const handleTabMessage = (event) => {
           if (disposed) return;
           if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
@@ -12886,7 +12822,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             }
             commit();
           } catch (err) {
-            console.warn(`[dataverse-collection] sync failed for "${collectionId}":`, err);
+            console.warn(`[sync-collection] sync failed for "${collectionId}":`, err);
           } finally {
             syncInFlight = false;
             syncController = void 0;
@@ -12942,10 +12878,10 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       timestamp: mutation.createdAt.valueOf(),
       sequence: engine.nextSequence(),
       attempts: 0,
-      ifMatch: getEtag(mutation.modified)
+      ifMatch: engine.getEtag(mutation.modified)
     };
   }
-  function dataverseOfflineCollectionOptions(engine, config) {
+  function offlineCollectionOptions(engine, config) {
     if (engine.isClosed) throw new Error("SyncEngine is closed");
     const {
       table,
@@ -12955,6 +12891,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       readOnlyWhenOffline = false,
       readonly = false,
       requireVisible = true,
+      indexKeys = [],
+      getEtag = defaultGetEtag,
       ...rest
     } = config;
     const widenedTable = table;
@@ -12967,7 +12905,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       engine.ensureTableStore(table.entitySetName)
     ]);
     let pollTimer;
-    let syncFromDataverse;
+    let syncFromBackend;
     let syncController;
     let activeSync;
     let syncQueued = false;
@@ -12980,7 +12918,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
       syncController = new AbortController();
       engine.trackActiveFetch(syncController);
-      activeSync = syncFromDataverse(syncController.signal).finally(() => {
+      activeSync = syncFromBackend(syncController.signal).finally(() => {
         engine.untrackActiveFetch(syncController);
         syncController = void 0;
         activeSync = void 0;
@@ -13013,7 +12951,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     };
     const syncConfig = {
       sync: ({ begin, write, commit, markReady, collection }) => {
-        createDefaultIndexes(table, collection);
+        createDefaultIndexes(table, collection, indexKeys);
         let markedReady = false;
         const markReadyOnce = () => {
           if (!markedReady) {
@@ -13021,7 +12959,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             markReady();
           }
         };
-        syncFromDataverse = async (signal) => {
+        syncFromBackend = async (signal) => {
           try {
             await cacheReady;
             const records = await table.getRecords(query, { signal });
@@ -13035,15 +12973,15 @@ tracked records deleted after run: ${summary.cleanedUp}`;
               const existingRecord = collection.get(key);
               if (existingRecord) {
                 if (getEtag(record) !== getEtag(existingRecord)) {
-                  write({ type: "update", value: record, metadata: { source: "dv" } });
+                  write({ type: "update", value: record, metadata: { source: "backend" } });
                 }
                 keysToDelete.delete(key);
               } else {
-                write({ type: "insert", value: record, metadata: { source: "dv" } });
+                write({ type: "insert", value: record, metadata: { source: "backend" } });
               }
             }
             for (const key of keysToDelete) {
-              write({ type: "delete", value: collection.get(key), metadata: { source: "dv" } });
+              write({ type: "delete", value: collection.get(key), metadata: { source: "backend" } });
             }
             commit();
             const db = await engine.getDB();
@@ -13055,7 +12993,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             await tx.done;
           } catch (err) {
             if (err?.name !== "AbortError" && !signal.aborted) {
-              console.warn(`[dataverse-offline] Remote sync failed for "${collectionId}":`, err);
+              console.warn(`[sync-offline] Remote sync failed for "${collectionId}":`, err);
             }
           } finally {
             markReadyOnce();
@@ -13101,7 +13039,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         };
         syncFromIDB().then(flushAndSync).catch((err) => {
           if (!disposed) {
-            console.warn(`[dataverse-offline] Cache sync failed for "${collectionId}":`, err);
+            console.warn(`[sync-offline] Cache sync failed for "${collectionId}":`, err);
           }
         }).finally(() => {
           markReadyOnce();
@@ -13285,9 +13223,9 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     },
     tests: (ctx) => [
       {
-        name: "dataverseCollectionOptions builds a usable Collection",
+        name: "syncCollectionOptions builds a usable Collection",
         fn: async () => {
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
           await waitFor(() => collection.size >= 1, 8e3);
           const found = collection.get(ctx.state.row);
@@ -13299,7 +13237,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "insert through the collection persists to Dataverse",
         fn: async () => {
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
           await waitFor(() => collection.size >= 1, 8e3);
           const name = ctx.fx.name("coll-insert");
@@ -13320,7 +13258,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "update through the collection persists to Dataverse",
         fn: async () => {
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
           await waitFor(() => collection.get(ctx.state.row) != null, 8e3);
           const entry = collection.get(ctx.state.row);
@@ -13338,7 +13276,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         name: "delete through the collection removes from Dataverse",
         fn: async () => {
           const id = await seedRow(ctx, { int: 5, text: "coll-del" });
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
           await waitFor(() => collection.get(id) != null, 8e3);
           collection.delete(id);
@@ -13350,7 +13288,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "forceSync pulls external changes into the collection",
         fn: async () => {
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
           await waitFor(() => collection.get(ctx.state.row) != null, 8e3);
           await ctx.tables.TestTable.updateRecord(ctx.state.row, { int: 1234 });
@@ -13363,7 +13301,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "utils.table references the configured table",
         fn: async () => {
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable });
           const collection = createCollection(config);
           await new Promise((r) => setTimeout(r, 300));
           const utils = collection.utils;
@@ -13390,7 +13328,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           try {
-            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
+            const config = offlineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
           } finally {
@@ -13405,7 +13343,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           try {
-            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
+            const config = offlineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             const name = ctx.fx.name("offline-on");
@@ -13431,7 +13369,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restore = simulateOffline();
           const restoreVis = forceVisible();
           try {
-            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
+            const config = offlineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             const name = ctx.fx.name("offline-q");
@@ -13459,7 +13397,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis = forceVisible();
           let name = "";
           try {
-            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
+            const config = offlineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             name = ctx.fx.name("offline-then-on");
@@ -13488,7 +13426,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restore = simulateOffline();
           const restoreVis = forceVisible();
           try {
-            const config = dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable });
+            const config = offlineCollectionOptions(db, { table: ctx.tables.TestTable });
             const collection = createCollection(config);
             await waitFor(() => collection.size >= 0, 3e3);
             const name = ctx.fx.name("qcount");
@@ -13512,7 +13450,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           const id = await seedRow(ctx, { int: 1, text: "will-fail" });
-          const collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable }));
+          const collection = createCollection(offlineCollectionOptions(db, { table: ctx.tables.TestTable }));
           try {
             await waitFor(() => collection.size >= 1, 8e3);
             const eid = `test-err-${Date.now()}`;
@@ -13594,8 +13532,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis = forceVisible();
           let a, b;
           try {
-            a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable }));
-            b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable }));
+            a = createCollection(offlineCollectionOptions(dbA, { table: ctx.tables.TestTable }));
+            b = createCollection(offlineCollectionOptions(dbB, { table: ctx.tables.TestTable }));
             await waitFor(() => a.size >= 1 && b.size >= 1, 8e3);
             const name = ctx.fx.name("xtab");
             const id = crypto.randomUUID();
@@ -13621,8 +13559,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis = forceVisible();
           let a, b;
           try {
-            a = createCollection(dataverseOfflineCollectionOptions(dbA, { table: ctx.tables.TestTable }));
-            b = createCollection(dataverseOfflineCollectionOptions(dbB, { table: ctx.tables.TestTable }));
+            a = createCollection(offlineCollectionOptions(dbA, { table: ctx.tables.TestTable }));
+            b = createCollection(offlineCollectionOptions(dbB, { table: ctx.tables.TestTable }));
             await waitFor(() => a.size >= 1 && b.size >= 1, 8e3);
             const name = ctx.fx.name("xtab-abort");
             const id = crypto.randomUUID();
@@ -13654,7 +13592,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis1 = forceVisible();
           let collection1;
           try {
-            collection1 = createCollection(dataverseOfflineCollectionOptions(db1, { table: ctx.tables.TestTable }));
+            collection1 = createCollection(offlineCollectionOptions(db1, { table: ctx.tables.TestTable }));
             await waitFor(() => collection1.size >= 0, 3e3);
             const id = crypto.randomUUID();
             collection1.insert({ id, name, int: 55, text: "durable" });
@@ -13672,7 +13610,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
             const q2 = await readQueue(db2);
             assert(q2.length === 1, `mutation survived reload in IndexedDB (got ${q2.length})`);
             assertEquals(q2[0].entitySetName, ctx.tables.TestTable.entitySetName, "survived mutation targets right entity");
-            const collection2 = createCollection(dataverseOfflineCollectionOptions(db2, { table: ctx.tables.TestTable }));
+            const collection2 = createCollection(offlineCollectionOptions(db2, { table: ctx.tables.TestTable }));
             await waitFor(async () => {
               const queue = await readQueue(db2);
               const rows2 = await ctx.tables.TestTable.getRecords({ filter: `nnsyc200_name eq '${name}'` });
@@ -13692,7 +13630,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const restoreVis = forceVisible();
           const id = await seedRow(ctx, { int: 7, text: "cache-me" });
-          createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable }));
+          createCollection(offlineCollectionOptions(db, { table: ctx.tables.TestTable }));
           try {
             await waitFor(async () => {
               const idb = await db.getDB();
@@ -13718,8 +13656,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "ABORT_ACTIVE_FETCHES is broadcast between online collections",
         fn: async () => {
-          const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable });
-          const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const cfgA = syncCollectionOptions({ table: ctx.tables.TestTable });
+          const cfgB = syncCollectionOptions({ table: ctx.tables.TestTable });
           const a = createCollection(cfgA);
           const b = createCollection(cfgB);
           const restoreVis = forceVisible();
@@ -13748,8 +13686,8 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "a mutation on one online collection is reflected in a sibling",
         fn: async () => {
-          const cfgA = dataverseCollectionOptions({ table: ctx.tables.TestTable });
-          const cfgB = dataverseCollectionOptions({ table: ctx.tables.TestTable });
+          const cfgA = syncCollectionOptions({ table: ctx.tables.TestTable });
+          const cfgB = syncCollectionOptions({ table: ctx.tables.TestTable });
           const a = createCollection(cfgA);
           const b = createCollection(cfgB);
           const restoreVis = forceVisible();
@@ -13790,7 +13728,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           const restoreVis = forceVisible();
           let collection;
           try {
-            collection = createCollection(dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable }));
+            collection = createCollection(offlineCollectionOptions(db, { table: ctx.tables.TestTable }));
             await waitFor(() => collection.size >= 1, 8e3);
             const name = ctx.fx.name("opts-fs");
             const id = crypto.randomUUID();
@@ -13826,7 +13764,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           let collection;
           try {
             collection = createCollection(
-              dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable, requireVisible: false })
+              offlineCollectionOptions(db, { table: ctx.tables.TestTable, requireVisible: false })
             );
             await waitFor(() => collection.size >= 1, 8e3);
             assert(collection.size >= 1, "collection synced despite hidden visibility (requireVisible:false)");
@@ -13840,7 +13778,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       {
         name: "online readonly:true rejects mutations",
         fn: async () => {
-          const config = dataverseCollectionOptions({ table: ctx.tables.TestTable, readonly: true });
+          const config = syncCollectionOptions({ table: ctx.tables.TestTable, readonly: true });
           const collection = createCollection(config);
           await waitFor(() => collection.size >= 1, 8e3);
           const id = crypto.randomUUID();
@@ -13857,7 +13795,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         fn: async () => {
           const db = makeSyncDB([ctx.tables.TestTable, ctx.tables.TestTable0]);
           const collection = createCollection(
-            dataverseOfflineCollectionOptions(db, { table: ctx.tables.TestTable, readonly: true })
+            offlineCollectionOptions(db, { table: ctx.tables.TestTable, readonly: true })
           );
           await waitFor(() => collection.size >= 1, 8e3);
           const id = crypto.randomUUID();
