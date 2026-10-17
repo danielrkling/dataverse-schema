@@ -1,0 +1,18 @@
+import { Suite } from "../../harness/runner"
+import { onlineCollectionSuite } from "./online-collection"
+import { offlineQueueSuite } from "./offline-queue"
+import { crossTabSuite } from "./cross-tab"
+import { durabilitySuite } from "./durability"
+import { onlineCrossTabSuite } from "./online-cross-tab"
+import { optionsSuite } from "./options"
+import { engineCoreSuite } from "./engine-core"
+
+export const suites: Suite[] = [
+  onlineCollectionSuite,
+  offlineQueueSuite,
+  crossTabSuite,
+  onlineCrossTabSuite,
+  durabilitySuite,
+  optionsSuite,
+  engineCoreSuite,
+]

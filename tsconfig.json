@@ -1,25 +1,8 @@
 {
-    "compilerOptions": {
-      "target": "ESNext",
-      "module": "ESNext",
-      "moduleResolution": "bundler",
-      "allowSyntheticDefaultImports": true,
-      "esModuleInterop": true,
-
-      "noEmit": true,
-      "isolatedModules": true,
-
-      "skipLibCheck": true,
-      // "allowJs": true,
-      // "resolveJsonModule": true,
-      // "moduleDetection": "force",
-      // "verbatimModuleSyntax": true,
-  
-      "strict": true,
-
-      // "lib": ["esnext", "dom", "dom.iterable"],
-      "noErrorTruncation": true
-
-    },
-    "include": ["src"]
-  }
+  "compilerOptions": { "composite": true, "noEmit": true },
+  "include": [],
+  "references": [
+    { "path": "./packages/sync" },
+    { "path": "./packages/dataverse" }
+  ]
+}

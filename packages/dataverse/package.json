@@ -1,0 +1,59 @@
+{
+  "name": "dataverse-schema",
+  "version": "2.0.0",
+  "description": "A Schema library designed for Microsoft Dataverse to aid in Web API calls",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "keywords": [
+    "dataverse",
+    "webresource",
+    "schema",
+    "dynamics",
+    "crm",
+    "api"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielrkling/dataverse-schema.git",
+    "directory": "packages/dataverse"
+  },
+  "author": "LeviEyal",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/danielrkling/dataverse-schema/issues"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "vite",
+    "build:browser-test": "vite build --mode browser-test && vite build --mode browser-db-test",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:types": "vitest run --typecheck --typecheck.include=\"test/*typecheck*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dataverse-schema-sync": "^0.1.0",
+    "@standard-schema/spec": "^1.1.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^26.0.0",
+    "msw": "^2.14.6",
+    "tsdown": "^0.22.14",
+    "valibot": "^1.4.2",
+    "vite": "^6.2.6",
+    "vite-plugin-dts": "^4.5.3",
+    "vitest": "^3.1.1"
+  }
+}
