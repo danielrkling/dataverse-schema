@@ -4,3 +4,4 @@ coverage
 temp
 dist
 tsconfig.tsbuildinfo
+.env
