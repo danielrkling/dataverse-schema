@@ -86,6 +86,12 @@ export type DataverseClientOptions = {
     bypassCustomPluginExecution?: boolean;
     /** Additional headers to include on every request. */
     headers?: Record<string, string>;
+    /**
+     * Custom fetch implementation used for every HTTP call (defaults to the
+     * global `fetch`). Useful for token-refresh wrappers, retries, or
+     * platform-provided clients (e.g. SPFx `HttpClient`).
+     */
+    fetch?: typeof fetch;
 };
 
 /**
@@ -146,9 +152,10 @@ export class DataverseClient {
             headers, impersonateByAAId, impersonateByUserId, token,
             prefer, consistency, solutionUniqueName,
             suppressDuplicateDetection, bypassCustomPluginExecution,
+            fetch: fetchImpl = globalThis.fetch,
         } = this.options;
 
-        const response = await fetch(url, {
+        const response = await fetchImpl(url, {
             ...fetchOptions,
             headers: {
                 ...(raw ? {} : {

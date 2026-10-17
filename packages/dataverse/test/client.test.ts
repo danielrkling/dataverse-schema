@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { expect, test } from "vitest"
+import { expect, test, vi } from "vitest"
 import { DataverseClient, DataverseHttpError, mapChoices } from "../src"
 
 // --- Construction ---
@@ -94,6 +94,19 @@ test("mapChoices maps raw option set metadata", () => {
 
 test("mapChoices returns empty array for no options", () => {
   expect(mapChoices({ Options: [] })).toEqual([])
+})
+
+// --- custom fetch option ---
+
+test("options.fetch is used instead of the global fetch", async () => {
+  const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ value: [] }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  }))
+  const client = new DataverseClient({ url: "https://org.crm.dynamics.com", fetch: fetchImpl })
+  await client.getRecords("accounts")
+  expect(fetchImpl).toHaveBeenCalledOnce()
+  expect(fetchImpl.mock.calls[0][0]).toBe("https://org.crm.dynamics.com/api/data/v9.2/accounts")
 })
 
 // --- overriddencreatedon option ---
