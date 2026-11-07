@@ -1,8 +1,8 @@
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"
-import { SyncEngine } from "dataverse-schema-sync"
-import { isKeyViolation } from "dataverse-schema"
+import { SyncEngine } from "../../../../src/sync"
+import { isKeyViolation } from "../../../../src/sync"
 import {
   makeSyncDB,
   enqueueRaw,

@@ -1,5 +1,7 @@
 import { BTreeIndex, type Collection, type Transaction, type CollectionConfig, type InsertMutationFn, type UpdateMutationFn, type DeleteMutationFn, type PendingMutation, type SyncConfig, type UtilsRecord } from "@tanstack/db";
-import { SyncEngine, plainClone, type EtagReader, type QueuedMutation, type SyncTable } from "../index";
+import { SyncEngine, type EtagReader, type SyncTable } from "./engine";
+import { plainClone } from "./util";
+import type { QueuedMutation } from "./types";
 
 /**
  * TanStack DB collection adapters over the generic {@link SyncEngine} (and a
@@ -7,10 +9,10 @@ import { SyncEngine, plainClone, type EtagReader, type QueuedMutation, type Sync
  * through the engine's {@link SyncTable} contract extended with the two read
  * channels (`getRecords` for offline pulls, `iterateRecords` for online
  * streaming pulls), and the concurrency token is read through the injected
- * {@link EtagReader}. Product packages (dataverse-schema, sharepoint-schema)
- * wrap these factories with their own table/query types.
+ * {@link EtagReader}. The Dataverse table satisfies the contract structurally;
+ * other products can reuse these factories over an equivalent table shape.
  *
- * Peer dependency: `@tanstack/db`. Import this entry (`dataverse-schema-sync/adapters/tanstack`)
+ * Peer dependency: `@tanstack/db`. Import this entry (`dataverse-schema/sync/tanstack`)
  * only in apps that use TanStack DB.
  */
 

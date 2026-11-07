@@ -1,4 +1,4 @@
-import { SyncEngine, type QueuedMutation } from "dataverse-schema-sync"
+import { SyncEngine, type QueuedMutation } from "../../../src/sync"
 
 /**
  * Builds a SyncEngine with a per-run-unique name so multiple harness

@@ -1,14 +1,14 @@
 // @vitest-environment node
 import { expect, test } from "vitest";
 import "fake-indexeddb/auto";
-import { SyncEngine, type SyncEngineOptions, type SyncTable, type QueuedMutation } from "../src";
+import { SyncEngine, type SyncEngineOptions, type SyncTable, type QueuedMutation } from "../src/sync";
 
 // Engine-level generic tests: exercise SyncEngine against stub SyncTables so
 // the queue/retry/conflict machinery is verified independently of any product
 // adapter. Product-integration coverage lives in
 // packages/dataverse/test/sync.test.ts.
 
-import { serializeError, isDeterministicFailure, isConcurrencyError } from "../src";
+import { serializeError, isDeterministicFailure, isConcurrencyError } from "../src/sync/errors";
 
 /** Node's navigator has neither `onLine` nor `locks` — stub a connected navigator. */
 function stubNavigatorOnline() {

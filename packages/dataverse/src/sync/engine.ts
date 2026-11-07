@@ -3,10 +3,10 @@ import { isMetaKey, isMetaOnly, valuesEqual } from "./util";
 import { MutationPersistenceError, type QueuedMutation } from "./types";
 import { isDeterministicFailure as defaultIsDeterministicFailure, serializeError } from "./errors";
 /**
- * Generic offline sync engine — the product-agnostic core of the
- * `dataverse-schema` sync layer, extracted so a second adapter (e.g.
- * SharePoint via Microsoft Graph) can reuse the identical flush/retry/
- * conflict machinery.
+ * Generic offline sync engine — the product-agnostic core of the `dataverse-schema/sync`
+ * entry point. It is deliberately table-shape-driven, so the identical flush/retry/
+ * conflict machinery can drive any structurally compatible table (Dataverse here,
+ * SharePoint or another adapter elsewhere).
  *
  * The engine knows IndexedDB, BroadcastChannel, web locks, retry/backoff,
  * etag freshness bookkeeping and conflict diffing. It does **not** know

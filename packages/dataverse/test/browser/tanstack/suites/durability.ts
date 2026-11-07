@@ -1,6 +1,6 @@
 import { createCollection } from "@tanstack/db"
-import { SyncEngine } from "dataverse-schema-sync"
-import { offlineCollectionOptions } from "dataverse-schema-sync/adapters/tanstack"
+import { SyncEngine } from "../../../../src/sync"
+import { offlineCollectionOptions } from "../../../../src/sync/tanstack"
 import { Suite } from "../../harness/runner"
 import { assert, assertEquals } from "../../harness/assert"
 import { seedRow } from "../../harness/seed"

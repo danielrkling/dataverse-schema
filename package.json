@@ -6,11 +6,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w dataverse-schema-sync && npm run build -w sharepoint-schema && npm run build -w dataverse-schema",
+    "build": "npm run build -w sharepoint-schema && npm run build -w dataverse-schema",
     "build:browser-test": "npm run build:browser-test -w dataverse-schema",
-    "test": "npm run test -w dataverse-schema-sync && npm run test -w sharepoint-schema && npm run test -w dataverse-schema",
+    "test": "npm run test -w sharepoint-schema && npm run test -w dataverse-schema",
     "test:types": "npm run test:types -w dataverse-schema",
-    "typecheck": "npm run typecheck -w dataverse-schema-sync && npm run typecheck -w sharepoint-schema && npm run typecheck -w dataverse-schema"
+    "typecheck": "npm run typecheck -w sharepoint-schema && npm run typecheck -w dataverse-schema"
   },
   "devDependencies": {
     "typescript": "5.8.3"

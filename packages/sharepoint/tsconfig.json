@@ -1,9 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "dataverse-schema-sync": ["../sync/src/index.ts"]
-    }
-  },
   "include": ["src", "test"]
 }

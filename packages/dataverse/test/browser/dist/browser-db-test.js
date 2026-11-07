@@ -2612,733 +2612,6 @@
     return new LookupProperty(name, getTable, options);
   }
 
-  function req(request) {
-    return new Promise((resolve, reject) => {
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-  function txDone(tx) {
-    return new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onabort = () => reject(tx.error ?? new Error("Transaction aborted"));
-      tx.onerror = () => reject(tx.error ?? new Error("Transaction error"));
-    });
-  }
-  class Store {
-    // IDBObjectStore or IDBIndex — both share get/getAll/openCursor; the
-    // store-only methods (put/add/delete/clear/index) throw at runtime when
-    // called on an index, so a typed union would demand dead narrowings here.
-    bare;
-    constructor(bare) {
-      this.bare = bare;
-    }
-    get(key) {
-      return req(this.bare.get(key));
-    }
-    getAll(range) {
-      return req(this.bare.getAll(range));
-    }
-    put(value, key) {
-      return req(this.bare.put(value, key));
-    }
-    add(value, key) {
-      return req(this.bare.add(value, key));
-    }
-    delete(key) {
-      return req(this.bare.delete(key));
-    }
-    count(range) {
-      return req(this.bare.count(range));
-    }
-    clear() {
-      return req(this.bare.clear());
-    }
-    index(name) {
-      return new Store(this.bare.index(name));
-    }
-    /**
-     * Opens a cursor and resolves with the first entry's cursor (or undefined
-     * when the source is empty). Callers that need to keep iterating can call
-     * cursor.continue() themselves.
-     */
-    openCursor(range, direction) {
-      return req(this.bare.openCursor(range ?? void 0, direction));
-    }
-  }
-  class Tx {
-    constructor(bare, names) {
-      this.bare = bare;
-      this.names = names;
-      this.store = this.objectStore(names[0]);
-      this.done = txDone(bare);
-    }
-    /** Promisified store when the transaction covers exactly one store. */
-    store;
-    done;
-    objectStore(name) {
-      return new Store(this.bare.objectStore(name));
-    }
-  }
-  class Database {
-    constructor(bare) {
-      this.bare = bare;
-    }
-    get version() {
-      return this.bare.version;
-    }
-    get objectStoreNames() {
-      return this.bare.objectStoreNames;
-    }
-    close() {
-      this.bare.close();
-    }
-    addEventListener(type, listener) {
-      this.bare.addEventListener(type, listener);
-    }
-    transaction(names, mode) {
-      return new Tx(this.bare.transaction(names, mode), Array.isArray(names) ? names : [names]);
-    }
-    // Convenience single-request methods (each opens its own transaction,
-    // same as idb's db.get/put/delete/getAll/count).
-    get(storeName, key) {
-      return this.transaction(storeName, "readonly").objectStore(storeName).get(key);
-    }
-    getAll(storeName) {
-      return this.transaction(storeName, "readonly").objectStore(storeName).getAll();
-    }
-    put(storeName, value) {
-      return this.transaction(storeName, "readwrite").objectStore(storeName).put(value);
-    }
-    delete(storeName, key) {
-      return this.transaction(storeName, "readwrite").objectStore(storeName).delete(key);
-    }
-    count(storeName) {
-      return this.transaction(storeName, "readonly").objectStore(storeName).count();
-    }
-  }
-  function openDB(name, version, options = {}) {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(name, version);
-      request.onupgradeneeded = (event) => {
-        try {
-          options.upgrade?.(request.result, event.oldVersion, event.newVersion ?? version, request.transaction);
-        } catch (err) {
-          request.transaction?.abort();
-          reject(err instanceof Error ? err : new Error(String(err)));
-        }
-      };
-      request.onblocked = (event) => {
-        options.blocked?.(event.oldVersion, event.newVersion ?? version);
-      };
-      request.onsuccess = () => resolve(new Database(request.result));
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  function plainClone(value) {
-    if (Array.isArray(value)) {
-      return value.map(plainClone);
-    }
-    if (value instanceof Date) {
-      return new Date(value.getTime());
-    }
-    if (value instanceof Blob || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-      return value;
-    }
-    if (value !== null && typeof value === "object") {
-      const out = {};
-      for (const key of Object.keys(value)) {
-        out[key] = plainClone(value[key]);
-      }
-      return out;
-    }
-    return value;
-  }
-  function isMetaKey(key) {
-    return key.startsWith("$");
-  }
-  function isMetaOnly(delta) {
-    const keys = Object.keys(delta ?? {});
-    return keys.length > 0 && keys.every(isMetaKey);
-  }
-  function valuesEqual$1(a, b) {
-    if (a === b) return true;
-    if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
-    if (Array.isArray(a) || Array.isArray(b)) {
-      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-      return a.every((v, i) => valuesEqual$1(v, b[i]));
-    }
-    if (a && b && typeof a === "object" && typeof b === "object") {
-      const ak = Object.keys(a), bk = Object.keys(b);
-      if (ak.length !== bk.length) return false;
-      return ak.every((k) => valuesEqual$1(a[k], b[k]));
-    }
-    return false;
-  }
-
-  class MutationPersistenceError extends Error {
-    constructor(message, mutationIds, cause) {
-      super(message);
-      this.mutationIds = mutationIds;
-      this.cause = cause;
-      this.name = "MutationPersistenceError";
-    }
-  }
-
-  function serializeError(error) {
-    const shaped = error;
-    if (shaped && typeof shaped === "object" && typeof shaped.status === "number") {
-      return {
-        name: shaped.name ?? "HttpError",
-        message: shaped.message,
-        status: shaped.status,
-        statusText: shaped.statusText,
-        body: shaped.body
-      };
-    }
-    if (error instanceof Error) {
-      return { name: error.name, message: error.message };
-    }
-    return { name: "UnknownError", value: error };
-  }
-  function isDeterministicFailure(error) {
-    const status = error?.status;
-    if (typeof status !== "number") return false;
-    if (status === 412 || status === 404) return true;
-    if (status === 429 || status === 401) return false;
-    if (status === 403) return true;
-    return status >= 400 && status < 500;
-  }
-
-  const defaultGetEtag$1 = (value) => value?.["$etag"];
-  const DEFAULT_MAX_MUTATION_ATTEMPTS = 3;
-  const DEFAULT_RETRY_BASE_DELAY = 1e3;
-  const DEFAULT_RETRY_MAX_DELAY = 6e4;
-  class SyncEngine {
-    name;
-    version;
-    tables = /* @__PURE__ */ new Map();
-    MUTATION_QUEUE_NAME = "Mutations";
-    ERRORED_MUTATIONS_NAME = "Errored Mutations";
-    channel;
-    closed = false;
-    // Per-collection cache stores (keyed by collection id). Unlike the table
-    // stores derived from entitySetName, these exist so multiple filtered
-    // collections over the same entity don't overwrite each other's snapshots.
-    collectionStores = /* @__PURE__ */ new Set();
-    collectionStorePromises = /* @__PURE__ */ new Map();
-    // The version passed to openDB — grows when a late-registered collection
-    // needs its own object store and the DB must be reopened to create it.
-    dbVersion;
-    activeFetchControllers = /* @__PURE__ */ new Set();
-    collectionCleanups = /* @__PURE__ */ new Set();
-    // Last etag we successfully wrote for each record key. Lets a queued update
-    // that was built against a stale optimistic snapshot borrow the fresher etag
-    // produced by an earlier update in the same flush (or a prior flush), so
-    // consecutive conditional updates don't 412 each other. Seeded from the
-    // mutation's own ifMatch when empty.
-    keyEtags = /* @__PURE__ */ new Map();
-    // Schedules a wake-up for the soonest delayed retry so a failed mutation
-    // re-attempts even while the app is idle and online. Cleared on each
-    // queueMutations/flush and on close().
-    retryTimer;
-    channelMessageHandler;
-    // Subscribers notified whenever the mutation queue or errored store
-    // changes (mutations enqueued, flushed, errored, retried, discarded).
-    // Listeners receive no payload — call getQueueCount()/getErroredMutations()
-    // to read the current state (see the conflict-dashboard use case).
-    mutationListeners = /* @__PURE__ */ new Set();
-    // Injected product adapters (see SyncEngineOptions).
-    getEtag;
-    isDeterministicFailure;
-    constructor(options) {
-      this.name = options.name;
-      this.channel = new BroadcastChannel(options.name);
-      this.version = options.version;
-      this.dbVersion = options.version;
-      this.overrideCreatedOn = options.overrideCreatedOn === true;
-      this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_MUTATION_ATTEMPTS;
-      this.retryBaseDelay = options.retryBaseDelay ?? DEFAULT_RETRY_BASE_DELAY;
-      this.retryMaxDelay = options.retryMaxDelay ?? DEFAULT_RETRY_MAX_DELAY;
-      this.flushOnOnline = options.flushOnOnline !== false;
-      this.getEtag = options.getEtag ?? defaultGetEtag$1;
-      this.isDeterministicFailure = options.isDeterministicFailure ?? isDeterministicFailure;
-      for (const table of options.tables) this.tables.set(table.entitySetName, table);
-      this.channelMessageHandler = (event) => {
-        if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
-          this.abortActiveFetches();
-        }
-      };
-      this.channel.addEventListener("message", this.channelMessageHandler);
-      if (this.flushOnOnline && typeof globalThis.addEventListener === "function") {
-        this.onlineHandler = async () => {
-          if (navigator.onLine && !this.closed) void this.flushQueue();
-        };
-        globalThis.addEventListener("online", this.onlineHandler);
-      }
-    }
-    // Captured from SyncEngineOptions: replay queued inserts with the offline
-    // transaction time as `overriddenCreatedOn` (a createRecord option), so
-    // `createdon` reflects when the record was created offline — not when the
-    // queue was flushed.
-    overrideCreatedOn = false;
-    // Retry budget per mutation before it moves to the errored store.
-    maxAttempts;
-    // Exponential backoff curve for delayed retries (base * 2^(attempt-1),
-    // capped at retryMaxDelay). A failed mutation re-attempts even while the
-    // app is idle, waking via retryTimer once its nextAttemptAt is due.
-    retryBaseDelay;
-    retryMaxDelay;
-    // Whether the engine auto-flushes when the tab regains connectivity.
-    flushOnOnline = true;
-    // "online" listener installed when flushOnOnline is enabled; removed in close().
-    onlineHandler;
-    // Monotonic ordering counter for queued mutations — adapters assign it
-    // when serializing their mutation format into {@link QueuedMutation}.
-    sequence = 0;
-    nextSequence() {
-      return this.sequence++;
-    }
-    /**
-     * Registers a listener invoked (synchronously, best-effort) whenever the
-     * offline mutation state changes in this tab: mutations get enqueued,
-     * flushed, moved to/from the errored store, or discarded. Returns an
-     * unsubscribe function. Cross-tab changes are not delivered directly —
-     * each tab's own queueMutations/flushQueue activity fires the hook, so
-     * attach a listener per tab that redraws from
-     * {@link getQueueCount}/{@link getErroredMutations}.
-     */
-    onMutationsChanged(listener) {
-      this.mutationListeners.add(listener);
-      return () => {
-        this.mutationListeners.delete(listener);
-      };
-    }
-    notifyMutationsChanged() {
-      for (const listener of [...this.mutationListeners]) {
-        try {
-          listener();
-        } catch (err) {
-          console.warn("[sync-engine] listener failed:", err);
-        }
-      }
-    }
-    db;
-    async getDB() {
-      if (!this.db) {
-        const self = this;
-        const dbPromise = openDB(this.name, this.dbVersion, {
-          upgrade(database, _oldVersion, _newVersion, transaction) {
-            for (const storeName of Array.from(database.objectStoreNames)) {
-              if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) {
-                database.deleteObjectStore(storeName);
-              }
-            }
-            let store = database.objectStoreNames.contains(self.MUTATION_QUEUE_NAME) ? transaction.objectStore(self.MUTATION_QUEUE_NAME) : database.createObjectStore(self.MUTATION_QUEUE_NAME, { keyPath: "id" });
-            if (!store.indexNames.contains("by_timestamp")) {
-              store.createIndex("by_timestamp", ["timestamp", "sequence"]);
-            }
-            if (!database.objectStoreNames.contains(self.ERRORED_MUTATIONS_NAME)) {
-              database.createObjectStore(self.ERRORED_MUTATIONS_NAME, { keyPath: "id" });
-            }
-            for (const table of self.tables.values()) {
-              if (!database.objectStoreNames.contains(table.entitySetName)) {
-                database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
-              }
-            }
-          },
-          blocked(currentVersion, blockedVersion) {
-            console.warn(
-              `[sync-engine] DB "${self.name}" upgrade to v${blockedVersion} blocked while another tab holds a v${currentVersion} connection`
-            );
-          }
-        });
-        void dbPromise.then((db) => {
-          db.addEventListener("versionchange", (event) => {
-            self.dbVersion = Math.max(self.dbVersion, event.newVersion ?? 0);
-            db.close();
-            if (self.db === dbPromise) self.db = void 0;
-          });
-        });
-        this.db = dbPromise;
-      }
-      return this.db;
-    }
-    /**
-     * Registers a per-collection cache store (keyed by collection id). If the
-     * database is already open without this store, it is reopened with a
-     * bumped version so the upgrade callback can create it. The returned
-     * promise resolves once the store is safe to read/write.
-     *
-     * Reopens are serialized through {@link dbReopenPromise}: two collections
-     * registered back-to-back must not interleave openDB calls — the first
-     * bump creates a store the second bump would otherwise re-check against a
-     * stale connection. Before closing an open connection, in-flight fetches
-     * are aborted locally and cross-tab, because the new open transaction must
-     * wait for every other tab's connection to be closed on versionchange
-     * (each getDB registers that handler itself).
-     */
-    ensureCollectionStore(name) {
-      let p = this.collectionStorePromises.get(name);
-      if (!p) {
-        p = (async () => {
-          this.collectionStores.add(name);
-          const tail = this.dbReopenPromise ?? Promise.resolve();
-          this.dbReopenPromise = (async () => {
-            await tail;
-            if (this.closed) return;
-            const db = await this.getDB();
-            if (!db.objectStoreNames.contains(name)) {
-              this.abortActiveFetches();
-              this.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
-              db.close();
-              this.db = void 0;
-              this.dbVersion = db.version + 1;
-              await this.getDB();
-            }
-          })();
-          await this.dbReopenPromise;
-        })();
-        this.collectionStorePromises.set(name, p);
-      }
-      return p;
-    }
-    dbReopenPromise;
-    /**
-     * Ensures the object store for a table's {@link entitySetName} exists. Same
-     * reopen machinery as {@link ensureCollectionStore}; use this when a table
-     * is registered after the DB has already been opened, because table stores
-     * are otherwise only created inside the upgrade callback.
-     */
-    ensureTableStore(entitySetName) {
-      return this.ensureCollectionStore(entitySetName);
-    }
-    /**
-     * Instantly aborts any in-flight remote server GET requests across all collections.
-     */
-    abortActiveFetches() {
-      for (const controller of this.activeFetchControllers) {
-        controller.abort("New mutation enqueued");
-      }
-      this.activeFetchControllers.clear();
-    }
-    /** Registers a collection-scoped cleanup to run when the queue closes. */
-    addCollectionCleanup(cleanup) {
-      this.collectionCleanups.add(cleanup);
-    }
-    /** Registers an in-flight fetch controller so abortActiveFetches can cancel it. */
-    trackActiveFetch(controller) {
-      this.activeFetchControllers.add(controller);
-    }
-    /** Unregisters a fetch controller previously registered with trackActiveFetch. */
-    untrackActiveFetch(controller) {
-      this.activeFetchControllers.delete(controller);
-    }
-    get isClosed() {
-      return this.closed;
-    }
-    close() {
-      if (this.closed) return;
-      this.closed = true;
-      this.abortActiveFetches();
-      if (this.retryTimer) {
-        clearTimeout(this.retryTimer);
-        this.retryTimer = void 0;
-      }
-      for (const cleanup of [...this.collectionCleanups]) cleanup();
-      this.collectionCleanups.clear();
-      this.mutationListeners.clear();
-      this.channel.removeEventListener("message", this.channelMessageHandler);
-      this.channel.close();
-      if (this.onlineHandler && typeof globalThis.removeEventListener === "function") {
-        globalThis.removeEventListener("online", this.onlineHandler);
-        this.onlineHandler = void 0;
-      }
-      const pending = this.db;
-      this.db = void 0;
-      if (pending) {
-        void Promise.resolve(pending).then((db) => db.close()).catch(() => void 0);
-      }
-    }
-    /**
-     * Flushes the mutation queue to the backend. After a successful flush the
-     * authoritative server records (carrying fresh etags) are broadcast via
-     * MUTATIONS_ADDED so every collection reconciles its in-memory row and IDB
-     * cache store — see the offline adapter's handleTabMessage.
-     */
-    async flushQueue() {
-      await navigator.locks.request(this.name, async () => {
-        const db = await this.getDB();
-        const flushed = [];
-        let changed = false;
-        while (true) {
-          const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
-          const index = tx.store.index("by_timestamp");
-          const cursor = await index.openCursor(null, "next");
-          if (!cursor) break;
-          const mutation = cursor.value;
-          if (mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) {
-            break;
-          }
-          const table = this.tables.get(mutation.entitySetName);
-          if (!table) {
-            console.error(`Table ${mutation.entitySetName} not registered in DB`);
-            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
-            continue;
-          }
-          if ((mutation.type === "update" || mutation.type === "delete") && !mutation.force) {
-            const fresh = this.keyEtags.get(mutation.key);
-            if (fresh && fresh !== mutation.ifMatch) {
-              mutation.ifMatch = fresh;
-            }
-          }
-          try {
-            if (mutation.type === "insert") {
-              const record = await table.createRecord(
-                mutation.value,
-                this.overrideCreatedOn ? { overriddenCreatedOn: new Date(mutation.timestamp) } : void 0
-              );
-              flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record), value: record, entitySetName: mutation.entitySetName });
-            } else if (mutation.type === "update") {
-              const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
-              const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
-              const etag = this.getEtag(record);
-              if (etag) {
-                this.keyEtags.set(mutation.key, etag);
-                mutation.ifMatch = etag;
-                await db.put(this.MUTATION_QUEUE_NAME, mutation);
-              }
-              flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
-            } else if (mutation.type === "delete") {
-              await table.deleteRecord(mutation.key, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
-              this.keyEtags.delete(mutation.key);
-              flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: void 0, entitySetName: mutation.entitySetName });
-            }
-            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
-            changed = true;
-          } catch (e) {
-            if (!navigator.onLine) break;
-            console.error(`[sync-engine] Failed to flush mutation ${mutation.id}:`, e);
-            mutation.error = serializeError(e);
-            mutation.lastAttemptAt = Date.now();
-            if (this.isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
-            else mutation.attempts++;
-            if (mutation.attempts >= this.maxAttempts) {
-              mutation.nextAttemptAt = void 0;
-              await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
-              await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
-              changed = true;
-            } else {
-              const delay = Math.min(
-                this.retryMaxDelay,
-                this.retryBaseDelay * 2 ** (mutation.attempts - 1)
-              );
-              mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
-              await db.put(this.MUTATION_QUEUE_NAME, mutation);
-              if (navigator.onLine) {
-                if (this.retryTimer) clearTimeout(this.retryTimer);
-                this.retryTimer = setTimeout(() => {
-                  this.retryTimer = void 0;
-                  void this.flushQueue();
-                }, delay);
-              }
-              break;
-            }
-          }
-        }
-        if (flushed.length > 0) {
-          this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
-        }
-        if (changed) this.notifyMutationsChanged();
-      });
-    }
-    async getQueueCount() {
-      const db = await this.getDB();
-      return db.count(this.MUTATION_QUEUE_NAME);
-    }
-    async getErroredMutations() {
-      const db = await this.getDB();
-      return db.getAll(this.ERRORED_MUTATIONS_NAME);
-    }
-    /**
-     * Snapshot for presenting a conflicted mutation to a user: the server's
-     * current authoritative record, and which of the mutation's fields the
-     * server state actually differs on. A differing etag only *means*
-     * something touched the record — the field diff is what makes "Force",
-     * "Rebase" or "Discard" an informed choice instead of a blind button.
-     *
-     * Semantics:
-     * - `server` is the transformed record (null when the record was deleted
-     *   server-side), including *all* of the table's fields — not just the
-     *   locally changed ones.
-     * - `conflictingFields` compares only the fields the local mutation
-     *   touches against the server record (see {@link ConflictDetails}).
-     * Unknown fields (e.g. navigation blobs not present in the snapshot) are
-     * treated as conflicting rather than silently ignored.
-     */
-    async getConflictDetails(mutation) {
-      const table = this.tables.get(mutation.entitySetName);
-      if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this SyncEngine`);
-      const server = await table.getRecord(mutation.key);
-      const proposed = {};
-      const changed = /* @__PURE__ */ new Map();
-      const fill = (source, record) => {
-        for (const [k, v] of Object.entries(source ?? {})) {
-          if (isMetaKey(k)) continue;
-          if (record) changed.set(k, v);
-          proposed[k] = v;
-        }
-      };
-      fill(mutation.value, false);
-      fill(mutation.type === "update" ? mutation.changes : void 0, true);
-      const changesMetaOnly = isMetaOnly(mutation.changes);
-      const fields = [];
-      for (const [name] of Object.entries(table.fields)) {
-        const local = proposed[name];
-        const serverValue = server?.[name];
-        const explicitlyChanged = changed.has(name);
-        const differs = !valuesEqual$1(local, serverValue);
-        const status = differs ? explicitlyChanged || changesMetaOnly ? "conflict" : "server-change" : explicitlyChanged ? "local-change" : "unchanged";
-        fields.push({
-          field: name,
-          local,
-          server: serverValue,
-          changed: explicitlyChanged ? changed.get(name) : void 0,
-          status
-        });
-      }
-      return {
-        server,
-        fields,
-        conflictingFields: fields.filter((f) => f.status === "conflict").map((f) => f.field)
-      };
-    }
-    /**
-     * Moves an errored mutation back into the retry queue and flushes.
-     *
-     * Resolution options ({@link RetryOptions}):
-     *
-     * - **Force** (`{ force: true }`): re-applied without its `If-Match`
-     *   precondition — updates overwrite the server's current state
-     *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
-     *   concurrency failure when the local changes should win regardless of
-     *   concurrent server-side edits.
-     * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
-     *   record and re-applies the local changes on top of its *fresh* etag
-     *   — a "resend my edits, accept the server's state as the base"
-     *   resolution. Fails with 412 again if the record is touched between
-     *   reading the etag and the write. If the server cannot be reached the
-     *   freshest etag already known to this DB is used instead of aborting.
-     * - Plain (`{}`): retries with the etag it last carried — useful only if
-     *   the server record has since reverted to the expected etag.
-     *
-     * The resolution is a property of the retry call, not of the mutation:
-     * a mutation previously retried with `force` is un-forced by a later
-     * plain or `useFreshEtag` retry (and, once un-forced, inherits the
-     * freshest known etag rather than a bare precondition).
-     */
-    async retryErroredMutation(id, options) {
-      const db = await this.getDB();
-      const mutation = await db.get(this.ERRORED_MUTATIONS_NAME, id);
-      if (!mutation) return;
-      mutation.attempts = 0;
-      mutation.error = void 0;
-      mutation.lastAttemptAt = void 0;
-      mutation.nextAttemptAt = void 0;
-      mutation.force = options?.force === true;
-      if (mutation.force) {
-        mutation.ifMatch = void 0;
-      } else if (options?.useFreshEtag && mutation.type !== "insert") {
-        const table = this.tables.get(mutation.entitySetName);
-        if (table) {
-          let fresh;
-          try {
-            const server = await table.getRecord(mutation.key);
-            fresh = server ? this.getEtag(server) : void 0;
-          } catch {
-            fresh = this.keyEtags.get(mutation.key);
-          }
-          if (fresh && fresh !== mutation.ifMatch) {
-            mutation.ifMatch = fresh;
-            this.keyEtags.set(mutation.key, fresh);
-          }
-        }
-      } else if (mutation.ifMatch === void 0) {
-        const fresh = this.keyEtags.get(mutation.key);
-        if (fresh) mutation.ifMatch = fresh;
-      }
-      const tx = db.transaction(
-        [this.MUTATION_QUEUE_NAME, this.ERRORED_MUTATIONS_NAME],
-        "readwrite"
-      );
-      const erroredStore = tx.objectStore(this.ERRORED_MUTATIONS_NAME);
-      const queueStore = tx.objectStore(this.MUTATION_QUEUE_NAME);
-      await Promise.all([
-        erroredStore.delete(id),
-        queueStore.put(mutation)
-      ]);
-      await tx.done;
-      this.notifyMutationsChanged();
-      if (navigator.onLine) await this.flushQueue();
-    }
-    async discardErroredMutation(id) {
-      const db = await this.getDB();
-      await db.delete(this.ERRORED_MUTATIONS_NAME, id);
-      this.notifyMutationsChanged();
-    }
-    async queueMutations(mutations) {
-      if (mutations.length === 0) return;
-      if (this.retryTimer) {
-        clearTimeout(this.retryTimer);
-        this.retryTimer = void 0;
-      }
-      try {
-        const db = await this.getDB();
-        const storeNames = [
-          this.MUTATION_QUEUE_NAME,
-          ...new Set(mutations.map((mutation) => mutation.entitySetName))
-        ];
-        const tx = db.transaction(storeNames, "readwrite");
-        for (const mutation of mutations) {
-          if (mutation.type === "insert" || mutation.type === "update") {
-            tx.objectStore(mutation.entitySetName).put(mutation.value);
-          } else if (mutation.type === "delete") {
-            tx.objectStore(mutation.entitySetName).delete(mutation.key);
-          }
-          tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
-        }
-        await tx.done;
-        this.notifyMutationsChanged();
-      } catch (e) {
-        console.error("[sync-engine] Error writing mutation to IDB:", e);
-        throw new MutationPersistenceError(
-          "Failed to persist offline mutations",
-          mutations.map((mutation) => mutation.id),
-          e
-        );
-      }
-    }
-  }
-
-  const KEY_VIOLATION_CODES = /* @__PURE__ */ new Set([
-    "0x80060892",
-    // DuplicateRecordEntityKey
-    "0x80040333"
-    // DuplicateRecordsFound
-  ]);
-  const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
-  function isKeyViolation(error) {
-    if (error instanceof DataverseHttpError) {
-      error = { body: error.body };
-    }
-    const body = error?.body;
-    const code = typeof body?.code === "string" ? body.code.toLowerCase() : void 0;
-    if (code && KEY_VIOLATION_CODES.has(code)) return true;
-    const message = typeof body?.message === "string" ? body.message : void 0;
-    return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
-  }
-
   const defaults = {
     entitySetName: "nnsyc200_test_tables",
     logicalName: "nnsyc200_test_table",
@@ -3731,7 +3004,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-10-17T14:20:41.870Z"}
+      meta.textContent = `build ${"2026-11-07T20:25:33.474Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3824,7 +3097,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-10-17T14:20:41.870Z",
+          build: "2026-11-07T20:25:33.474Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3843,7 +3116,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-10-17T14:20:41.870Z"}\``,
+        `Build: \`${"2026-11-07T20:25:33.474Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -4506,7 +3779,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
   function isUnknown(value) {
     return value === null || value === void 0;
   }
-  function valuesEqual(a, b) {
+  function valuesEqual$1(a, b) {
     if (isUnorderable(a) || isUnorderable(b)) {
       return isUnorderable(a) && isUnorderable(b);
     }
@@ -4643,7 +3916,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (isUnknown(a) || isUnknown(b)) {
             return null;
           }
-          return valuesEqual(a, b);
+          return valuesEqual$1(a, b);
         };
       }
       case `gt`: {
@@ -4764,7 +4037,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
           if (!Array.isArray(array)) {
             return false;
           }
-          return array.some((item) => valuesEqual(normalizeValue(item), value));
+          return array.some((item) => valuesEqual$1(normalizeValue(item), value));
         };
       }
       // String operators
@@ -12678,9 +11951,50 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     }
   }
 
+  function plainClone(value) {
+    if (Array.isArray(value)) {
+      return value.map(plainClone);
+    }
+    if (value instanceof Date) {
+      return new Date(value.getTime());
+    }
+    if (value instanceof Blob || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      return value;
+    }
+    if (value !== null && typeof value === "object") {
+      const out = {};
+      for (const key of Object.keys(value)) {
+        out[key] = plainClone(value[key]);
+      }
+      return out;
+    }
+    return value;
+  }
+  function isMetaKey(key) {
+    return key.startsWith("$");
+  }
+  function isMetaOnly(delta) {
+    const keys = Object.keys(delta ?? {});
+    return keys.length > 0 && keys.every(isMetaKey);
+  }
+  function valuesEqual(a, b) {
+    if (a === b) return true;
+    if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+      return a.every((v, i) => valuesEqual(v, b[i]));
+    }
+    if (a && b && typeof a === "object" && typeof b === "object") {
+      const ak = Object.keys(a), bk = Object.keys(b);
+      if (ak.length !== bk.length) return false;
+      return ak.every((k) => valuesEqual(a[k], b[k]));
+    }
+    return false;
+  }
+
   const DEFAULT_SYNC_INTERVAL = 3e4;
   const DEFAULT_POLL_INTERVAL = 3e4;
-  const defaultGetEtag = (value) => value?.["$etag"];
+  const defaultGetEtag$1 = (value) => value?.["$etag"];
   function createDefaultIndexes(table, collection, indexKeys) {
     const indexedKeys = /* @__PURE__ */ new Set([table.primaryKey.key, ...indexKeys]);
     for (const key of indexedKeys) {
@@ -12700,7 +12014,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       syncInterval = DEFAULT_SYNC_INTERVAL,
       readonly = false,
       indexKeys = [],
-      getEtag = defaultGetEtag,
+      getEtag = defaultGetEtag$1,
       ...rest
     } = config;
     const pk = table.primaryKey;
@@ -12892,7 +12206,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       readonly = false,
       requireVisible = true,
       indexKeys = [],
-      getEtag = defaultGetEtag,
+      getEtag = defaultGetEtag$1,
       ...rest
     } = config;
     const widenedTable = table;
@@ -13107,6 +12421,692 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       ...overrides
     });
     return ctx.fx.track(ctx.tables.TestTable.getPrimaryId(record));
+  }
+
+  function req(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  function txDone(tx) {
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error ?? new Error("Transaction aborted"));
+      tx.onerror = () => reject(tx.error ?? new Error("Transaction error"));
+    });
+  }
+  class Store {
+    // IDBObjectStore or IDBIndex — both share get/getAll/openCursor; the
+    // store-only methods (put/add/delete/clear/index) throw at runtime when
+    // called on an index, so a typed union would demand dead narrowings here.
+    bare;
+    constructor(bare) {
+      this.bare = bare;
+    }
+    get(key) {
+      return req(this.bare.get(key));
+    }
+    getAll(range) {
+      return req(this.bare.getAll(range));
+    }
+    put(value, key) {
+      return req(this.bare.put(value, key));
+    }
+    add(value, key) {
+      return req(this.bare.add(value, key));
+    }
+    delete(key) {
+      return req(this.bare.delete(key));
+    }
+    count(range) {
+      return req(this.bare.count(range));
+    }
+    clear() {
+      return req(this.bare.clear());
+    }
+    index(name) {
+      return new Store(this.bare.index(name));
+    }
+    /**
+     * Opens a cursor and resolves with the first entry's cursor (or undefined
+     * when the source is empty). Callers that need to keep iterating can call
+     * cursor.continue() themselves.
+     */
+    openCursor(range, direction) {
+      return req(this.bare.openCursor(range ?? void 0, direction));
+    }
+  }
+  class Tx {
+    constructor(bare, names) {
+      this.bare = bare;
+      this.names = names;
+      this.store = this.objectStore(names[0]);
+      this.done = txDone(bare);
+    }
+    /** Promisified store when the transaction covers exactly one store. */
+    store;
+    done;
+    objectStore(name) {
+      return new Store(this.bare.objectStore(name));
+    }
+  }
+  class Database {
+    constructor(bare) {
+      this.bare = bare;
+    }
+    get version() {
+      return this.bare.version;
+    }
+    get objectStoreNames() {
+      return this.bare.objectStoreNames;
+    }
+    close() {
+      this.bare.close();
+    }
+    addEventListener(type, listener) {
+      this.bare.addEventListener(type, listener);
+    }
+    transaction(names, mode) {
+      return new Tx(this.bare.transaction(names, mode), Array.isArray(names) ? names : [names]);
+    }
+    // Convenience single-request methods (each opens its own transaction,
+    // same as idb's db.get/put/delete/getAll/count).
+    get(storeName, key) {
+      return this.transaction(storeName, "readonly").objectStore(storeName).get(key);
+    }
+    getAll(storeName) {
+      return this.transaction(storeName, "readonly").objectStore(storeName).getAll();
+    }
+    put(storeName, value) {
+      return this.transaction(storeName, "readwrite").objectStore(storeName).put(value);
+    }
+    delete(storeName, key) {
+      return this.transaction(storeName, "readwrite").objectStore(storeName).delete(key);
+    }
+    count(storeName) {
+      return this.transaction(storeName, "readonly").objectStore(storeName).count();
+    }
+  }
+  function openDB(name, version, options = {}) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(name, version);
+      request.onupgradeneeded = (event) => {
+        try {
+          options.upgrade?.(request.result, event.oldVersion, event.newVersion ?? version, request.transaction);
+        } catch (err) {
+          request.transaction?.abort();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      request.onblocked = (event) => {
+        options.blocked?.(event.oldVersion, event.newVersion ?? version);
+      };
+      request.onsuccess = () => resolve(new Database(request.result));
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  class MutationPersistenceError extends Error {
+    constructor(message, mutationIds, cause) {
+      super(message);
+      this.mutationIds = mutationIds;
+      this.cause = cause;
+      this.name = "MutationPersistenceError";
+    }
+  }
+
+  function serializeError(error) {
+    const shaped = error;
+    if (shaped && typeof shaped === "object" && typeof shaped.status === "number") {
+      return {
+        name: shaped.name ?? "HttpError",
+        message: shaped.message,
+        status: shaped.status,
+        statusText: shaped.statusText,
+        body: shaped.body
+      };
+    }
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message };
+    }
+    return { name: "UnknownError", value: error };
+  }
+  function isDeterministicFailure(error) {
+    const status = error?.status;
+    if (typeof status !== "number") return false;
+    if (status === 412 || status === 404) return true;
+    if (status === 429 || status === 401) return false;
+    if (status === 403) return true;
+    return status >= 400 && status < 500;
+  }
+
+  const defaultGetEtag = (value) => value?.["$etag"];
+  const DEFAULT_MAX_MUTATION_ATTEMPTS = 3;
+  const DEFAULT_RETRY_BASE_DELAY = 1e3;
+  const DEFAULT_RETRY_MAX_DELAY = 6e4;
+  class SyncEngine {
+    name;
+    version;
+    tables = /* @__PURE__ */ new Map();
+    MUTATION_QUEUE_NAME = "Mutations";
+    ERRORED_MUTATIONS_NAME = "Errored Mutations";
+    channel;
+    closed = false;
+    // Per-collection cache stores (keyed by collection id). Unlike the table
+    // stores derived from entitySetName, these exist so multiple filtered
+    // collections over the same entity don't overwrite each other's snapshots.
+    collectionStores = /* @__PURE__ */ new Set();
+    collectionStorePromises = /* @__PURE__ */ new Map();
+    // The version passed to openDB — grows when a late-registered collection
+    // needs its own object store and the DB must be reopened to create it.
+    dbVersion;
+    activeFetchControllers = /* @__PURE__ */ new Set();
+    collectionCleanups = /* @__PURE__ */ new Set();
+    // Last etag we successfully wrote for each record key. Lets a queued update
+    // that was built against a stale optimistic snapshot borrow the fresher etag
+    // produced by an earlier update in the same flush (or a prior flush), so
+    // consecutive conditional updates don't 412 each other. Seeded from the
+    // mutation's own ifMatch when empty.
+    keyEtags = /* @__PURE__ */ new Map();
+    // Schedules a wake-up for the soonest delayed retry so a failed mutation
+    // re-attempts even while the app is idle and online. Cleared on each
+    // queueMutations/flush and on close().
+    retryTimer;
+    channelMessageHandler;
+    // Subscribers notified whenever the mutation queue or errored store
+    // changes (mutations enqueued, flushed, errored, retried, discarded).
+    // Listeners receive no payload — call getQueueCount()/getErroredMutations()
+    // to read the current state (see the conflict-dashboard use case).
+    mutationListeners = /* @__PURE__ */ new Set();
+    // Injected product adapters (see SyncEngineOptions).
+    getEtag;
+    isDeterministicFailure;
+    constructor(options) {
+      this.name = options.name;
+      this.channel = new BroadcastChannel(options.name);
+      this.version = options.version;
+      this.dbVersion = options.version;
+      this.overrideCreatedOn = options.overrideCreatedOn === true;
+      this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_MUTATION_ATTEMPTS;
+      this.retryBaseDelay = options.retryBaseDelay ?? DEFAULT_RETRY_BASE_DELAY;
+      this.retryMaxDelay = options.retryMaxDelay ?? DEFAULT_RETRY_MAX_DELAY;
+      this.flushOnOnline = options.flushOnOnline !== false;
+      this.getEtag = options.getEtag ?? defaultGetEtag;
+      this.isDeterministicFailure = options.isDeterministicFailure ?? isDeterministicFailure;
+      for (const table of options.tables) this.tables.set(table.entitySetName, table);
+      this.channelMessageHandler = (event) => {
+        if (event.data?.type === "ABORT_ACTIVE_FETCHES") {
+          this.abortActiveFetches();
+        }
+      };
+      this.channel.addEventListener("message", this.channelMessageHandler);
+      if (this.flushOnOnline && typeof globalThis.addEventListener === "function") {
+        this.onlineHandler = async () => {
+          if (navigator.onLine && !this.closed) void this.flushQueue();
+        };
+        globalThis.addEventListener("online", this.onlineHandler);
+      }
+    }
+    // Captured from SyncEngineOptions: replay queued inserts with the offline
+    // transaction time as `overriddenCreatedOn` (a createRecord option), so
+    // `createdon` reflects when the record was created offline — not when the
+    // queue was flushed.
+    overrideCreatedOn = false;
+    // Retry budget per mutation before it moves to the errored store.
+    maxAttempts;
+    // Exponential backoff curve for delayed retries (base * 2^(attempt-1),
+    // capped at retryMaxDelay). A failed mutation re-attempts even while the
+    // app is idle, waking via retryTimer once its nextAttemptAt is due.
+    retryBaseDelay;
+    retryMaxDelay;
+    // Whether the engine auto-flushes when the tab regains connectivity.
+    flushOnOnline = true;
+    // "online" listener installed when flushOnOnline is enabled; removed in close().
+    onlineHandler;
+    // Monotonic ordering counter for queued mutations — adapters assign it
+    // when serializing their mutation format into {@link QueuedMutation}.
+    sequence = 0;
+    nextSequence() {
+      return this.sequence++;
+    }
+    /**
+     * Registers a listener invoked (synchronously, best-effort) whenever the
+     * offline mutation state changes in this tab: mutations get enqueued,
+     * flushed, moved to/from the errored store, or discarded. Returns an
+     * unsubscribe function. Cross-tab changes are not delivered directly —
+     * each tab's own queueMutations/flushQueue activity fires the hook, so
+     * attach a listener per tab that redraws from
+     * {@link getQueueCount}/{@link getErroredMutations}.
+     */
+    onMutationsChanged(listener) {
+      this.mutationListeners.add(listener);
+      return () => {
+        this.mutationListeners.delete(listener);
+      };
+    }
+    notifyMutationsChanged() {
+      for (const listener of [...this.mutationListeners]) {
+        try {
+          listener();
+        } catch (err) {
+          console.warn("[sync-engine] listener failed:", err);
+        }
+      }
+    }
+    db;
+    async getDB() {
+      if (!this.db) {
+        const self = this;
+        const dbPromise = openDB(this.name, this.dbVersion, {
+          upgrade(database, _oldVersion, _newVersion, transaction) {
+            for (const storeName of Array.from(database.objectStoreNames)) {
+              if (storeName !== self.MUTATION_QUEUE_NAME && storeName !== self.ERRORED_MUTATIONS_NAME && !self.collectionStores.has(storeName)) {
+                database.deleteObjectStore(storeName);
+              }
+            }
+            let store = database.objectStoreNames.contains(self.MUTATION_QUEUE_NAME) ? transaction.objectStore(self.MUTATION_QUEUE_NAME) : database.createObjectStore(self.MUTATION_QUEUE_NAME, { keyPath: "id" });
+            if (!store.indexNames.contains("by_timestamp")) {
+              store.createIndex("by_timestamp", ["timestamp", "sequence"]);
+            }
+            if (!database.objectStoreNames.contains(self.ERRORED_MUTATIONS_NAME)) {
+              database.createObjectStore(self.ERRORED_MUTATIONS_NAME, { keyPath: "id" });
+            }
+            for (const table of self.tables.values()) {
+              if (!database.objectStoreNames.contains(table.entitySetName)) {
+                database.createObjectStore(table.entitySetName, { keyPath: table.primaryKey.key });
+              }
+            }
+          },
+          blocked(currentVersion, blockedVersion) {
+            console.warn(
+              `[sync-engine] DB "${self.name}" upgrade to v${blockedVersion} blocked while another tab holds a v${currentVersion} connection`
+            );
+          }
+        });
+        void dbPromise.then((db) => {
+          db.addEventListener("versionchange", (event) => {
+            self.dbVersion = Math.max(self.dbVersion, event.newVersion ?? 0);
+            db.close();
+            if (self.db === dbPromise) self.db = void 0;
+          });
+        });
+        this.db = dbPromise;
+      }
+      return this.db;
+    }
+    /**
+     * Registers a per-collection cache store (keyed by collection id). If the
+     * database is already open without this store, it is reopened with a
+     * bumped version so the upgrade callback can create it. The returned
+     * promise resolves once the store is safe to read/write.
+     *
+     * Reopens are serialized through {@link dbReopenPromise}: two collections
+     * registered back-to-back must not interleave openDB calls — the first
+     * bump creates a store the second bump would otherwise re-check against a
+     * stale connection. Before closing an open connection, in-flight fetches
+     * are aborted locally and cross-tab, because the new open transaction must
+     * wait for every other tab's connection to be closed on versionchange
+     * (each getDB registers that handler itself).
+     */
+    ensureCollectionStore(name) {
+      let p = this.collectionStorePromises.get(name);
+      if (!p) {
+        p = (async () => {
+          this.collectionStores.add(name);
+          const tail = this.dbReopenPromise ?? Promise.resolve();
+          this.dbReopenPromise = (async () => {
+            await tail;
+            if (this.closed) return;
+            const db = await this.getDB();
+            if (!db.objectStoreNames.contains(name)) {
+              this.abortActiveFetches();
+              this.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
+              db.close();
+              this.db = void 0;
+              this.dbVersion = db.version + 1;
+              await this.getDB();
+            }
+          })();
+          await this.dbReopenPromise;
+        })();
+        this.collectionStorePromises.set(name, p);
+      }
+      return p;
+    }
+    dbReopenPromise;
+    /**
+     * Ensures the object store for a table's {@link entitySetName} exists. Same
+     * reopen machinery as {@link ensureCollectionStore}; use this when a table
+     * is registered after the DB has already been opened, because table stores
+     * are otherwise only created inside the upgrade callback.
+     */
+    ensureTableStore(entitySetName) {
+      return this.ensureCollectionStore(entitySetName);
+    }
+    /**
+     * Instantly aborts any in-flight remote server GET requests across all collections.
+     */
+    abortActiveFetches() {
+      for (const controller of this.activeFetchControllers) {
+        controller.abort("New mutation enqueued");
+      }
+      this.activeFetchControllers.clear();
+    }
+    /** Registers a collection-scoped cleanup to run when the queue closes. */
+    addCollectionCleanup(cleanup) {
+      this.collectionCleanups.add(cleanup);
+    }
+    /** Registers an in-flight fetch controller so abortActiveFetches can cancel it. */
+    trackActiveFetch(controller) {
+      this.activeFetchControllers.add(controller);
+    }
+    /** Unregisters a fetch controller previously registered with trackActiveFetch. */
+    untrackActiveFetch(controller) {
+      this.activeFetchControllers.delete(controller);
+    }
+    get isClosed() {
+      return this.closed;
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      this.abortActiveFetches();
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+      }
+      for (const cleanup of [...this.collectionCleanups]) cleanup();
+      this.collectionCleanups.clear();
+      this.mutationListeners.clear();
+      this.channel.removeEventListener("message", this.channelMessageHandler);
+      this.channel.close();
+      if (this.onlineHandler && typeof globalThis.removeEventListener === "function") {
+        globalThis.removeEventListener("online", this.onlineHandler);
+        this.onlineHandler = void 0;
+      }
+      const pending = this.db;
+      this.db = void 0;
+      if (pending) {
+        void Promise.resolve(pending).then((db) => db.close()).catch(() => void 0);
+      }
+    }
+    /**
+     * Flushes the mutation queue to the backend. After a successful flush the
+     * authoritative server records (carrying fresh etags) are broadcast via
+     * MUTATIONS_ADDED so every collection reconciles its in-memory row and IDB
+     * cache store — see the offline adapter's handleTabMessage.
+     */
+    async flushQueue() {
+      await navigator.locks.request(this.name, async () => {
+        const db = await this.getDB();
+        const flushed = [];
+        let changed = false;
+        while (true) {
+          const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
+          const index = tx.store.index("by_timestamp");
+          const cursor = await index.openCursor(null, "next");
+          if (!cursor) break;
+          const mutation = cursor.value;
+          if (mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) {
+            break;
+          }
+          const table = this.tables.get(mutation.entitySetName);
+          if (!table) {
+            console.error(`Table ${mutation.entitySetName} not registered in DB`);
+            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+            continue;
+          }
+          if ((mutation.type === "update" || mutation.type === "delete") && !mutation.force) {
+            const fresh = this.keyEtags.get(mutation.key);
+            if (fresh && fresh !== mutation.ifMatch) {
+              mutation.ifMatch = fresh;
+            }
+          }
+          try {
+            if (mutation.type === "insert") {
+              const record = await table.createRecord(
+                mutation.value,
+                this.overrideCreatedOn ? { overriddenCreatedOn: new Date(mutation.timestamp) } : void 0
+              );
+              flushed.push({ id: mutation.id, type: "insert", key: table.getPrimaryId(record), value: record, entitySetName: mutation.entitySetName });
+            } else if (mutation.type === "update") {
+              const delta = isMetaOnly(mutation.changes) ? mutation.value : mutation.changes;
+              const record = await table.updateRecord(mutation.key, delta, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
+              const etag = this.getEtag(record);
+              if (etag) {
+                this.keyEtags.set(mutation.key, etag);
+                mutation.ifMatch = etag;
+                await db.put(this.MUTATION_QUEUE_NAME, mutation);
+              }
+              flushed.push({ id: mutation.id, type: "update", key: mutation.key, value: record, entitySetName: mutation.entitySetName });
+            } else if (mutation.type === "delete") {
+              await table.deleteRecord(mutation.key, { ifMatch: mutation.force ? void 0 : mutation.ifMatch });
+              this.keyEtags.delete(mutation.key);
+              flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: void 0, entitySetName: mutation.entitySetName });
+            }
+            await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+            changed = true;
+          } catch (e) {
+            if (!navigator.onLine) break;
+            console.error(`[sync-engine] Failed to flush mutation ${mutation.id}:`, e);
+            mutation.error = serializeError(e);
+            mutation.lastAttemptAt = Date.now();
+            if (this.isDeterministicFailure(e)) mutation.attempts = this.maxAttempts;
+            else mutation.attempts++;
+            if (mutation.attempts >= this.maxAttempts) {
+              mutation.nextAttemptAt = void 0;
+              await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+              await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
+              changed = true;
+            } else {
+              const delay = Math.min(
+                this.retryMaxDelay,
+                this.retryBaseDelay * 2 ** (mutation.attempts - 1)
+              );
+              mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
+              await db.put(this.MUTATION_QUEUE_NAME, mutation);
+              if (navigator.onLine) {
+                if (this.retryTimer) clearTimeout(this.retryTimer);
+                this.retryTimer = setTimeout(() => {
+                  this.retryTimer = void 0;
+                  void this.flushQueue();
+                }, delay);
+              }
+              break;
+            }
+          }
+        }
+        if (flushed.length > 0) {
+          this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
+        }
+        if (changed) this.notifyMutationsChanged();
+      });
+    }
+    async getQueueCount() {
+      const db = await this.getDB();
+      return db.count(this.MUTATION_QUEUE_NAME);
+    }
+    async getErroredMutations() {
+      const db = await this.getDB();
+      return db.getAll(this.ERRORED_MUTATIONS_NAME);
+    }
+    /**
+     * Snapshot for presenting a conflicted mutation to a user: the server's
+     * current authoritative record, and which of the mutation's fields the
+     * server state actually differs on. A differing etag only *means*
+     * something touched the record — the field diff is what makes "Force",
+     * "Rebase" or "Discard" an informed choice instead of a blind button.
+     *
+     * Semantics:
+     * - `server` is the transformed record (null when the record was deleted
+     *   server-side), including *all* of the table's fields — not just the
+     *   locally changed ones.
+     * - `conflictingFields` compares only the fields the local mutation
+     *   touches against the server record (see {@link ConflictDetails}).
+     * Unknown fields (e.g. navigation blobs not present in the snapshot) are
+     * treated as conflicting rather than silently ignored.
+     */
+    async getConflictDetails(mutation) {
+      const table = this.tables.get(mutation.entitySetName);
+      if (!table) throw new Error(`Table "${mutation.entitySetName}" is not registered in this SyncEngine`);
+      const server = await table.getRecord(mutation.key);
+      const proposed = {};
+      const changed = /* @__PURE__ */ new Map();
+      const fill = (source, record) => {
+        for (const [k, v] of Object.entries(source ?? {})) {
+          if (isMetaKey(k)) continue;
+          if (record) changed.set(k, v);
+          proposed[k] = v;
+        }
+      };
+      fill(mutation.value, false);
+      fill(mutation.type === "update" ? mutation.changes : void 0, true);
+      const changesMetaOnly = isMetaOnly(mutation.changes);
+      const fields = [];
+      for (const [name] of Object.entries(table.fields)) {
+        const local = proposed[name];
+        const serverValue = server?.[name];
+        const explicitlyChanged = changed.has(name);
+        const differs = !valuesEqual(local, serverValue);
+        const status = differs ? explicitlyChanged || changesMetaOnly ? "conflict" : "server-change" : explicitlyChanged ? "local-change" : "unchanged";
+        fields.push({
+          field: name,
+          local,
+          server: serverValue,
+          changed: explicitlyChanged ? changed.get(name) : void 0,
+          status
+        });
+      }
+      return {
+        server,
+        fields,
+        conflictingFields: fields.filter((f) => f.status === "conflict").map((f) => f.field)
+      };
+    }
+    /**
+     * Moves an errored mutation back into the retry queue and flushes.
+     *
+     * Resolution options ({@link RetryOptions}):
+     *
+     * - **Force** (`{ force: true }`): re-applied without its `If-Match`
+     *   precondition — updates overwrite the server's current state
+     *   (`If-Match: *`) and deletes run unconditionally. Use after a 412
+     *   concurrency failure when the local changes should win regardless of
+     *   concurrent server-side edits.
+     * - **Rebase** (`{ useFreshEtag: true }`): fetches the server's current
+     *   record and re-applies the local changes on top of its *fresh* etag
+     *   — a "resend my edits, accept the server's state as the base"
+     *   resolution. Fails with 412 again if the record is touched between
+     *   reading the etag and the write. If the server cannot be reached the
+     *   freshest etag already known to this DB is used instead of aborting.
+     * - Plain (`{}`): retries with the etag it last carried — useful only if
+     *   the server record has since reverted to the expected etag.
+     *
+     * The resolution is a property of the retry call, not of the mutation:
+     * a mutation previously retried with `force` is un-forced by a later
+     * plain or `useFreshEtag` retry (and, once un-forced, inherits the
+     * freshest known etag rather than a bare precondition).
+     */
+    async retryErroredMutation(id, options) {
+      const db = await this.getDB();
+      const mutation = await db.get(this.ERRORED_MUTATIONS_NAME, id);
+      if (!mutation) return;
+      mutation.attempts = 0;
+      mutation.error = void 0;
+      mutation.lastAttemptAt = void 0;
+      mutation.nextAttemptAt = void 0;
+      mutation.force = options?.force === true;
+      if (mutation.force) {
+        mutation.ifMatch = void 0;
+      } else if (options?.useFreshEtag && mutation.type !== "insert") {
+        const table = this.tables.get(mutation.entitySetName);
+        if (table) {
+          let fresh;
+          try {
+            const server = await table.getRecord(mutation.key);
+            fresh = server ? this.getEtag(server) : void 0;
+          } catch {
+            fresh = this.keyEtags.get(mutation.key);
+          }
+          if (fresh && fresh !== mutation.ifMatch) {
+            mutation.ifMatch = fresh;
+            this.keyEtags.set(mutation.key, fresh);
+          }
+        }
+      } else if (mutation.ifMatch === void 0) {
+        const fresh = this.keyEtags.get(mutation.key);
+        if (fresh) mutation.ifMatch = fresh;
+      }
+      const tx = db.transaction(
+        [this.MUTATION_QUEUE_NAME, this.ERRORED_MUTATIONS_NAME],
+        "readwrite"
+      );
+      const erroredStore = tx.objectStore(this.ERRORED_MUTATIONS_NAME);
+      const queueStore = tx.objectStore(this.MUTATION_QUEUE_NAME);
+      await Promise.all([
+        erroredStore.delete(id),
+        queueStore.put(mutation)
+      ]);
+      await tx.done;
+      this.notifyMutationsChanged();
+      if (navigator.onLine) await this.flushQueue();
+    }
+    async discardErroredMutation(id) {
+      const db = await this.getDB();
+      await db.delete(this.ERRORED_MUTATIONS_NAME, id);
+      this.notifyMutationsChanged();
+    }
+    async queueMutations(mutations) {
+      if (mutations.length === 0) return;
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = void 0;
+      }
+      try {
+        const db = await this.getDB();
+        const storeNames = [
+          this.MUTATION_QUEUE_NAME,
+          ...new Set(mutations.map((mutation) => mutation.entitySetName))
+        ];
+        const tx = db.transaction(storeNames, "readwrite");
+        for (const mutation of mutations) {
+          if (mutation.type === "insert" || mutation.type === "update") {
+            tx.objectStore(mutation.entitySetName).put(mutation.value);
+          } else if (mutation.type === "delete") {
+            tx.objectStore(mutation.entitySetName).delete(mutation.key);
+          }
+          tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
+        }
+        await tx.done;
+        this.notifyMutationsChanged();
+      } catch (e) {
+        console.error("[sync-engine] Error writing mutation to IDB:", e);
+        throw new MutationPersistenceError(
+          "Failed to persist offline mutations",
+          mutations.map((mutation) => mutation.id),
+          e
+        );
+      }
+    }
+  }
+
+  const KEY_VIOLATION_CODES = /* @__PURE__ */ new Set([
+    "0x80060892",
+    // DuplicateRecordEntityKey
+    "0x80040333"
+    // DuplicateRecordsFound
+  ]);
+  const DUPLICATE_KEY_MESSAGE = /duplicate record cannot be created|same value for .* already exists/i;
+  function isKeyViolation(error) {
+    if (error instanceof DataverseHttpError) {
+      error = { body: error.body };
+    }
+    const body = error?.body;
+    const code = typeof body?.code === "string" ? body.code.toLowerCase() : void 0;
+    if (code && KEY_VIOLATION_CODES.has(code)) return true;
+    const message = typeof body?.message === "string" ? body.message : void 0;
+    return typeof message === "string" && DUPLICATE_KEY_MESSAGE.test(message);
   }
 
   const createdEngines = /* @__PURE__ */ new Set();

@@ -1,10 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "dataverse-schema-sync": ["../sync/src/index.ts"],
-      "dataverse-schema-sync/adapters/tanstack": ["../sync/src/adapters/tanstack.ts"]
-    }
-  },
   "include": ["src", "test"]
 }

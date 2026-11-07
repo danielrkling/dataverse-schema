@@ -2,10 +2,9 @@
 
 ## Project Overview
 
-npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. It provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations. Ships as an ES module; the TanStack DB integration lives in `dataverse-schema-sync`, not here.
+npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. It provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations. Ships as an ES module. The root entry has no offline/TanStack API; those live behind the `dataverse-schema/sync` and `dataverse-schema/sync/tanstack` subpath entries of the same package.
 
-- `packages/dataverse` — the library itself (npm package `dataverse-schema`)
-- `packages/sync` — `dataverse-schema-sync`: the product-agnostic offline engine (durable IndexedDB mutation queue, no Dataverse knowledge); the Dataverse adapter lives in `packages/dataverse/src/sync/`
+- `packages/dataverse` — the library itself (npm package `dataverse-schema`). The offline engine (`src/sync/`) is bundled into the `/sync` entry; `@tanstack/db` stays an optional peer used only by `/sync/tanstack`.
 - `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.Note: **no shared core** — keep the SharePoint package stand-alone (flat field/query surface).
 
 Deliberate design decision: **no shared core**. The SharePoint package is standalone with a flat field/query surface — duplicate, don't extract. Fields (`packages/sharepoint/src/fields.ts`) follow the Dataverse field-class conventions (camelCase factories `text`/`number`/`bool`/`json`/`date`/`datetime`/`choice`/`multiChoice`/`person`/`people`/`lookup`/`multiLookup`/`document`/`primaryKey`/`title`) but implement only what the SharePoint REST surface needs:
@@ -28,27 +27,27 @@ Don't add abstractions (filter trees, expand graphs, batch) to this package beyo
 Root scripts delegate into workspaces:
 
 ```bash
-# Build both packages (sync first — dataverse depends on it)
+# Build both packages (independent)
 npm run build
 
 # Dev server / browser-test bundle (run inside packages/dataverse)
 npm run dev
 npm run build:browser-test   # → packages/dataverse/test/browser/dist/browser-test.js (see test/browser/README.md)
 
-# Run all tests (vitest, both workspaces)
+# Run all tests (vitest, all workspaces)
 npm test
 
 # Run a single test file
 cd packages/dataverse && npx vitest run test/fields.test.ts
 
-# Typecheck both packages
+# Typecheck all packages
 npm run typecheck
 
 # Verify expectTypeOf assertions with real tsc (type-level tests)
 npm run test:types
 ```
 
-`dataverse-schema-sync` is resolved to source (`../sync/src`) by `packages/dataverse/tsconfig.json` paths and `vitest.config.ts` alias during dev/test; builds use the workspace dist.
+There is no second workspace package for sync. The engine and the TanStack adapters live in `packages/dataverse/src/sync/` and are tested through relative imports (`../src/sync`, `../src/sync/tanstack`); no package alias is needed.
 
 There is no linter or formatter configured. Do not add linting unless the user explicitly asks.
 
@@ -92,16 +91,20 @@ packages/dataverse/src/
       field-ref.ts             — FieldRef type used by filter + aggregation expressions
       proxy.ts                 — Proxy helpers for type-safe field references in query builders
     path.ts                    — FieldPath / path resolution used across query builders
-  sync/                        — Dataverse adapter over the generic engine
-    index.ts                   — barrel: re-exports the generic engine from dataverse-schema-sync
-                                 plus Dataverse classifiers/error interpretation
+  sync/                        — offline engine + Dataverse adapter (the `dataverse-schema/sync` entry)
+    index.ts                   — barrel: engine, Dataverse adapter, classifiers/error interpretation
+    engine.ts                  — generic SyncEngine over a SyncTable interface (durable IndexedDB
+                                 queue, cross-tab BroadcastChannel + Web Locks, retry/backoff,
+                                 conflict diffing, errored store)
+    idb.ts                     — zero-dep IndexedDB wrapper (inlined; no `idb` dependency)
+    types.ts                   — QueuedMutation, MutationPersistenceError
+    util.ts                    — plainClone, isMetaKey, isMetaOnly, valuesEqual
+    errors.ts                  — generic serializeError / isConcurrencyError / isDeterministicFailure
     adapter.ts                 — dataverseSyncEngine(): injects getEtag ($etag) + the Dataverse
                                  deterministic-failure classifier into the generic SyncEngine
-    types.ts                   — re-export surface (QueuedMutation, MutationPersistenceError)
-    classifiers.ts             — serializeError, isConcurrencyError, isKeyViolation
+    classifiers.ts             — Dataverse serializeError, isConcurrencyError, isKeyViolation
     error-codes.ts             — DATVERSE_ERROR_CODES table, interpretError, isDeterministicFailure
-  (generic engine lives in packages/sync: engine.ts — SyncEngine over a
-   SyncTable interface; idb.ts — zero-dep IndexedDB wrapper; types/util/errors)
+    tanstack.ts                — TanStack DB collection adapters (the `dataverse-schema/sync/tanstack` entry)
 test/
   util.test.ts                 — util helpers (etag, xml, dates, image URLs)
   filter-render.test.ts        — FilterExpr rendering to OData + FetchXML (incl. choice transforms)
@@ -203,14 +206,13 @@ test/
 ## Key Dependencies
 
 - `valibot` — Validation engine for fields and tables (runtime dependency)
-- `idb` — IndexedDB wrapper used by the `@tanstack/db` offline sync store (runtime dependency)
 - `vitest` — Test runner (dev)
 - `vite` — Dev server and browser-test bundler (dev)
 - `tsdown` — Library bundler that produces `dist/` (dev)
 - `vite-plugin-dts` — Generates `.d.ts` files (used by the older vite build path; tsdown handles dts now)
 - `msw` — Mock Service Worker (dev dependency, currently unused — kept installed)
 - `jsdom` — Browser environment simulation for tests that need DOM APIs (dev)
-- `@tanstack/db` — TanStack DB adapter dependency in `dataverse-schema-sync` (optional peer, `adapters/tanstack` entry point)
+- `@tanstack/db` — optional peer of `dataverse-schema`, used only by the `dataverse-schema/sync/tanstack` entry
 
 ## Important Notes
 
@@ -220,4 +222,4 @@ test/
 - `fromDataverseName` and `toDataverseName` handle the mapping between TS property names and Dataverse API names
 - Navigation properties (`lookup`, `collection`, `lookupId`, `collectionIds`) accept a **thunk** (`() => Table`) to handle circular references between tables
 - Build output is produced by `tsdown` (config in `tsdown.config.ts`); the vite config is retained for the dev server and the browser-test bundle only
-- The TanStack DB integration lives entirely in `dataverse-schema-sync/adapters/tanstack` — `dataverse-schema` has no TanStack API. The offline queue lives behind the `SyncEngine` class; `offlineCollectionOptions(engine, config)` / `syncCollectionOptions(config)` build TanStack collection options over any engine instance (rows are typed via the generic `TRow` parameter — pass `Infer<typeof Table>` at the call site).
+- The TanStack DB integration lives entirely in the `dataverse-schema/sync/tanstack` subpath entry — the root entry has no TanStack API. The offline queue lives behind the `SyncEngine` class (exported from `dataverse-schema/sync`); `offlineCollectionOptions(engine, config)` / `syncCollectionOptions(config)` build TanStack collection options over any engine instance (rows are typed via the generic `TRow` parameter — pass `Infer<typeof Table>` at the call site).

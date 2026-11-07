@@ -11,14 +11,10 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          // The tanstack-db adapter imports the core library via the bare
+          // The browser-test suites import the core library via the bare
           // "dataverse-schema" specifier; point it at the source during the
           // browser-test build so we don't depend on a prebuilt dist/.
           "dataverse-schema": path.resolve(__dirname, "src/index.ts"),
-          // Same for the generic TanStack adapters in the sibling sync package
-          // (the subpath entry must precede the bare specifier).
-          "dataverse-schema-sync/adapters/tanstack": path.resolve(__dirname, "../sync/src/adapters/tanstack.ts"),
-          "dataverse-schema-sync": path.resolve(__dirname, "../sync/src/index.ts"),
         },
       },
       build: {

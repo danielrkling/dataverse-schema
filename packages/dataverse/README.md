@@ -573,14 +573,15 @@ const choices = await RetrieveChoices(client, "gender");
 // [{ value: number; color: string; label: string; description: string }]
 ```
 
-## @tanstack/db Integration
+## Offline Sync + `@tanstack/db` Integration
 
-The TanStack DB integration lives in the separate
-[`dataverse-schema-sync`](../sync) package (entry point
-`dataverse-schema-sync/adapters/tanstack`) — this package ships no TanStack API.
+The offline engine and the TanStack DB adapters ship as subpath entries of this
+package — the root `dataverse-schema` entry has no offline or TanStack API.
 
 ```typescript
-import { SyncEngine, offlineCollectionOptions, syncCollectionOptions } from "dataverse-schema-sync/adapters/tanstack";
+import { SyncEngine } from "dataverse-schema/sync";
+import { offlineCollectionOptions, syncCollectionOptions } from "dataverse-schema/sync/tanstack";
+import { createCollection } from "@tanstack/db";
 import { Person } from "./tables"; // a DataverseTable satisfies the SyncTable contract
 
 const engine = new SyncEngine({ name: "offline", tables: [Person], version: 1 });
@@ -588,6 +589,9 @@ const engine = new SyncEngine({ name: "offline", tables: [Person], version: 1 })
 // Offline-first collection with an IndexedDB mutation queue
 const collection = createCollection(offlineCollectionOptions<typeof Person.T>(engine, { table: Person }));
 ```
+
+`@tanstack/db` is an optional peer — install it only if you import
+`dataverse-schema/sync/tanstack`.
 
 ## Utilities
 
@@ -612,12 +616,6 @@ const merged = mergeRecords(oldRecords, newRecords);
 // Option set mapping
 const mapped = mapChoices(rawData);
 ```
-
-## `@tanstack/db` integration
-
-The `@tanstack/db` adapter ships in the separate `dataverse-schema-sync` package
-(`dataverse-schema-sync/adapters/tanstack`) with generic online (polling) and
-offline-capable (IndexedDB-queued, cross-tab) collection builders.
 
 ## Contributions
 

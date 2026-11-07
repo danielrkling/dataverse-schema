@@ -67,7 +67,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     /**
      * The engine/queue-facing identity of this table — for SharePoint that is
      * the list title, matching the store name convention the generic sync
-     * engine uses (see dataverse-schema-sync SyncTable).
+     * engine uses (see dataverse-schema/sync SyncTable).
      */
     get entitySetName(): string {
         return this.listTitle;
@@ -303,7 +303,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         }, { ifMatch, signal: options.signal });
         await this._afterSave({ table: this, client: this.client, recordId: id }, value);
         // MERGE has no return representation; sync-engine etag bookkeeping
-        // fetches freshness itself (see dataverse-schema-sync).
+        // fetches freshness itself (see dataverse-schema/sync).
     }
 
     /**
