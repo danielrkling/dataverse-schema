@@ -1,7 +1,7 @@
 /**
  * Generic, product-agnostic default error handling for SyncEngine's flush
- * loop. Product packages (e.g. Dataverse) override via SyncEngineOptions with
- * richer classifiers (Dataverse error-code table, duplicate-key semantics).
+ * loop. The Dataverse adapter overrides the classifier via SyncEngineOptions
+ * with its richer error-code table and duplicate-key semantics.
  *
  * These helpers duck-type the HTTP error shape `{ status, body }`, so they
  * work with any backend's HTTP error class — live or serialized-from-IDB.

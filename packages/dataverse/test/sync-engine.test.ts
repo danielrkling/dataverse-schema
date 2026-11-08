@@ -1,7 +1,13 @@
 // @vitest-environment node
 import { expect, test } from "vitest";
 import "fake-indexeddb/auto";
-import { SyncEngine, type SyncEngineOptions, type SyncTable, type QueuedMutation } from "../src/sync";
+import {
+    MutationPersistenceError,
+    SyncEngine,
+    type SyncEngineOptions,
+    type SyncTable,
+    type QueuedMutation,
+} from "../src/sync";
 
 // Engine-level generic tests: exercise SyncEngine against stub SyncTables so
 // the queue/retry/conflict machinery is verified independently of any product
@@ -165,4 +171,16 @@ test("generic deterministic classification by status", () => {
     expect(isDeterministicFailure(new Error("transport"))).toBe(false);
     expect(isConcurrencyError({ status: 412 })).toBe(true);
     expect(isConcurrencyError({ status: 400 })).toBe(false);
+});
+
+// --- persistence error surface ---
+
+test("MutationPersistenceError carries the mutation ids and the original cause", () => {
+    const cause = new Error("quota exceeded");
+    const error = new MutationPersistenceError("Failed to persist offline mutations", ["m1", "m2"], cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("MutationPersistenceError");
+    expect(error.mutationIds).toEqual(["m1", "m2"]);
+    expect(error.cause).toBe(cause);
 });

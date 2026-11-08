@@ -3004,7 +3004,7 @@ ${stackOf(e)}` : messageOf(e)
       }
       const meta = document.createElement("div");
       meta.className = "dvt-meta";
-      meta.textContent = `build ${"2026-11-07T20:25:33.474Z"}
+      meta.textContent = `build ${"2026-11-07T21:07:30.786Z"}
 org ${this.ctxMeta.orgUrl}
 data stem ${this.ctxMeta.dataStem} (auto-swept before each run)`;
       const copyJson = document.createElement("button");
@@ -3097,7 +3097,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const s = this.lastSummary;
       return JSON.stringify(
         {
-          build: "2026-11-07T20:25:33.474Z",
+          build: "2026-11-07T21:07:30.786Z",
           org: this.ctxMeta.orgUrl,
           startedAt: s?.startedAt,
           finishedAt: s?.finishedAt,
@@ -3116,7 +3116,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       const lines = [
         "# Browser test results",
         "",
-        `Build: \`${"2026-11-07T20:25:33.474Z"}\``,
+        `Build: \`${"2026-11-07T21:07:30.786Z"}\``,
         `Org: ${this.ctxMeta.orgUrl}`,
         `Run window: ${s.startedAt} → ${s.finishedAt}`,
         ""
@@ -12004,7 +12004,6 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         console.warn(`[sync-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
       }
     }
-    [...collection.indexes.values()].map((i) => i.expression?.path);
   }
   function syncCollectionOptions(config) {
     const {
@@ -12549,7 +12548,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
 
   class MutationPersistenceError extends Error {
     constructor(message, mutationIds, cause) {
-      super(message);
+      super(message, { cause });
       this.mutationIds = mutationIds;
       this.cause = cause;
       this.name = "MutationPersistenceError";
@@ -12667,6 +12666,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     // Monotonic ordering counter for queued mutations — adapters assign it
     // when serializing their mutation format into {@link QueuedMutation}.
     sequence = 0;
+    /** Returns the next monotonic sequence number for a queued mutation. */
     nextSequence() {
       return this.sequence++;
     }
@@ -12695,6 +12695,7 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       }
     }
     db;
+    /** Opens (once) and returns the shared IndexedDB database. */
     async getDB() {
       if (!this.db) {
         const self = this;
@@ -12808,6 +12809,11 @@ tracked records deleted after run: ${summary.cleanedUp}`;
     get isClosed() {
       return this.closed;
     }
+    /**
+     * Closes the engine: aborts in-flight fetches, clears retry timers and
+     * listeners, closes the BroadcastChannel and the IndexedDB connection.
+     * Idempotent; collections built over this engine stop syncing afterwards.
+     */
     close() {
       if (this.closed) return;
       this.closed = true;
@@ -12923,10 +12929,16 @@ tracked records deleted after run: ${summary.cleanedUp}`;
         if (changed) this.notifyMutationsChanged();
       });
     }
+    /** Number of mutations currently waiting to be flushed. */
     async getQueueCount() {
       const db = await this.getDB();
       return db.count(this.MUTATION_QUEUE_NAME);
     }
+    /**
+     * Mutations that exhausted their retry budget or failed deterministically,
+     * waiting for operator resolution (see {@link retryErroredMutation} /
+     * {@link discardErroredMutation}).
+     */
     async getErroredMutations() {
       const db = await this.getDB();
       return db.getAll(this.ERRORED_MUTATIONS_NAME);
@@ -13052,11 +13064,17 @@ tracked records deleted after run: ${summary.cleanedUp}`;
       this.notifyMutationsChanged();
       if (navigator.onLine) await this.flushQueue();
     }
+    /** Drops an errored mutation without retrying it (the local edit is abandoned). */
     async discardErroredMutation(id) {
       const db = await this.getDB();
       await db.delete(this.ERRORED_MUTATIONS_NAME, id);
       this.notifyMutationsChanged();
     }
+    /**
+     * Durably appends mutations to the IndexedDB queue (and applies their
+     * optimistic row state to the per-table stores). Flushing is separate —
+     * call {@link flushQueue} when online, or let the adapter's auto-flush do it.
+     */
     async queueMutations(mutations) {
       if (mutations.length === 0) return;
       if (this.retryTimer) {

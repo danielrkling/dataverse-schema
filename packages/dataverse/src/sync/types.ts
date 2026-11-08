@@ -27,7 +27,7 @@ export class MutationPersistenceError extends Error {
         readonly mutationIds: string[],
         readonly cause: unknown,
     ) {
-        super(message);
+        super(message, { cause });
         this.name = "MutationPersistenceError";
     }
 }

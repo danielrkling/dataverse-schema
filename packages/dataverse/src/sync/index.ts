@@ -1,3 +1,8 @@
+/**
+ * `dataverse-schema/sync` — the offline engine plus the Dataverse adapter and
+ * error classifiers. Importing this entry does not pull in `@tanstack/db`;
+ * the collection adapters live in `dataverse-schema/sync/tanstack`.
+ */
 export {
     SyncEngine,
     type SyncEngineOptions,

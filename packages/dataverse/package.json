@@ -1,8 +1,9 @@
 {
   "name": "dataverse-schema",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "A Schema library designed for Microsoft Dataverse to aid in Web API calls",
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -38,6 +39,7 @@
   },
   "author": "LeviEyal",
   "license": "MIT",
+  "homepage": "https://github.com/danielrkling/dataverse-schema/tree/main/packages/dataverse#readme",
   "bugs": {
     "url": "https://github.com/danielrkling/dataverse-schema/issues"
   },

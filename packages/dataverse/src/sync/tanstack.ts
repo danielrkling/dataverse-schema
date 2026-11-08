@@ -49,10 +49,6 @@ function createDefaultIndexes(table: SyncTable, collection: Collection<any, any,
             console.warn(`[sync-collection] failed to create index "${key}" for "${table.entitySetName}":`, err);
         }
     }
-    // Debug aid: list every index now registered on the collection. The paths
-    // printed here must match the field named in any TanStack DB
-    // "Join requires an index on ..." warning for that collection id.
-    const indexes = [...collection.indexes.values()].map((i: any) => i.expression?.path);
 }
 
 export type SyncCollectionConfig<TRow extends object> = {
@@ -65,8 +61,8 @@ export type SyncCollectionConfig<TRow extends object> = {
     id?: string;
     /**
      * Query options limiting which records the collection syncs (filter,
-     * select, orderby, …). Opaque here — product packages type it. Applied to
-     * every remote sync pull.
+     * select, orderby, …). Opaque here; passed through to the table's
+     * `getRecords`/`iterateRecords` on every remote pull.
      */
     query?: unknown;
     syncInterval?: number;
@@ -88,7 +84,9 @@ export type SyncCollectionConfig<TRow extends object> = {
 } & Omit<CollectionConfig<any>, "sync" | "getKey" | "onInsert" | "onUpdate" | "onDelete">;
 
 export interface SyncCollectionUtils<TRow extends object> extends UtilsRecord {
+    /** Pulls a fresh snapshot of the configured query from the server now. */
     forceSync: () => Promise<void>;
+    /** The table this collection reads from and writes to. */
     table: TanstackSyncTable;
 }
 
@@ -101,6 +99,12 @@ export type OfflineCollectionConfig<TRow extends object> = SyncCollectionConfig<
     requireVisible?: boolean;
 };
 
+/**
+ * Online-only TanStack collection: polls (or explicitly syncs) the table via
+ * its read channels and writes mutations straight to the server. Cross-tab
+ * changes are mirrored over a BroadcastChannel keyed by the collection id.
+ * Use {@link offlineCollectionOptions} when writes must survive offline.
+ */
 export function syncCollectionOptions<TRow extends object>(
     config: SyncCollectionConfig<TRow>,
 ): CollectionConfig<TRow, string | number, never, SyncCollectionUtils<TRow>> {
@@ -623,226 +627,232 @@ export function offlineCollectionOptions<TRow extends object>(
 }
 
 export type ReadonlyStorageConfig<T extends object, TKey extends string | number> = {
-  /** Stable, unique IDB store / TanStack collection ID. */
-  id: string;
+    /** Stable, unique IDB store / TanStack collection ID. */
+    id: string;
 
-  /** Fetches the complete authoritative snapshot. */
-  load: (context: { signal: AbortSignal }) => Promise<readonly T[]>;
+    /** Fetches the complete authoritative snapshot. */
+    load: (context: { signal: AbortSignal }) => Promise<readonly T[]>;
 
-  /** Stable primary key for TanStack DB and IndexedDB replacement logic. */
-  getKey: (value: T) => TKey;
+    /** Stable primary key for TanStack DB and IndexedDB replacement logic. */
+    getKey: (value: T) => TKey;
 
-  /** Optional automatic refresh period. Omit or set 0 to disable polling. */
-  syncInterval?: number;
+    /** Optional automatic refresh period. Omit or set 0 to disable polling. */
+    syncInterval?: number;
 
-  /** Defaults true. When true, do not refresh hidden documents. */
-  requireVisible?: boolean;
+    /** Defaults true. When true, do not refresh hidden documents. */
+    requireVisible?: boolean;
 
-  /**
-   * Optional transform/validation boundary for untrusted loader output.
-   * It may also be async.
-   */
-  parse?: (value: unknown) => T | Promise<T>;
+    /**
+     * Optional transform/validation boundary for untrusted loader output.
+     * It may also be async.
+     */
+    parse?: (value: unknown) => T | Promise<T>;
 };
 
+/**
+ * Read-only TanStack collection over an arbitrary snapshot loader (reference
+ * data, lookup lists, configuration). The last snapshot is cached in the
+ * engine's IndexedDB so the collection hydrates instantly on reload; `load`
+ * is re-run on the configured `syncInterval` (polling is off by default).
+ */
 export function readonlyStorageCollectionOptions<T extends object, TKey extends string | number>(
-  engine: SyncEngine,
-  config: ReadonlyStorageConfig<T, TKey>,
+    engine: SyncEngine,
+    config: ReadonlyStorageConfig<T, TKey>,
 ): CollectionConfig<T, TKey, never> {
-  if (engine.isClosed) throw new Error("SyncEngine is closed");
+    if (engine.isClosed) throw new Error("SyncEngine is closed");
 
-  const {
-    id,
-    load,
-    getKey,
-    syncInterval = 0,
-    requireVisible = true,
-    parse,
-  } = config;
+    const {
+        id,
+        load,
+        getKey,
+        syncInterval = 0,
+        requireVisible = true,
+        parse,
+    } = config;
 
-  const cacheReady = engine.ensureCollectionStore(id);
+    const cacheReady = engine.ensureCollectionStore(id);
 
-  let disposed = false;
-  let activeSync: Promise<void> | undefined;
-  let syncQueued = false;
-  let controller: AbortController | undefined;
-  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    let activeSync: Promise<void> | undefined;
+    let syncQueued = false;
+    let controller: AbortController | undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const replaceCache = async (records: readonly T[]) => {
-    await cacheReady;
+    const replaceCache = async (records: readonly T[]) => {
+        await cacheReady;
 
-    const db = await engine.getDB();
-    const tx = db.transaction(id, "readwrite");
+        const db = await engine.getDB();
+        const tx = db.transaction(id, "readwrite");
 
-    await tx.store.clear();
-    for (const record of records) {
-      await tx.store.put(record, getKey(record));
-    }
+        await tx.store.clear();
+        for (const record of records) {
+            await tx.store.put(record, getKey(record));
+        }
 
-    await tx.done;
-  };
+        await tx.done;
+    };
 
-  return {
-    id,
-    getKey,
+    return {
+        id,
+        getKey,
 
-    sync: {
-      sync: ({ begin, write, commit, markReady, collection }) => {
-        let ready = false;
+        sync: {
+            sync: ({ begin, write, commit, markReady, collection }) => {
+                let ready = false;
 
-        const markReadyOnce = () => {
-          if (!ready) {
-            ready = true;
-            markReady();
-          }
-        };
+                const markReadyOnce = () => {
+                    if (!ready) {
+                        ready = true;
+                        markReady();
+                    }
+                };
 
-        const hydrate = async () => {
-          await cacheReady;
+                const hydrate = async () => {
+                    await cacheReady;
 
-          const db = await engine.getDB();
-          const cached = await db.getAll(id) as T[];
+                    const db = await engine.getDB();
+                    const cached = await db.getAll(id) as T[];
 
-          if (!disposed && cached.length > 0) {
-            begin();
-            for (const record of cached) {
-              write({
-                type: "insert",
-                value: record,
-                metadata: { source: "idb" },
-              });
-            }
-            commit();
-          }
-        };
+                    if (!disposed && cached.length > 0) {
+                        begin();
+                        for (const record of cached) {
+                            write({
+                                type: "insert",
+                                value: record,
+                                metadata: { source: "idb" },
+                            });
+                        }
+                        commit();
+                    }
+                };
 
-        const isRefreshAllowed = () =>
-          !requireVisible || document.visibilityState === "visible";
+                const isRefreshAllowed = () =>
+                    !requireVisible || document.visibilityState === "visible";
 
-        const refresh = async () => {
-          if (disposed || !isRefreshAllowed() || !navigator.onLine) return;
+                const refresh = async () => {
+                    if (disposed || !isRefreshAllowed() || !navigator.onLine) return;
 
-          if (activeSync) {
-            syncQueued = true;
-            return activeSync;
-          }
+                    if (activeSync) {
+                        syncQueued = true;
+                        return activeSync;
+                    }
 
-          controller = new AbortController();
-          engine.trackActiveFetch(controller);
+                    controller = new AbortController();
+                    engine.trackActiveFetch(controller);
 
-          activeSync = (async () => {
-            try {
-              const loaded = await load({ signal: controller!.signal });
-              if (disposed || controller!.signal.aborted) return;
+                    activeSync = (async () => {
+                        try {
+                            const loaded = await load({ signal: controller!.signal });
+                            if (disposed || controller!.signal.aborted) return;
 
-              const records = parse
-                ? await Promise.all(loaded.map(parse))
-                : [...loaded];
+                            const records = parse
+                                ? await Promise.all(loaded.map(parse))
+                                : [...loaded];
 
-              // Write persistent state before replacing in-memory state.
-              await replaceCache(records);
+                            // Write persistent state before replacing in-memory state.
+                            await replaceCache(records);
 
-              if (disposed || controller!.signal.aborted) return;
+                            if (disposed || controller!.signal.aborted) return;
 
-              // Full replacement — rows no longer returned are removed.
-              const nextKeys = new Set(records.map(getKey));
+                            // Full replacement — rows no longer returned are removed.
+                            const nextKeys = new Set(records.map(getKey));
 
-              begin();
-              for (const record of records) {
-                write({
-                  type: "insert",
-                  value: record,
-                  metadata: { source: "loader" },
-                });
-              }
-              for (const existing of collection.values()) {
-                if (!nextKeys.has(getKey(existing))) {
-                  write({
-                    type: "delete",
-                    value: existing,
-                    metadata: { source: "loader" },
-                  });
-                }
-              }
-              commit();
-            } catch (err: any) {
-              if (err?.name !== "AbortError" && !controller?.signal.aborted) {
-                console.warn(`[readonly-storage] Load failed for "${id}":`, err);
-              }
-            } finally {
-              if (controller) engine.untrackActiveFetch(controller);
-              controller = undefined;
-              activeSync = undefined;
-            }
-          })();
+                            begin();
+                            for (const record of records) {
+                                write({
+                                    type: "insert",
+                                    value: record,
+                                    metadata: { source: "loader" },
+                                });
+                            }
+                            for (const existing of collection.values()) {
+                                if (!nextKeys.has(getKey(existing))) {
+                                    write({
+                                        type: "delete",
+                                        value: existing,
+                                        metadata: { source: "loader" },
+                                    });
+                                }
+                            }
+                            commit();
+                        } catch (err: any) {
+                            if (err?.name !== "AbortError" && !controller?.signal.aborted) {
+                                console.warn(`[readonly-storage] Load failed for "${id}":`, err);
+                            }
+                        } finally {
+                            if (controller) engine.untrackActiveFetch(controller);
+                            controller = undefined;
+                            activeSync = undefined;
+                        }
+                    })();
 
-          await activeSync;
+                    await activeSync;
 
-          if (syncQueued && !disposed) {
-            syncQueued = false;
-            await refresh();
-          }
-        };
+                    if (syncQueued && !disposed) {
+                        syncQueued = false;
+                        await refresh();
+                    }
+                };
 
-        const schedule = () => {
-          if (!syncInterval || disposed) return;
+                const schedule = () => {
+                    if (!syncInterval || disposed) return;
 
-          clearTimeout(pollTimer);
-          pollTimer = setTimeout(async () => {
-            await refresh().catch((error) => {
-              console.warn(`[readonly-storage] Refresh failed for "${id}":`, error);
-            });
-            schedule();
-          }, syncInterval);
-        };
+                    clearTimeout(pollTimer);
+                    pollTimer = setTimeout(async () => {
+                        await refresh().catch((error) => {
+                            console.warn(`[readonly-storage] Refresh failed for "${id}":`, error);
+                        });
+                        schedule();
+                    }, syncInterval);
+                };
 
-        void hydrate()
-          .then(refresh)
-          .catch((error) => {
-            console.warn(`[readonly-storage] Initialization failed for "${id}":`, error);
-          })
-          .finally(() => {
-            markReadyOnce();
-            schedule();
-          });
+                void hydrate()
+                    .then(refresh)
+                    .catch((error) => {
+                        console.warn(`[readonly-storage] Initialization failed for "${id}":`, error);
+                    })
+                    .finally(() => {
+                        markReadyOnce();
+                        schedule();
+                    });
 
-        const onOnline = () => { void refresh(); };
-        const onVisibilityChange = () => {
-          if (document.visibilityState === "visible") {
-            void refresh().catch(() => undefined);
-          }
-        };
+                const onOnline = () => { void refresh(); };
+                const onVisibilityChange = () => {
+                    if (document.visibilityState === "visible") {
+                        void refresh().catch(() => undefined);
+                    }
+                };
 
-        window.addEventListener("online", onOnline);
-        document.addEventListener("visibilitychange", onVisibilityChange);
+                window.addEventListener("online", onOnline);
+                document.addEventListener("visibilitychange", onVisibilityChange);
 
-        const cleanup = () => {
-          if (disposed) return;
-          disposed = true;
-          syncQueued = false;
-          controller?.abort("Readonly storage disposed");
-          clearTimeout(pollTimer);
-          window.removeEventListener("online", onOnline);
-          document.removeEventListener("visibilitychange", onVisibilityChange);
-        };
+                const cleanup = () => {
+                    if (disposed) return;
+                    disposed = true;
+                    syncQueued = false;
+                    controller?.abort("Readonly storage disposed");
+                    clearTimeout(pollTimer);
+                    window.removeEventListener("online", onOnline);
+                    document.removeEventListener("visibilitychange", onVisibilityChange);
+                };
 
-        engine.addCollectionCleanup(cleanup);
-        return cleanup;
-      },
+                engine.addCollectionCleanup(cleanup);
+                return cleanup;
+            },
 
-      rowUpdateMode: "full",
-    },
+            rowUpdateMode: "full",
+        },
 
-    onInsert: async () => {
-      throw new Error(`Readonly storage "${id}" does not support inserts`);
-    },
-    onUpdate: async () => {
-      throw new Error(`Readonly storage "${id}" does not support updates`);
-    },
-    onDelete: async () => {
-      throw new Error(`Readonly storage "${id}" does not support deletes`);
-    },
+        onInsert: async () => {
+            throw new Error(`Readonly storage "${id}" does not support inserts`);
+        },
+        onUpdate: async () => {
+            throw new Error(`Readonly storage "${id}" does not support updates`);
+        },
+        onDelete: async () => {
+            throw new Error(`Readonly storage "${id}" does not support deletes`);
+        },
 
-    startSync: true,
-  };
+        startSync: true,
+    };
 }

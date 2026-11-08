@@ -44,7 +44,7 @@ const defaultGetEtag: EtagReader = (value) => value?.["$etag"];
 export type SyncEngineOptions = {
     /** Name for the engine's IndexedDB database and BroadcastChannel. Unique per instance — two DBs with the same name share the flush lock. */
     name: string;
-    /** Tables the engine can sync; keyed by `entitySetName`. */
+    /** Tables the engine can sync. They are registered internally by their `entitySetName`. */
     tables: SyncTable[];
     /** Schema version for the IndexedDB database; grows when late-registered collections need new stores. */
     version: number;
@@ -170,7 +170,7 @@ export type RetryOptions = {
  * resolutions (force / rebase / discard / plain retry). It talks to the
  * backend through the registered {@link SyncTable}s and knows nothing about
  * any product's HTTP layer; adapters only map their mutation format into
- * {@link QueuedMutation} and feed it to {@link enqueue}.
+ * {@link QueuedMutation} and feed it to {@link queueMutations}.
  */
 export class SyncEngine {
     name: string;
@@ -266,6 +266,8 @@ export class SyncEngine {
     // Monotonic ordering counter for queued mutations — adapters assign it
     // when serializing their mutation format into {@link QueuedMutation}.
     sequence = 0;
+
+    /** Returns the next monotonic sequence number for a queued mutation. */
     nextSequence(): number {
         return this.sequence++;
     }
@@ -291,6 +293,8 @@ export class SyncEngine {
     }
 
     private db: Database | Promise<Database> | undefined;
+
+    /** Opens (once) and returns the shared IndexedDB database. */
     async getDB(): Promise<Database> {
         if (!this.db) {
             const self = this
@@ -441,6 +445,11 @@ export class SyncEngine {
         return this.closed;
     }
 
+    /**
+     * Closes the engine: aborts in-flight fetches, clears retry timers and
+     * listeners, closes the BroadcastChannel and the IndexedDB connection.
+     * Idempotent; collections built over this engine stop syncing afterwards.
+     */
     public close() {
         if (this.closed) return;
         this.closed = true;
@@ -613,11 +622,17 @@ export class SyncEngine {
         })
     }
 
+    /** Number of mutations currently waiting to be flushed. */
     async getQueueCount(): Promise<number> {
         const db = await this.getDB();
         return db.count(this.MUTATION_QUEUE_NAME);
     }
 
+    /**
+     * Mutations that exhausted their retry budget or failed deterministically,
+     * waiting for operator resolution (see {@link retryErroredMutation} /
+     * {@link discardErroredMutation}).
+     */
     async getErroredMutations(): Promise<QueuedMutation[]> {
         const db = await this.getDB();
         return db.getAll(this.ERRORED_MUTATIONS_NAME) as Promise<QueuedMutation[]>;
@@ -790,12 +805,18 @@ export class SyncEngine {
         if (navigator.onLine) await this.flushQueue();
     }
 
+    /** Drops an errored mutation without retrying it (the local edit is abandoned). */
     async discardErroredMutation(id: string): Promise<void> {
         const db = await this.getDB();
         await db.delete(this.ERRORED_MUTATIONS_NAME, id);
         this.notifyMutationsChanged();
     }
 
+    /**
+     * Durably appends mutations to the IndexedDB queue (and applies their
+     * optimistic row state to the per-table stores). Flushing is separate —
+     * call {@link flushQueue} when online, or let the adapter's auto-flush do it.
+     */
     async queueMutations(mutations: QueuedMutation[]) {
         if (mutations.length === 0) return;
         // A freshly arrived mutation may make a previously-delayed retry due now;

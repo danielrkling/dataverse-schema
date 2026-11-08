@@ -2,11 +2,25 @@
 
 A strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. Provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations.
 
+The offline engine and the TanStack DB adapters ship as optional subpath entries — `dataverse-schema/sync` and `dataverse-schema/sync/tanstack` — so the root entry stays free of IndexedDB and `@tanstack/db` code.
+
 ## Installation
 
 ```bash
 npm i dataverse-schema
+
+# Only if you use the TanStack DB collection adapters:
+npm i @tanstack/db
 ```
+
+| Entry point | What it provides |
+| --- | --- |
+| `dataverse-schema` | Client, tables, fields, query builders, validation |
+| `dataverse-schema/sync` | Offline `SyncEngine`, Dataverse adapter, conflict/error helpers |
+| `dataverse-schema/sync/tanstack` | TanStack DB collection factories |
+
+`@tanstack/db` is an optional peer of this package; importing the root or
+`dataverse-schema/sync` never requires it.
 
 ## Quick Start
 
@@ -578,20 +592,102 @@ const choices = await RetrieveChoices(client, "gender");
 The offline engine and the TanStack DB adapters ship as subpath entries of this
 package — the root `dataverse-schema` entry has no offline or TanStack API.
 
+### The offline engine
+
 ```typescript
 import { SyncEngine } from "dataverse-schema/sync";
-import { offlineCollectionOptions, syncCollectionOptions } from "dataverse-schema/sync/tanstack";
-import { createCollection } from "@tanstack/db";
 import { Person } from "./tables"; // a DataverseTable satisfies the SyncTable contract
 
-const engine = new SyncEngine({ name: "offline", tables: [Person], version: 1 });
-
-// Offline-first collection with an IndexedDB mutation queue
-const collection = createCollection(offlineCollectionOptions<typeof Person.T>(engine, { table: Person }));
+const engine = new SyncEngine({
+  name: "my-app",   // unique IDB database / BroadcastChannel / web-lock name
+  version: 1,       // bump when the set of tables changes
+  tables: [Person],
+  // maxAttempts: 3, retryBaseDelay: 1_000, retryMaxDelay: 60_000,
+  // overrideCreatedOn: true, flushOnOnline: true,
+});
 ```
 
-`@tanstack/db` is an optional peer — install it only if you import
-`dataverse-schema/sync/tanstack`.
+`dataverseSyncEngine({ ...sameOptions })` is a thin Dataverse preset that
+injects the `$etag` reader and the Dataverse error-classifier. A plain
+`SyncEngine` already defaults the etag reader to `$etag`; use the preset when
+you also want the Dataverse-specific deterministic-failure rules.
+
+Mutations are normally enqueued by the TanStack adapter. For manual control:
+
+| Call | Purpose |
+| --- | --- |
+| `queueMutations(mutations)` | Durably append `QueuedMutation`s and apply optimistic rows |
+| `flushQueue()` | Send the queue (serialized across tabs with Web Locks) |
+| `getQueueCount()` | Pending mutation count |
+| `getErroredMutations()` | Mutations awaiting resolution |
+| `getConflictDetails(mutation)` | `{ server, fields, conflictingFields }` for a resolution UI |
+| `retryErroredMutation(id, options?)` | `{}` retry · `{ force: true }` local wins · `{ useFreshEtag: true }` rebase on the server |
+| `discardErroredMutation(id)` | Drop the local edit |
+| `onMutationsChanged(listener)` | Redraw queue/errored state; returns an unsubscribe function |
+| `close()` | Tear down timers, listeners, channel and IDB connection |
+
+Retries run automatically: transient failures are re-attempted with exponential
+backoff up to `maxAttempts`, while deterministic failures (concurrency
+conflicts, duplicate keys, validation) move straight to the errored store.
+`overrideCreatedOn` replays queued inserts with the offline transaction time as
+`overriddenCreatedOn` (Dataverse requires the `prvOverrideCreatedOnCreatedBy`
+privilege).
+
+### TanStack DB collections
+
+```typescript
+import { createCollection } from "@tanstack/db";
+import {
+  offlineCollectionOptions,
+  syncCollectionOptions,
+  readonlyStorageCollectionOptions,
+} from "dataverse-schema/sync/tanstack";
+
+// Offline-first: hydrates from IndexedDB, pulls remote, queues writes.
+const tasks = createCollection(
+  offlineCollectionOptions<typeof Task.T>(engine, {
+    table: Task,
+    id: "open-tasks",       // defaults to entitySetName; must be unique per collection
+    query: { top: 500 },    // passed through to getRecords/iterateRecords
+    syncInterval: 30_000,
+    requireVisible: true,   // skip remote work while the document is hidden
+    readOnlyWhenOffline: false,
+  }),
+);
+
+// Online-only polling collection (writes go straight to the server).
+const contacts = createCollection(syncCollectionOptions<typeof Contact.T>({ table: Contact }));
+
+// Read-only cached snapshot (reference data).
+const currencies = createCollection(
+  readonlyStorageCollectionOptions(engine, {
+    id: "currencies",
+    load: ({ signal }) => fetchCurrencies(signal),
+    getKey: (row) => row.code,
+  }),
+);
+```
+
+For the read/write factories (`offlineCollectionOptions` and
+`syncCollectionOptions`), `collection.utils.forceSync()` pulls a fresh snapshot
+immediately. Cross-tab coordination uses `BroadcastChannel` + Web Locks: the
+offline adapter broadcasts on the engine's channel (`name`), the online-only
+factory on a channel keyed by the collection id, and flushes are serialized by
+a Web Lock keyed by the engine name — keep those IDs unique if you run
+multiple engines or collections.
+
+### Migrating from `dataverse-schema-sync`
+
+2.0.0 declared a dependency on the never-published `dataverse-schema-sync`
+package, which made `npm install dataverse-schema` fail. From 2.0.1 onward the
+engine lives inside `dataverse-schema`:
+
+```diff
+- import { SyncEngine } from "dataverse-schema";
+- import { offlineCollectionOptions } from "dataverse-schema-sync/adapters/tanstack";
++ import { SyncEngine } from "dataverse-schema/sync";
++ import { offlineCollectionOptions } from "dataverse-schema/sync/tanstack";
+```
 
 ## Utilities
 

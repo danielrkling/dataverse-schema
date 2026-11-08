@@ -6,7 +6,7 @@ npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript libra
 
 - `packages/dataverse` — the library itself (npm package `dataverse-schema`). The offline engine (`src/sync/`) is bundled into the `/sync` entry; `@tanstack/db` stays an optional peer used only by `/sync/tanstack`.
 - `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.Note: **no shared core** — keep the SharePoint package stand-alone (flat field/query surface).
-- `packages/filesystem` — `filesystem-schema`: File System Access API as a local JSON database. `FileSystemDatabase.open`/`initialize` verify a root-folder `fsdb.json` manifest (`version` + `brandId`, throws on mismatch); `FileSystemTable` stores one `<id>.json` per record under a table folder; `FileSystemSingleFileTable` stores a record array in `<table>/data.json`. Same field-factory/phantom-`T`/Standard-Schema conventions; no query builder (reads return plain arrays that callers filter/sort). Also stand-alone (no shared core).
+- `packages/filesystem` — `filesystem-schema`: File System Access API as a local JSON database. `FileSystemDatabase.open`/`initialize` verify a root-folder `fsdb.json` manifest (`version` + `brandId`, throws on mismatch); `FileSystemTable` stores one `<id>.json` per record under a table folder; `FileSystemSingleFileTable` stores a record array in one JSON file. Same field-factory/phantom-`T`/Standard-Schema conventions; no query builder (reads return plain arrays that callers filter/sort). Also stand-alone (no shared core).
 
 Deliberate design decision: **no shared core**. The SharePoint package is standalone with a flat field/query surface — duplicate, don't extract. Fields (`packages/sharepoint/src/fields.ts`) follow the Dataverse field-class conventions (camelCase factories `text`/`number`/`bool`/`json`/`date`/`datetime`/`choice`/`multiChoice`/`person`/`people`/`lookup`/`multiLookup`/`document`/`primaryKey`/`title`) but implement only what the SharePoint REST surface needs:
 - `date`/`datetime` read/write real `Date` instances (wire is ISO; invalid wire reads as null)
@@ -116,6 +116,11 @@ test/
   fields.test.ts               — Field classes: defaults, transforms, validation
   query.test.ts                — FilterExpr + util query helpers
   query-ast.test.ts            — AST serializers
+  sync.test.ts                 — Dataverse sync integration: queue/flush/conflict/retry
+  sync-engine.test.ts          — Generic engine tests against stub SyncTables
+  tanstack-db.test.ts          — TanStack DB adapter (serializeMutation, conflicts, notifications)
+  package-entries.test.ts      — Root vs `/sync` vs `/sync/tanstack` export boundary
+  browser-suites.test.ts       — Browser suite discovery/shape checks
   types-typecheck.test.ts      — Type-level checks for Infer/types/table algebra
   odata-typecheck.test.ts      — Type-level checks for OData builder inference
   fetchXml-typecheck.test.ts   — Type-level checks for FetchXML builder
@@ -123,7 +128,9 @@ test/
     main.ts                    — Entry: config → tables → suites → reporter UI
     harness/                   — runner, reporter, assert, fixtures, tables, config
     suites/                    — general, crud, query-odata, query-fetchxml, navigation, files-images, functions-actions, bulk, errors
+    tanstack/                  — TanStack DB offline/cross-tab suites and db-helper
     dist/browser-test.js       — Committed bundle loaded via raw-GitHub <script> snippet
+    dist/browser-db-test.js    — Committed TanStack DB bundle
 
 packages/filesystem/src/
   index.ts                     — barrel + SyncTable compile-time compatibility check
@@ -151,9 +158,9 @@ packages/filesystem/src/
 ### Imports
 - ES module imports (`import`/`export`), never CommonJS
 - Use relative paths with `./` prefix for local imports
-- Barrel exports in `src/index.ts` — all public API flows through there
-- When importing from the library in tests, use `"../src"` or `"../src/module-name"`
-- `import type` is NOT used — plain imports include both values and types
+- Three barrels match the three published entries: `src/index.ts` (core), `src/sync/index.ts` (`dataverse-schema/sync`) and `src/sync/tanstack.ts` (`dataverse-schema/sync/tanstack`). The root must never re-export sync code (there is a test for this)
+- When importing from the library in tests, use `"../src"`, `"../src/sync"` or `"../src/sync/tanstack"`
+- `import type` is used for type-only imports in newer modules; older modules use plain imports. Match the surrounding file.
 - Import order: group by external deps, then local modules. No enforced sorting.
 
 ### TypeScript

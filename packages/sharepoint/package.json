@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "A Schema library designed for Microsoft SharePoint (legacy _api/web REST, OData v3) to aid in Web API calls for lists and libraries",
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -30,6 +31,10 @@
   },
   "author": "LeviEyal",
   "license": "MIT",
+  "homepage": "https://github.com/danielrkling/dataverse-schema/tree/main/packages/sharepoint#readme",
+  "bugs": {
+    "url": "https://github.com/danielrkling/dataverse-schema/issues"
+  },
   "scripts": {
     "build": "tsdown",
     "prepack": "npm run build",
