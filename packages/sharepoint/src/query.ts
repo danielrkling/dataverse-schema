@@ -6,7 +6,7 @@
  *
  * @example
  * const q = Documents.query()
- *     .select((f) => [f.title, f.ko, f.status, f.author])
+ *     .select((f) => ({ title: f.title, ko: f.ko, status: f.status, author: f.author }))
  *     .where((f) => and(eq(f.status, "Draft"), startsWith(f.title, "R")))
  *     .orderBy((f) => f.modified, "desc")
  *     .top(50);
@@ -18,7 +18,7 @@
 
 import type { SharePointTable } from "./table";
 import type { QueryRequestOptions } from "./client";
-import { ChoiceField, CommentsField, DateField, DatetimeField, FileField, JsonField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase, type Comment, type InferRecord, type FileRef } from "./fields";
+import { ChoiceField, CommentsField, DateField, DatetimeField, FileField, LookupField, MultiLookupField, MultiChoiceField, NumberField, PersonField, PeopleField, StringField, BooleanField, FieldBase, type InferRecord } from "./fields";
 
 // --- field refs -----------------------------------------------------------
 
@@ -34,7 +34,11 @@ function literal(value: unknown): string {
 
 /** The id-bearing property a reference column filters on (`AuthorId`). */
 function filterKey(field: FieldBase<any>): string {
-    const isReference = field instanceof PersonField || field instanceof LookupField;
+    const isReference =
+        field instanceof PersonField ||
+        field instanceof PeopleField ||
+        field instanceof LookupField ||
+        field instanceof MultiLookupField;
     return (isReference ? `${field.name}Id` : field.name);
 }
 
@@ -95,14 +99,12 @@ export function isNotNull(ref: { field: FieldBase<any> }): string {
 
 type ValueOf<F extends FieldBase<any>> =
     F extends ChoiceField<infer C> ? C :
-    F extends PersonField | LookupField ? number :
+    F extends PersonField | PeopleField | LookupField | MultiLookupField ? number :
     F extends StringField<infer S> ? S :
     F extends NumberField<infer N> ? N :
     F extends BooleanField ? boolean :
-    F extends DateField<any> ? Date :
-    F extends DatetimeField<any> ? Date :
+    F extends DateField<any> | DatetimeField<any> ? Date :
     F extends MultiChoiceField<infer C> ? C :
-    F extends PeopleField | MultiLookupField | MultiChoiceField<infer C> ? string :
     never;
 
 /** The typed field refs a query callback receives (one per declared field). */
@@ -114,23 +116,14 @@ type ReferenceKeys<TFields extends Record<string, FieldBase<any>>> = {
     [K in keyof TFields]: TFields[K] extends PersonField | LookupField | PeopleField | MultiLookupField ? K : never;
 }[keyof TFields];
 
-/** The value type one field reads back as (record-side, not comparator-side). */
-type ReadValueOf<F extends FieldBase<any>> =
-    F extends ChoiceField<infer C> ? C | null :
-    F extends PersonField | LookupField ? { id: number; name?: string; email?: string } | null :
-    F extends PeopleField | MultiLookupField ? Array<{ id: number; name?: string; email?: string }> :
-    F extends StringField<infer S> ? S :
-    F extends NumberField<infer N> ? N :
-    F extends BooleanField ? boolean :
-    F extends DateField<any> | DatetimeField<any> ? Date | null :
-    F extends JsonField<infer J> ? J :
-    F extends FileField ? FileRef :
-    F extends CommentsField ? Comment[] :
-    never;
-
-/** A `.select()` pick: each ref maps to its read value type under the same key. */
+/**
+ * A `.select()` pick: each ref maps to its read value type under the same key.
+ * `SPFieldRef.T` is already `InferRecord`'s value type for that field, so use
+ * it directly rather than re-deriving from the field class (re-deriving on an
+ * intersection with `FieldBase<any>` collapses plain picks to `never`).
+ */
 export type PickedRecord<P extends object> = {
-    [K in keyof P]: P[K] extends SPFieldRef<infer F, any> ? ReadValueOf<F & FieldBase<any>> : never;
+    [K in keyof P]: P[K] extends SPFieldRef<any, any> ? P[K]["T"] : never;
 };
 
 /** `expand({ author: ["Id","Title"] })` — keys restricted to reference fields. */
@@ -145,6 +138,8 @@ export class SPQuery<
     constructor(private readonly _table: SharePointTable<TFields>) {}
 
     private _select: string[] = [];
+    /** True once `.select()` was called — distinguishes "no pick" from "picked only refs". */
+    private _hasSelect = false;
     private _expand: ExpandSpec<TFields> = {};
     private _filter: string | undefined;
     private _orderBy: Array<{ key: string; direction?: "asc" | "desc" }> = [];
@@ -164,6 +159,7 @@ export class SPQuery<
     select<P extends { [K in keyof TFields & string]?: SPFieldRef<any, any> }>(
         fields: (f: QueryProxy<TFields>) => P,
     ): SPQuery<TFields, PickedRecord<P>> {
+        this._hasSelect = true;
         this._select = Object.values(fields(this.proxy()) ?? {})
             .map((entry) => {
                 if (!entry) return undefined;
@@ -241,10 +237,16 @@ export class SPQuery<
 
     build(): string {
         const parts: string[] = [];
-        if (this._select.length === 0 && Object.keys(this._expand).length === 0) {
+        if (!this._hasSelect) {
+            // No explicit pick: start from the full declaration. A user
+            // `.expand()` call adds props on top of the standard carve-outs
+            // (union), it does not replace the rest of the projection.
             const projection = defaultProjection(this._table);
             this._select = projection.select;
-            Object.assign(this._expand as Record<string, readonly string[]>, projection.expand);
+            const expand = this._expand as Record<string, readonly string[]>;
+            for (const [key, props] of Object.entries(projection.expand)) {
+                expand[key] = [...new Set([...(expand[key] ?? []), ...props])];
+            }
         }
         const selectEntries = [...this._select];
         const expandKeys = Object.keys(this._expand) as ReferenceKeys<TFields>[];

@@ -98,13 +98,6 @@ test("updateRecord builds MERGE with If-Match from the record's $etag", async ()
     expect(options).toEqual({ ifMatch: '"7"', signal: undefined });
 });
 
-// --- SyncTable satisfaction (compile-time assertion surfaced at runtime) ---
-
-test("table structurally satisfies the sync engine SyncTable contract", async () => {
-    const { syncTableCompat } = await import("../src");
-    expect(syncTableCompat).toBe(true);
-});
-
 // --- query builder ---
 
 test("buildQuery renders OData v3 options", () => {
@@ -193,4 +186,17 @@ test("getRecord/getRecords default to the full projection when no query is passe
     // explicit queries pass through untouched (caller opts out)
     await Tasks.getRecords("$filter=IsDone eq true");
     expect(listSpy.mock.calls[1]![1]!.query).toBe("$filter=IsDone eq true");
+});
+
+test("getRecord/getRecords accept a built SPQuery as well as a raw string", async () => {
+    const Tasks = makeTable();
+    const q = Tasks.query().select((f) => ({ id: f.id, title: f.title }));
+
+    const getSpy = vi.spyOn(Tasks.client, "getRecord").mockResolvedValue({ Id: 1, Title: "x", __metadata: { etag: '"1"' } });
+    await Tasks.getRecord(1, q);
+    expect(getSpy.mock.calls[0]![2]!.query).toBe(q.build());
+
+    const listSpy = vi.spyOn(Tasks.client, "getRecords").mockResolvedValue([]);
+    await Tasks.getRecords(q);
+    expect(listSpy.mock.calls[0]![1]!.query).toBe(q.build());
 });

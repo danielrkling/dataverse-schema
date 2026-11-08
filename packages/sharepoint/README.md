@@ -56,7 +56,7 @@ type Task = InferTable<typeof Tasks>;
 // 3. CRUD
 const task = await Tasks.getRecord(12);
 await Tasks.createRecord({ title: "Ship it", status: "Not Started" });
-await Tasks.updateRecord(12, { status: "Done", done: true }, { ifMatch: task ?.$etag });
+await Tasks.updateRecord(12, { status: "Done", done: true }, { ifMatch: task?.$etag });
 await Tasks.deleteRecord(12, { ifMatch: task?.$etag ?? "*" });
 ```
 
@@ -141,7 +141,7 @@ const draft = await Tasks.query()
 - `.select()` takes an **object pick** — the built query's result type is fixed to exactly the picked fields (per field kind)
 - **reference fields self-expand** with standard carve-outs — person/people get `Id,Title,EMail`, lookups get `Id,Title` — no separate `.expand()` needed. `.expand({...})` only adds/overrides properties
 - free-function comparators: `eq/ne/gt/ge/lt/le/contains/startsWith/endsWith` (take a field ref + value; no ref methods), plus `and/or/not/isNull/isNotNull`
-- `.build()` renders the OData v3 string; `getRecords`/`getRecord` also accept that string directly
+- `.build()` renders the OData v3 string; `getRecords`/`getRecord` also accept a built `SPQuery` (or its `.build()` string) directly
 
 ### Default projections
 
@@ -170,7 +170,8 @@ await Docs.createRecord({ title: "Report", file: { name: "report.pdf", data: blo
 //     If the item has no file channel (document() wrongly declared on a
 //     plain list), the read throws instead of returning null.
 const doc = await Docs.getRecord(4);
-const bytes = await Docs.getDocumentContent(4); // Blob
+const response = await Docs.getDocumentContent(4); // Response (raw file content)
+const bytes = await response.blob();
 
 // update content: the name must match FileLeafRef (rename creates a new item)
 await Docs.updateRecord(4, { file: { name: "report.pdf", data: newBlob } });
@@ -188,7 +189,7 @@ Notes:
 ## Etags and concurrency
 
 - reads hoist `__metadata.etag` to the `$etag` property
-- **write precedence**: explicit `options.ifMatch` → the record's `$etag` → no precondition (fire when intentionally force-merging with `"*"`)
+- **write precedence**: explicit `options.ifMatch` → the record's `$etag` → `If-Match: *` (unconditional, so a header-less MERGE can't trip an implicit blank-etag 412)
 
 ## Tables and the sync engine
 

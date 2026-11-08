@@ -9,7 +9,7 @@
     "build": "npm run build -w filesystem-schema && npm run build -w sharepoint-schema && npm run build -w dataverse-schema",
     "build:browser-test": "npm run build:browser-test -w dataverse-schema",
     "test": "npm run test -w filesystem-schema && npm run test -w sharepoint-schema && npm run test -w dataverse-schema",
-    "test:types": "npm run test:types -w filesystem-schema && npm run test:types -w dataverse-schema",
+    "test:types": "npm run test:types -w filesystem-schema && npm run test:types -w sharepoint-schema && npm run test:types -w dataverse-schema",
     "typecheck": "npm run typecheck -w filesystem-schema && npm run typecheck -w sharepoint-schema && npm run typecheck -w dataverse-schema"
   },
   "devDependencies": {

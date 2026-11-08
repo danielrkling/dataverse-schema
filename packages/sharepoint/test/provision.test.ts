@@ -8,7 +8,7 @@ import {
     createList, deleteList, renameList, addListField, provisionList, resolveListId,
 } from "../src/provision";
 import {
-    bool, choice, date, datetime, json, lookup, multiChoice, multiLookup,
+    bool, choice, comments, date, datetime, json, lookup, multiChoice, multiLookup,
     number, people, person, primaryKey, text, title, document,
 } from "../src/fields";
 
@@ -82,7 +82,8 @@ test("defineField fans out by kind; built-ins and document fields skip", () => {
 // --- lifecycle + application (client.fetch mocked, no HTTP) ---
 
 const LIST_GUID = "{99999999-8888-7777-6666-555555555555}";
-const XML_TO_KIND: Record<string, number> = { Text: 2, Note: 3, DateTime: 4, Choice: 6, Number: 9, Boolean: 12, MultiChoice: 15, User: 20, Lookup: 20 };
+// Real SharePoint SPFieldType values: Boolean = 8, Lookup = 7, User/UserMulti = 20.
+const XML_TO_KIND: Record<string, number> = { Text: 2, Note: 3, DateTime: 4, Choice: 6, Lookup: 7, Boolean: 8, Number: 9, MultiChoice: 15, User: 20, UserMulti: 20 };
 
 /** Stateful mock: created columns persist across "runs" in a server-side view (needed for reuse tests). */
 function mockFetch(seed: Record<string, number> = {}) {
@@ -99,7 +100,8 @@ function mockFetch(seed: Record<string, number> = {}) {
             return {};
         }
         if (resource === "web/lists" && options?.method === "POST") return { Id: LIST_GUID };
-        if (resource.includes("?$select=Id")) return LIST_GUID;
+        // client.fetch unwraps to the entity itself, so resolveListId reads `.Id`.
+        if (resource.includes("?$select=Id")) return { Id: LIST_GUID };
         return {};
     });
     return spy;
@@ -143,10 +145,12 @@ test("addListField posts createfieldasxml with SchemaXml and options bits", asyn
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.parameters.__metadata.type).toBe("SP.XmlSchemaFieldCreationInformation");
     expect(body.parameters.SchemaXml).toContain(`Type="Text"`);
-    expect(body.parameters.Options).toBe(2); // noContentType
+    // noContentType (2) | AddFieldInternalNameHint (8)
+    expect(body.parameters.Options).toBe(10);
 
     await addListField(client, "Tasks", defineText(text("Description")), { addToDefaultView: true });
-    expect(JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string).parameters.Options).toBe(10);
+    // ... | AddFieldToDefaultView (16)
+    expect(JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string).parameters.Options).toBe(26);
 });
 
 test("applyListFields is idempotent: skips matching, adds missing, throws on drift", async () => {
@@ -161,6 +165,19 @@ test("applyListFields is idempotent: skips matching, adds missing, throws on dri
     expect(outcome.added).toEqual(["Description"]);
     // one createfieldasxml call for the missing one:
     expect(spy.mock.calls.filter(([r]) => (r as string).includes("createfieldasxml"))).toHaveLength(1);
+});
+
+test("applyListFields uses the real FieldTypeKind values for bool/lookup/people (idempotent)", async () => {
+    const spy = mockFetch({ IsDone: 8, RefId: 7, Reviewers: 20 });
+    const outcome = await applyListFields(client, "Tasks", [
+        defineBool(bool("IsDone")),
+        defineLookup(lookup("RefId"), { listId: LIST_GUID }),
+        definePeople(people("Reviewers")),
+    ]);
+    // existing matching columns are skipped — no false schema-drift throws
+    expect(outcome.skipped).toEqual(["IsDone", "RefId", "Reviewers"]);
+    expect(outcome.added).toEqual([]);
+    expect(spy.mock.calls.some(([r]) => (r as string).includes("createfieldasxml"))).toBe(false);
 });
 
 test("provisionList wires list + all schema columns; doc-lib tables pick 101 and skip document()", async () => {
@@ -262,7 +279,7 @@ test("provisionList still creates when the list is missing (404 from getbytitle)
         if (resource === "web/lists" && options?.method === "POST") return { Id: "{new-list}" };
         if (resource.includes("/fields?$select=InternalName")) return [];
         if (resource.includes("createfieldasxml")) return {};
-        if (resource.includes("?$select=Id")) return "{99999999-8888-7777-6666-555555555555}";
+        if (resource.includes("?$select=Id")) return { Id: "{99999999-8888-7777-6666-555555555555}" };
         return {};
     });
     const Tasks = new SharePointTable({
@@ -273,6 +290,22 @@ test("provisionList still creates when the list is missing (404 from getbytitle)
     const outcome = await provisionList(client, Tasks);
     expect(outcome.created).toBe(true);
     expect(outcome.id).toBe("{new-list}");
+});
+
+test("defineField skips comments (a platform feature, not a column)", () => {
+    expect(defineField(comments())).toBeUndefined();
+});
+
+test("provisionList skips comments fields instead of throwing", async () => {
+    const spy = mockFetch();
+    const Tasks = new SharePointTable({
+        client,
+        listTitle: "Tasks",
+        fields: { id: primaryKey(), title: title(), feed: comments() },
+    });
+    const outcome = await provisionList(client, Tasks, { ifExists: "throw" });
+    expect(outcome.added).toEqual([]);
+    expect(spy.mock.calls.some(([r]) => (r as string).includes("createfieldasxml"))).toBe(false);
 });
 
 test("definers reject internal names the server would silently mangle (spaces etc)", () => {

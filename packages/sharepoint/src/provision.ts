@@ -1,7 +1,8 @@
-import { SharePointClient } from "./client";
+import { SharePointClient, encodeODataString } from "./client";
 import {
     BooleanField,
     ChoiceField,
+    CommentsField,
     DateField,
     DatetimeField,
     FieldBase,
@@ -181,6 +182,9 @@ export function defineMultiLookup(field: MultiLookupField, options: DefineFieldO
  */
 export function defineField(field: FieldBase<any>, options: DefineFieldOptions = {}): FieldSchemaXml | undefined {
     if (field instanceof FileField) return undefined;
+    // Comments are a platform feature of the list (a separate REST surface),
+    // never a schema column — skip them like the built-ins.
+    if (field instanceof CommentsField) return undefined;
     if (field.name === "Id" || field.name === "Title") return undefined;
     if (field instanceof StringField) return defineText(field);
     if (field instanceof JsonField) return defineJson(field);
@@ -200,16 +204,29 @@ export function defineField(field: FieldBase<any>, options: DefineFieldOptions =
 // --- list lifecycle + application ---
 
 /** `SP.AddFieldOptions` bits honored by `createfieldasxml`. */
-const ADD_FIELD_OPTIONS = { noContentType: 2, addToDefaultView: 8 } as const;
+const ADD_FIELD_OPTIONS = {
+    /** `AddToNoContentType` — the lists this package creates have content types disabled. */
+    noContentType: 2,
+    /** `AddFieldInternalNameHint` — force the XML `Name` to become the internal name. */
+    internalNameHint: 8,
+    /** `AddFieldToDefaultView`. */
+    addToDefaultView: 16,
+} as const;
 
 function listPath(listTitle: string): string {
-    return `web/lists/getbytitle('${encodeURIComponent(listTitle)}')`;
+    return `web/lists/getbytitle('${encodeODataString(listTitle)}')`;
 }
 
 /** Looks up a list by title for its GUID — what lookup definers need as `listId`. */
 export async function resolveListId(client: SharePointClient, listTitle: string): Promise<string> {
-    // client.fetch unwraps the verbose `d` envelope
-    return (await client.fetch(`${listPath(listTitle)}?$select=Id`)) as string;
+    // client.fetch unwraps the verbose `d` envelope to the entity itself, so
+    // the GUID lives on `.Id` (returning the entity would violate the type).
+    const list = (await client.fetch(`${listPath(listTitle)}?$select=Id`)) as { Id?: unknown } | undefined;
+    const id = list && typeof list === "object" ? list.Id : undefined;
+    if (typeof id !== "string" || !id) {
+        throw new Error(`List "${listTitle}" did not return an Id`);
+    }
+    return id;
 }
 
 /** Creates a list (`BaseTemplate 100`) or a document library (`101`). */
@@ -248,7 +265,10 @@ export async function renameList(client: SharePointClient, listTitle: string, ne
 
 /** Adds one column to a list from its `<Field/>` schema (`fields/createfieldasxml`). */
 export async function addListField(client: SharePointClient, listTitle: string, xml: FieldSchemaXml, options: { addToDefaultView?: boolean } = {}): Promise<void> {
-    const optionsBits = ADD_FIELD_OPTIONS.noContentType | (options.addToDefaultView ? ADD_FIELD_OPTIONS.addToDefaultView : 0);
+    const optionsBits =
+        ADD_FIELD_OPTIONS.noContentType |
+        ADD_FIELD_OPTIONS.internalNameHint |
+        (options.addToDefaultView ? ADD_FIELD_OPTIONS.addToDefaultView : 0);
     await client.fetch(`${listPath(listTitle)}/fields/createfieldasxml`, {
         method: "POST",
         body: JSON.stringify({
@@ -263,11 +283,13 @@ const FIELD_TYPE_KINDS: Record<string, number> = {
     Note: 3,
     DateTime: 4,
     Choice: 6,
+    Lookup: 7,
+    Boolean: 8,
     Number: 9,
-    Boolean: 12,
     MultiChoice: 15,
     User: 20,
-    Lookup: 20,
+    // Multi-user columns are CAML `UserMulti` but share the `User` kind (20).
+    UserMulti: 20,
 };
 
 /**

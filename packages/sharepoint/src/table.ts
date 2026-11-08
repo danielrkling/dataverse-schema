@@ -2,14 +2,14 @@
  * Schema-driven access to a SharePoint list (or list-backed library) through
  * the legacy REST API (`_api/web/Lists/GetByTitle(...)/Items`, OData v3).
  *
- * Parity with `DataverseTable` (`packages/dataverse/src/table.ts`): full
- * query-builder plumbing (filter tree, expand, etc.) arrives when the shared
- * `packages/core` is extracted; this first slice covers schema-aware CRUD +
- * record transforms, and structurally satisfies the sync engine's
- * {@link SyncTable} contract so `@offlinecollectionoptions` reuse is trivial.
+ * Mirrors `DataverseTable` (`packages/dataverse/src/table.ts`) conventions
+ * (field factories, phantom `T`, typed query builder) but stays deliberately
+ * standalone: a flat CRUD + query surface with no shared core. Structurally
+ * satisfies the sync engine's `SyncTable` contract so the offline mutation
+ * queue works over SharePoint lists unchanged.
  */
 
-import { SharePointClient, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
+import { SharePointClient, encodeODataString, encodePath, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
 import { CommentsField, FieldBase, FileField, type Comment, type CommentMention, type FileRef, type InferRecord, type TransformContext } from "./fields";
 import { SPQuery, spQuery, defaultQuery, type QueryProxy } from "./query";
 import type { ListItemId, GenericProperties } from "./types";
@@ -136,7 +136,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
                 // body can never carry them. A spread of a full getRecord
                 // shape (comments: [] or undefined) passes through silently —
                 // an actual value is a write the caller expects to happen.
-                if (raw != null && raw !== undefined) {
+                if (raw != null) {
                     throw new Error(`comments field "${tsKey}" is append-only — use addComment/deleteComment (the REST surface has no comment update)`);
                 }
                 continue;
@@ -177,7 +177,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     /** List-item content type, resolved once (REST `ListItemEntityTypeFullName`) and cached. */
     async getType(): Promise<string> {
         if (this.listItemEntityTypeFullName) return this.listItemEntityTypeFullName;
-        const info = await this.client.fetch(`Web/Lists/GetByTitle('${encodeURIComponent(this.listTitle)}')?$select=ListItemEntityTypeFullName`);
+        const info = await this.client.fetch(`Web/Lists/GetByTitle('${encodeODataString(this.listTitle)}')?$select=ListItemEntityTypeFullName`);
         const value = typeof info === "object" && info
             ? (info as any).ListItemEntityTypeFullName
             : undefined;
@@ -201,9 +201,11 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      * @example
      * const item = await Tasks.getRecord(12);
      */
-    async getRecord(id: ListItemId | number, query?: string, options: GetRecordOptions = {}) {
+    async getRecord(id: ListItemId | number, query?: string | SPQuery<TFields, any>, options: GetRecordOptions = {}) {
+        // always select+expand — a bare fetch only serves [Field]Id numbers for references
+        const tableQuery = query instanceof SPQuery ? query.build() : query ?? defaultQuery(this);
         const wire = await this.client.getRecord(this.listTitle, id, {
-            query: query ?? defaultQuery(this), // always select+expand — a bare fetch only serves [Field]Id numbers for references
+            query: tableQuery,
             signal: options.signal,
         });
         if (!wire) return null;
@@ -214,21 +216,22 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
     }
 
     /**
-     * Retrieves and transforms list items via a raw OData v3 query string
-     * (`$filter=Status eq 'Done'`). The fluent/typed filter tree joins via
-     * `packages/core` later; for now the builder (`buildQuery`) is available.
+     * Retrieves and transforms list items. Pass a built `SPQuery` (or its
+     * `.build()` string) for the typed builder, a raw OData v3 query string
+     * (`$filter=Status eq 'Done'`), or nothing for the default projection.
      *
      * @example
      * const done = await Tasks.getRecords('$filter=IsDone eq true&$orderby=Title');
      */
-    async getRecords(query?: string, options: QueryRequestOptions = {}): Promise<InferRecord<TFields>[]> {
+    async getRecords(query?: string | SPQuery<TFields, any>, options: QueryRequestOptions = {}): Promise<InferRecord<TFields>[]> {
         // no query → default full projection (select all declared fields,
         // expand references with their carve-outs): a bare /Items response
         // only serves `[Field]Id` numbers for reference columns, so the
         // documented `{ id, title? }` / `{ id, name?, email? }` reads would
         // silently degrade to `{ id }` everywhere. Raw strings opt in as-is.
-        const tableQuery = query ?? defaultQuery(this);
-        return this.client.getRecords(this.listTitle, { query: tableQuery, signal: options.signal }).then((rows) => rows && rows.map((r) => this.transformItemFromSharePoint(r)));
+        const tableQuery = query instanceof SPQuery ? query.build() : query ?? defaultQuery(this);
+        const rows = await this.client.getRecords(this.listTitle, { query: tableQuery, signal: options.signal });
+        return rows.map((r) => this.transformItemFromSharePoint(r));
     }
 
     /**
@@ -325,7 +328,9 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         const record = await this.getRecord(id);
         const ref = (record as any)?.[this._documentFieldKey() ?? ""] as FileRef | undefined;
         if (!ref?.url) throw new Error(`Item ${id} has no file content (missing FileRef)`);
-        const pathname = new URL(ref.url).pathname;
+        // URL.pathname is percent-encoded; decode it so getFileContent's
+        // encodePath re-encodes exactly once (otherwise "%20" → "%2520").
+        const pathname = decodeURIComponent(new URL(ref.url).pathname);
         return this.client.getFileContent(pathname, options);
     }
 
@@ -442,7 +447,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         if (typeof url !== "string" || !url) {
             throw new Error("Files/Add response carried neither ListItemAllFields.Id nor ServerRelativeUrl");
         }
-        const byUrl = await this.client.fetch(`Web/GetFileByServerRelativeUrl('${encodeURIComponent(url)}')/ListItemAllFields?$select=Id`);
+        const byUrl = await this.client.fetch(`Web/GetFileByServerRelativeUrl('${encodePath(url)}')/ListItemAllFields?$select=Id`);
         const id = (byUrl as any)?.Id ?? (byUrl as any)?.d?.Id;
         if (typeof id !== "number" || !Number.isInteger(id)) {
             throw new Error("Uploaded file item id could not be resolved (ListItemAllFields missing)");
@@ -488,9 +493,9 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
      *
      * @example
      * const q = Documents.query()
-     *     .select((f) => [f.id, f.title, f.status])
+     *     .select((f) => ({ id: f.id, title: f.title, status: f.status }))
      *     .expand({ project: ["Id", "Title"] })
-     *     .where((f) => f.status.eq("Draft"))
+     *     .where((f) => eq(f.status, "Draft"))
      *     .orderBy((f) => f.modified, "desc")
      *     .top(50)
      *     .build();

@@ -24,4 +24,6 @@ type SyncTableContract = {
 
 type _satisfies = SharePointTable<Record<string, any>> extends SyncTableContract ? true : never;
 const _check: _satisfies = true;
-export const syncTableCompat = _check as true;
+// Compile-time only: keeps the structural assertion alive without leaking an
+// internal sentinel into the package's public API.
+void _check;

@@ -217,7 +217,7 @@ export class SharePointClient {
 
     /** The REST collection path for a list's items: `_api/web/Lists/GetByTitle('<title>')/Items`. */
     itemsPath(listTitle: string): string {
-        return `${this.api}/Web/Lists/GetByTitle('${encodeURIComponent(listTitle)}')/Items`;
+        return `${this.api}/Web/Lists/GetByTitle('${encodeODataString(listTitle)}')/Items`;
     }
 
     /**
@@ -358,7 +358,7 @@ export class SharePointClient {
     ) {
         const resource =
             `Web/GetFolderByServerRelativeUrl('${encodePath(folderServerRelativeUrl)}')` +
-            `/Files/Add(url='${encodeURIComponent(fileName)}',overwrite='${options.overwrite ?? true}')`;
+            `/Files/Add(url='${encodeODataString(fileName)}',overwrite='${options.overwrite ?? true}')`;
         return this.fetch(resource, {
             method: "POST",
             headers: { "Content-Type": "application/octet-stream" },
@@ -387,7 +387,7 @@ export class SharePointClient {
 
     /** The library/list root folder's server-relative URL (used for file upload). */
     async getRootFolder(listTitle: string): Promise<string> {
-        const folder = await this.fetch(`Web/Lists/GetByTitle('${encodeURIComponent(listTitle)}')/RootFolder?$select=ServerRelativeUrl`);
+        const folder = await this.fetch(`Web/Lists/GetByTitle('${encodeODataString(listTitle)}')/RootFolder?$select=ServerRelativeUrl`);
         const value = typeof folder === "object" && folder ? (folder as any).ServerRelativeUrl : undefined;
         if (typeof value !== "string" || !value) {
             throw new Error(`List "${listTitle}" did not return a RootFolder ServerRelativeUrl`);
@@ -498,11 +498,21 @@ function toVerboseBody(value: object): object {
 }
 
 /**
+ * Encodes a value for use inside an OData string literal: percent-encodes it
+ * and doubles single quotes (which `encodeURIComponent` leaves untouched).
+ * Without the quote doubling a list/file name like `O'Brien` terminates the
+ * `'...'` literal early and the request fails.
+ */
+export function encodeODataString(value: string): string {
+    return encodeURIComponent(value).replace(/'/g, "''");
+}
+
+/**
  * Percent-encodes each path segment but keeps `/` separators intact.
  * `encodeURIComponent` would destroy the server-relative path semantics.
  */
-function encodePath(serverRelativeUrl: string): string {
-    return serverRelativeUrl.split("/").map(encodeURIComponent).join("/");
+export function encodePath(serverRelativeUrl: string): string {
+    return serverRelativeUrl.split("/").map(encodeODataString).join("/");
 }
 
 /**

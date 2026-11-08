@@ -152,3 +152,19 @@ test("empty select builds the full default select; standalone spQuery(table) mir
     expect(spQuery(DocsT).top(3).build()).toContain("$top=3");
     expect(spQuery(DocsT).top(3).build()).toContain("FileRef");
 });
+
+test("expand() without select() keeps the full default projection (adds, never replaces)", () => {
+    const q = Docs().query().expand({ author: ["JobTitle"] }).build();
+    expect(q).toContain("$select=Id,Title,KO,Status,Created,Concurrence_Status_JSON,FileLeafRef,FileRef");
+    expect(q).toContain("Author/JobTitle");
+    expect(q).toContain("$expand=Author,Editor,Project,Source,Concur_x0020_Codes,Reviewers");
+});
+
+test("where: people/multi-lookup references filter on their derived Id property", () => {
+    const q = Docs().query()
+        .select((f) => ({ id: f.id }))
+        .where((f) => and(isNull(f.reviewers), eq(f.concurCodes, 7)))
+        .build();
+    expect(q).toContain("ReviewersId eq null");
+    expect(q).toContain("Concur_x0020_CodesId eq 7");
+});

@@ -139,7 +139,7 @@ export class DatetimeField<T extends Date | null = Date | null> extends FieldBas
  *
  * Without a schema the value stays `unknown`-ish (parsed as-is).
  */
-export class JsonField<T = any> extends FieldBase<T> {
+export class JsonField<T = any> extends FieldBase<T | null> {
     readonly schema?: StandardSchemaV1<T>;
 
     constructor(name: string, options: Omit<FieldOptions<T>,"schema"> & { schema?: StandardSchemaV1<T> } = {}) {
@@ -147,8 +147,8 @@ export class JsonField<T = any> extends FieldBase<T> {
         this.schema = options.schema;
     }
 
-    override fromSharePoint(wire: unknown): T {
-        if (wire == null || wire === "") return null as T;
+    override fromSharePoint(wire: unknown): T | null {
+        if (wire == null || wire === "") return null;
         let parsed: unknown;
         try {
             parsed = JSON.parse(wire as string);
@@ -156,7 +156,6 @@ export class JsonField<T = any> extends FieldBase<T> {
             throw new Error(`Invalid JSON in column "${this.name}"`);
         }
         if (!this.schema) return parsed as T;
-        if (wire === "" ) return null as T;
         // Standard-Schema validation: sync only (table transforms are sync).
         const result = this.schema["~standard"].validate(parsed);
         if (result instanceof Promise) {
@@ -168,7 +167,7 @@ export class JsonField<T = any> extends FieldBase<T> {
         return result.value as T;
     }
 
-    override toSharePoint(value: T): unknown {
+    override toSharePoint(value: T | null): unknown {
         if (value == null) return null;
         if (typeof value === "string") return value;
         return JSON.stringify(value);
@@ -577,7 +576,7 @@ export type Comment = {
  * - replies/likes are out of scope for the flat surface (reachable via
  *   `client.getComments` + `$expand=replies` raw).
  */
-export class CommentsField extends FieldBase<Comment[]> {
+export class CommentsField extends FieldBase<Comment[] | undefined> {
     /**
      * @param name informational only — comments have no wire name (no column,
      *   no `$select` presence). Defaults to `"Comments"`.
@@ -586,11 +585,11 @@ export class CommentsField extends FieldBase<Comment[]> {
         super(name, "comments");
     }
     /** Never part of an item body — comments ride their own REST surface. */
-    override toSharePoint(_value: Comment[]): undefined {
+    override toSharePoint(_value: Comment[] | undefined): undefined {
         return undefined;
     }
     /** Only reachable via the explicit comments channel, never the item wire. */
-    override fromSharePoint(_wire: unknown): Comment[] {
+    override fromSharePoint(_wire: unknown): Comment[] | undefined {
         throw new Error(`comments field "${this.name}" does not ride the item wire — read via table.getRecord or table.getComments`);
     }
 }

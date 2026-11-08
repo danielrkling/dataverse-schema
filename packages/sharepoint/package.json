@@ -5,7 +5,8 @@
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -35,10 +36,17 @@
   "bugs": {
     "url": "https://github.com/danielrkling/dataverse-schema/issues"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsdown",
     "prepack": "npm run build",
     "test": "vitest run",
+    "test:types": "vitest run --typecheck --typecheck.include=\"test/*typecheck*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
