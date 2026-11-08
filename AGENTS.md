@@ -6,6 +6,7 @@ npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript libra
 
 - `packages/dataverse` — the library itself (npm package `dataverse-schema`). The offline engine (`src/sync/`) is bundled into the `/sync` entry; `@tanstack/db` stays an optional peer used only by `/sync/tanstack`.
 - `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.Note: **no shared core** — keep the SharePoint package stand-alone (flat field/query surface).
+- `packages/filesystem` — `filesystem-schema`: File System Access API as a local JSON database. `FileSystemDatabase.open`/`initialize` verify a root-folder `fsdb.json` manifest (`version` + `brandId`, throws on mismatch); `FileSystemTable` stores one `<id>.json` per record under a table folder; `FileSystemSingleFileTable` stores a record array in `<table>/data.json`. Same field-factory/phantom-`T`/Standard-Schema conventions; no query builder (reads return plain arrays that callers filter/sort). Also stand-alone (no shared core).
 
 Deliberate design decision: **no shared core**. The SharePoint package is standalone with a flat field/query surface — duplicate, don't extract. Fields (`packages/sharepoint/src/fields.ts`) follow the Dataverse field-class conventions (camelCase factories `text`/`number`/`bool`/`json`/`date`/`datetime`/`choice`/`multiChoice`/`person`/`people`/`lookup`/`multiLookup`/`document`/`primaryKey`/`title`) but implement only what the SharePoint REST surface needs:
 - `date`/`datetime` read/write real `Date` instances (wire is ISO; invalid wire reads as null)
@@ -27,7 +28,7 @@ Don't add abstractions (filter trees, expand graphs, batch) to this package beyo
 Root scripts delegate into workspaces:
 
 ```bash
-# Build both packages (independent)
+# Build all packages (independent)
 npm run build
 
 # Dev server / browser-test bundle (run inside packages/dataverse)
@@ -123,6 +124,18 @@ test/
     harness/                   — runner, reporter, assert, fixtures, tables, config
     suites/                    — general, crud, query-odata, query-fetchxml, navigation, files-images, functions-actions, bulk, errors
     dist/browser-test.js       — Committed bundle loaded via raw-GitHub <script> snippet
+
+packages/filesystem/src/
+  index.ts                     — barrel + SyncTable compile-time compatibility check
+  database.ts                  — FileSystemDatabase (fsdb.json manifest verify/initialize), pickRoot, ensurePermission
+  handles.ts                   — IndexedDB handle persistence (save/load/list/delete), resolveRootHandle/tryLoadRootHandle, openStoredDatabase/tryOpenStoredDatabase
+  table.ts                     — FileSystemTable (one folder, one <id>.json per record) and FileSystemSingleFileTable (<table>/data.json); every table has <table>/.meta/table.json + .meta/trash + .meta/history; $rev/ifMatch, timestamps
+  fields.ts                    — text/number/bool/date/datetime/json/choice/multiChoice/primaryKey, InferRecord, phantom T, Standard-Schema validation
+  errors.ts                    — FileSystemStorageError + FileSystemConflictError, DOMException/Node error classification (permission/locked/read-only/quota/io/conflict/...)
+  retry.ts                     — StorageRetryPolicy + bounded backoff/jitter (reads opt-in default-on, writes/deletes opt-in)
+  storage.ts                   — File System Access handle helpers, safe segment/record file-name codec, manifest constant (fsdb.json), structured storage errors
+  types.ts                     — FsDirectoryHandle/FsFileHandle structural types, manifest/options/trash/history/revision types
+  watch.ts                     — Chromium FileSystemObserver wrapper + record watch event types
 ```
 
 ## Code Style Guidelines

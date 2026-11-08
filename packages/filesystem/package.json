@@ -1,0 +1,54 @@
+{
+  "name": "filesystem-schema",
+  "version": "0.1.0",
+  "description": "A schema library for using the File System Access API as a local database — folders as tables, JSON files as records",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "keywords": [
+    "filesystem",
+    "file-system-access-api",
+    "schema",
+    "database",
+    "json",
+    "local-first"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danielrkling/dataverse-schema.git",
+    "directory": "packages/filesystem"
+  },
+  "author": "LeviEyal",
+  "license": "MIT",
+  "homepage": "https://github.com/danielrkling/dataverse-schema/tree/main/packages/filesystem#readme",
+  "bugs": {
+    "url": "https://github.com/danielrkling/dataverse-schema/issues"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "npm run build",
+    "test": "vitest run",
+    "test:types": "vitest run --typecheck --typecheck.include=\"test/*typecheck*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@standard-schema/spec": "^1.1.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "tsdown": "^0.22.14",
+    "valibot": "^1.4.2",
+    "vitest": "^3.1.1"
+  }
+}

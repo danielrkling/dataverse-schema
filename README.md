@@ -7,6 +7,7 @@ library documentation.
 | --- | --- |
 | `packages/dataverse` (`dataverse-schema`) | Dataverse Web API client, schema/field system, OData + FetchXML query builders. Also ships the offline engine (`dataverse-schema/sync`) and TanStack DB adapters (`dataverse-schema/sync/tanstack`) as subpath entries |
 | `packages/sharepoint` (`sharepoint-schema`) | SharePoint list/file access via the legacy `_api/web` REST API (OData v3): verbose-JSON client (Bearer / form-digest auth), schema-driven `SharePointTable` with MERGE/DELETE + etag concurrency, offline-engine-compatible |
+| `packages/filesystem` (`filesystem-schema`) | File System Access API as a local database: root-folder `version`/`brandId` manifest verification, schema-driven folder tables (one JSON file per record) and single-file tables |
 
 ## Commands
 

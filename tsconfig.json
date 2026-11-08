@@ -2,6 +2,8 @@
   "compilerOptions": { "composite": true, "noEmit": true },
   "include": [],
   "references": [
+    { "path": "./packages/filesystem" },
+    { "path": "./packages/sharepoint" },
     { "path": "./packages/dataverse" }
   ]
 }
