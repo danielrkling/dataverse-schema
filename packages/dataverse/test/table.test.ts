@@ -267,8 +267,9 @@ test("appendProperties adds new fields", () => {
 
 // --- Keys ---
 
-test("getAlternateKeys builds logical-name pairs", () => {
-  expect(Account.getAlternateKeys({ name: "Acme" })).toBe("name=Acme")
+test("getAlternateKeys builds quoted OData literal pairs", () => {
+  expect(Account.getAlternateKeys({ name: "Acme" })).toBe("name='Acme'")
+  expect(Account.getAlternateKeys({ name: "O'Brien" })).toBe("name='O''Brien'")
 })
 
 test("getPrimaryId extracts primary key value", () => {
@@ -277,6 +278,22 @@ test("getPrimaryId extracts primary key value", () => {
 })
 
 // --- Navigation property tables ---
+
+test("associateRecord dispatches collection navigations through POST", async () => {
+  const calls: string[] = []
+  const put = client.associateRecord
+  const post = client.associateCollectionRecord
+  client.associateRecord = async () => { calls.push("PUT"); return "child" as any }
+  client.associateCollectionRecord = async () => { calls.push("POST"); return "child" as any }
+  try {
+    await Account.associateRecord("primaryContact", "parent", "child" as any)
+    await Account.associateRecord("contacts", "parent", "child" as any)
+    expect(calls).toEqual(["PUT", "POST"])
+  } finally {
+    client.associateRecord = put
+    client.associateCollectionRecord = post
+  }
+})
 
 test("lookup property exposes related table lazily", () => {
   expect(Account.fields.primaryContact.table).toBe(Contact)

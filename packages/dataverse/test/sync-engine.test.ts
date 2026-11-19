@@ -107,6 +107,94 @@ test("engine flushes queued mutations through stub tables", async () => {
     await e.close();
 });
 
+test("engine creates and uses custom collection cache stores", async () => {
+    const e = await makeEngine([])
+    await e.ensureCollectionStore("filtered-view", "id")
+    const db = await e.getDB()
+    expect(db.objectStoreNames.contains("filtered-view")).toBe(true)
+    await db.put("filtered-view", { id: "row-1", name: "cached" })
+    await expect(db.getAll("filtered-view")).resolves.toEqual([{ id: "row-1", name: "cached" }])
+    await e.close()
+})
+
+test("unknown backend tables move mutations to errored instead of deleting them", async () => {
+    stubNavigatorOnline()
+    const e = await makeEngine([])
+    await e.ensureCollectionStore("ghost", "id")
+    await e.queueMutations([{
+        id: "ghost-1", type: "update", key: "row-1", value: { id: "row-1" },
+        changes: { name: "x" }, entitySetName: "ghost", collectionId: "ghost",
+        timestamp: 1, sequence: e.nextSequence(), attempts: 0,
+    }])
+    await e.flushQueue()
+    expect(await e.getQueueCount()).toBe(0)
+    expect(await e.getErroredMutations()).toEqual([
+        expect.objectContaining({ id: "ghost-1", entitySetName: "ghost" }),
+    ])
+    await e.close()
+})
+
+test("a delayed mutation does not block later due mutations and keeps a retry timer", async () => {
+    const state: StubState = { todos: { "row-good": { id: "row-good", name: "old", _etag: "w/1" } } }
+    stubNavigatorOnline()
+    const e = await makeEngine([stubTable("todos", state)], { retryBaseDelay: 1000, retryMaxDelay: 1000 })
+    const table = e.tables.get("todos") as SyncTable
+    const update = table.updateRecord.bind(table)
+    table.updateRecord = async (id, value, options) => {
+        if (id === "bad") throw new Error("temporary network failure")
+        return update(id, value, options)
+    }
+    try {
+        await e.queueMutations([{
+            id: "bad-1", type: "update", key: "bad", value: { id: "bad", name: "bad" },
+            changes: { name: "bad" }, entitySetName: "todos", timestamp: 1,
+            sequence: e.nextSequence(), attempts: 0,
+        }])
+        await e.flushQueue()
+
+        await e.queueMutations([{
+            id: "good-1", type: "update", key: "row-good", value: { id: "row-good", name: "good" },
+            changes: { name: "good" }, entitySetName: "todos", timestamp: 2,
+            sequence: e.nextSequence(), attempts: 0,
+        }])
+        await e.flushQueue()
+
+        expect(state.todos["row-good"]).toMatchObject({ name: "good" })
+        expect(await e.getQueueCount()).toBe(1)
+        expect((e as any).retryTimer).toBeDefined()
+    } finally {
+        e.close()
+    }
+})
+
+test("etag cache is scoped by table as well as record key", async () => {
+    const tableA = stubTable("a", {})
+    const tableB = stubTable("b", {})
+    const seen: Array<{ table: string; ifMatch?: string }> = []
+    for (const [name, table] of [["a", tableA], ["b", tableB]] as const) {
+        table.updateRecord = async (id, value, options) => {
+            seen.push({ table: name, ifMatch: options?.ifMatch })
+            return { id, ...value, _etag: "w/2" }
+        }
+    }
+    const e = await makeEngine([tableA, tableB])
+    ;(e as any).keyEtags.set("a\u0000" + "1", 'W/"A"')
+    ;(e as any).keyEtags.set("b\u0000" + "1", 'W/"B"')
+    try {
+        await e.queueMutations([
+            { id: "ma", type: "update", key: "1", value: { id: "1", name: "A" }, changes: { name: "A" }, entitySetName: "a", timestamp: 1, sequence: e.nextSequence(), attempts: 0 },
+            { id: "mb", type: "update", key: "1", value: { id: "1", name: "B" }, changes: { name: "B" }, entitySetName: "b", timestamp: 2, sequence: e.nextSequence(), attempts: 0 },
+        ])
+        await e.flushQueue()
+        expect(seen).toEqual([
+            { table: "a", ifMatch: 'W/"A"' },
+            { table: "b", ifMatch: 'W/"B"' },
+        ])
+    } finally {
+        e.close()
+    }
+})
+
 // --- retry & errored store ---
 
 test("transient failures exhaust the budget then land in the errored store", async () => {
@@ -118,10 +206,16 @@ test("transient failures exhaust the budget then land in the errored store", asy
         { id: "m1", type: "insert", key: "row-1", value: { id: "row-1", name: "a" }, changes: {}, entitySetName: "todos", timestamp: 1, sequence: e.nextSequence(), attempts: 0 },
     ]);
     await e.flushQueue();
-    // backoff delay is 1ms; wait for the self-healing retry flush to run
-    await new Promise((r) => setTimeout(r, 30));
+    // backoff delay is 1ms; wait for the self-healing retry flush to run.
+    // Poll instead of assuming a fixed delay so a loaded CI worker cannot
+    // observe the queue between the timer firing and the transaction committing.
+    const deadline = Date.now() + 1000;
+    let errored = await e.getErroredMutations();
+    while (errored.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+        errored = await e.getErroredMutations();
+    }
 
-    const errored = await e.getErroredMutations();
     expect(errored).toHaveLength(1);
     expect(errored[0].id).toBe("m1");
 

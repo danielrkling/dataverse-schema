@@ -73,15 +73,16 @@ test("updateRecord: blank-string $etag counts as absent → unconditional If-Mat
         calls.push({ headers: (init.headers ?? {}) as Record<string, string> });
         return new Response("{}", { status: 200, headers: { "Content-Type": "application/json;odata=verbose;charset=utf-8" } });
     }));
+    const mergeHeaders = () => calls.filter((c) => c.headers["X-HTTP-Method"] === "MERGE").map((c) => c.headers);
     await Types.updateRecord(12, { title: "x", $etag: "" } as any);
-    expect(calls[0]!.headers).toMatchObject({ "If-Match": "*" });
+    expect(mergeHeaders()[0]).toMatchObject({ "If-Match": "*" });
 
     // explicit blank ifMatch behaves identically:
     await Types.updateRecord(12, { title: "x" }, { ifMatch: "   " });
-    expect(calls[1]!.headers).toMatchObject({ "If-Match": "*" });
+    expect(mergeHeaders()[1]).toMatchObject({ "If-Match": "*" });
 
     // a real etag still passes through:
     await Types.updateRecord(12, { title: "x", $etag: '"7"' } as any);
-    expect(calls[2]!.headers).toMatchObject({ "If-Match": '"7"' });
+    expect(mergeHeaders()[2]).toMatchObject({ "If-Match": '"7"' });
     vi.unstubAllGlobals();
 });

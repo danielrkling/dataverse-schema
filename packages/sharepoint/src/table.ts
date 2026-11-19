@@ -10,7 +10,7 @@
  */
 
 import { SharePointClient, encodeODataString, encodePath, type QueryRequestOptions, type RequestOptions, type GetRecordOptions, type UpsertRecordOptions, type DeleteRecordOptions } from "./client";
-import { CommentsField, FieldBase, FileField, type Comment, type CommentMention, type FileRef, type InferRecord, type TransformContext } from "./fields";
+import { CommentsField, FieldBase, FileField, JsonField, type Comment, type CommentMention, type FileRef, type InferRecord, type TransformContext } from "./fields";
 import { SPQuery, spQuery, defaultQuery, type QueryProxy } from "./query";
 import type { ListItemId, GenericProperties } from "./types";
 
@@ -103,7 +103,7 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
                 if (!fileRef) {
                     throw new Error(`document field "${tsKey}" read no file channel on the item — document fields require a document library (FileLeafRef/FileRef absent)`);
                 }
-                out[tsKey] = fileRef;
+                out[tsKey] = field.validate(fileRef, `field "${tsKey}" in list "${this.listTitle}"`);
                 continue;
             }
             if (field instanceof CommentsField) {
@@ -113,7 +113,12 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
                 // leave it absent rather than surfacing a hollow `[]`.
                 continue;
             }
-            out[tsKey] = field.fromSharePoint(wire[field.name]);
+            const value = field.fromSharePoint(wire[field.name]);
+            // JsonField validates after parsing in fromSharePoint; all other
+            // field kinds validate their transformed value here.
+            out[tsKey] = field instanceof JsonField || value == null
+                ? value
+                : field.validate(value, `field "${tsKey}" in list "${this.listTitle}"`);
         }
         const meta = wire.__metadata as ItemMetadata | undefined;
         if (meta) {
@@ -130,7 +135,10 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
         for (const [tsKey, raw] of Object.entries(value)) {
             const field = (this.fields as Record<string, FieldBase<any>>)[tsKey];
             if (!field) continue; // unknown/$-keys (e.g. $etag) are metadata-only
-            if (field instanceof FileField) continue; // content flows through afterSave, never the item body
+            if (field instanceof FileField) {
+                if (raw != null) field.validate(raw, `field "${tsKey}" in list "${this.listTitle}"`);
+                continue; // content flows through afterSave, never the item body
+            }
             if (field instanceof CommentsField) {
                 // Comments are append-only on their own REST surface; the item
                 // body can never carry them. A spread of a full getRecord
@@ -142,7 +150,10 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
                 continue;
             }
             const fieldWithWrite = field as FieldBase<any>;
-            wire[fieldWithWrite.writeName] = fieldWithWrite.toSharePoint(raw);
+            const validated = raw == null
+                ? raw
+                : fieldWithWrite.validate(raw, `field "${tsKey}" in list "${this.listTitle}"`);
+            wire[fieldWithWrite.writeName] = fieldWithWrite.toSharePoint(validated);
         }
         return wire;
     }
@@ -305,8 +316,11 @@ export class SharePointTable<TFields extends Record<string, FieldBase<any>>> {
             ...this.transformValueToSharePoint(value as Record<string, unknown>),
         }, { ifMatch, signal: options.signal });
         await this._afterSave({ table: this, client: this.client, recordId: id }, value);
-        // MERGE has no return representation; sync-engine etag bookkeeping
-        // fetches freshness itself (see dataverse-schema/sync).
+        // MERGE has no return representation. Re-read so callers and the sync
+        // engine receive the authoritative record and its fresh etag.
+        const record = await this.getRecord(id, undefined, { signal: options.signal });
+        if (!record) throw new Error(`Item ${id} was not found after update in list "${this.listTitle}"`);
+        return record;
     }
 
     /**

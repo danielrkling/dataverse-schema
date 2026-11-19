@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. It provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations. Ships as an ES module. The root entry has no offline/TanStack API; those live behind the `dataverse-schema/sync` and `dataverse-schema/sync/tanstack` subpath entries of the same package.
+npm-workspaces monorepo. `dataverse-schema` is a strongly-typed TypeScript library for working with the Microsoft Dataverse Web API. It provides schema definitions, type inference, query builders (OData + FetchXML), validation (via [valibot](https://valibot.dev/)), and CRUD operations. Ships as an ES module. The root entry has no offline/TanStack/provisioning API; those live behind the `dataverse-schema/provision`, `dataverse-schema/sync` and `dataverse-schema/sync/tanstack` subpath entries of the same package.
 
-- `packages/dataverse` — the library itself (npm package `dataverse-schema`). The offline engine (`src/sync/`) is bundled into the `/sync` entry; `@tanstack/db` stays an optional peer used only by `/sync/tanstack`.
+- `packages/dataverse` — the library itself (npm package `dataverse-schema`). The offline engine (`src/sync/`) is bundled into the `/sync` entry; the additive metadata provisioner (`src/provision/`) is bundled into the `/provision` entry; `@tanstack/db` stays an optional peer used only by `/sync/tanstack`.
 - `packages/sharepoint` — `sharepoint-schema`: SharePoint list/library access over the **legacy `_api/web` REST API (OData v3, verbose JSON)**. Client (`SharePointClient`, Bearer/form-digest auth, `d.__next` pagination), `SharePointTable` (light field classes + `InferRecord`, MERGE/DELETE + `If-Match` over `__metadata.etag`), and a compile-time `SyncTable` satisfaction check so the generic offline engine works over lists. Structurally satisfies the sync engine via `entitySetName` = list title and `$etag` hoisted from `__metadata.etag`.Note: **no shared core** — keep the SharePoint package stand-alone (flat field/query surface).
 - `packages/filesystem` — `filesystem-schema`: File System Access API as a local JSON database. `FileSystemDatabase.open`/`initialize` verify a root-folder `fsdb.json` manifest (`version` + `brandId`, throws on mismatch); `FileSystemTable` stores one `<id>.json` per record under a table folder; `FileSystemSingleFileTable` stores a record array in one JSON file. Same field-factory/phantom-`T`/Standard-Schema conventions; no query builder (reads return plain arrays that callers filter/sort). Also stand-alone (no shared core).
 
@@ -92,6 +92,15 @@ packages/dataverse/src/
       field-ref.ts             — FieldRef type used by filter + aggregation expressions
       proxy.ts                 — Proxy helpers for type-safe field references in query builders
     path.ts                    — FieldPath / path resolution used across query builders
+  provision/                   — additive metadata provisioning (the `dataverse-schema/provision` entry)
+    index.ts                   — public barrel: planProvision / provision / formatProvisionPlan + internals
+    types.ts                   — plan/result/metadata-reader-writer types (no runtime deps)
+    resolve.ts                 — ResolvedTable/ResolvedColumn from live table+field definitions
+                                 (prefix inference, humanized display names, defaults, validation)
+    metadata.ts                — pure Web API payload builders (EntityDefinitions / Attributes / RelationshipDefinitions)
+    plan.ts                    — buildProvisionPlan: metadata read → create/skip/conflict diff
+    apply.ts                   — applyProvisionPlan: tables → columns → lookups → one publish
+    client.ts                  — DataverseProvisionClient over DataverseClient (reads + POST-only writes)
   sync/                        — offline engine + Dataverse adapter (the `dataverse-schema/sync` entry)
     index.ts                   — barrel: engine, Dataverse adapter, classifiers/error interpretation
     engine.ts                  — generic SyncEngine over a SyncTable interface (durable IndexedDB
@@ -119,11 +128,13 @@ test/
   sync.test.ts                 — Dataverse sync integration: queue/flush/conflict/retry
   sync-engine.test.ts          — Generic engine tests against stub SyncTables
   tanstack-db.test.ts          — TanStack DB adapter (serializeMutation, conflicts, notifications)
-  package-entries.test.ts      — Root vs `/sync` vs `/sync/tanstack` export boundary
+  provision.test.ts            — Provisioner: resolution, payload builders, plan/apply, Web API adapter
+  package-entries.test.ts      — Root vs `/provision` vs `/sync` vs `/sync/tanstack` export boundary
   browser-suites.test.ts       — Browser suite discovery/shape checks
   types-typecheck.test.ts      — Type-level checks for Infer/types/table algebra
   odata-typecheck.test.ts      — Type-level checks for OData builder inference
   fetchXml-typecheck.test.ts   — Type-level checks for FetchXML builder
+  provision-typecheck.test.ts  — Type-level checks for table/field provisioning metadata
   browser/                     — Live-org integration harness (see test/browser/README.md)
     main.ts                    — Entry: config → tables → suites → reporter UI
     harness/                   — runner, reporter, assert, fixtures, tables, config
@@ -136,10 +147,11 @@ packages/filesystem/src/
   index.ts                     — barrel + SyncTable compile-time compatibility check
   database.ts                  — FileSystemDatabase (fsdb.json manifest verify/initialize), pickRoot, ensurePermission
   handles.ts                   — IndexedDB handle persistence (save/load/list/delete), resolveRootHandle/tryLoadRootHandle, openStoredDatabase/tryOpenStoredDatabase
-  table.ts                     — FileSystemTable (one folder, one <id>.json per record) and FileSystemSingleFileTable (<table>/data.json); every table has <table>/.meta/table.json + .meta/trash + .meta/history; $rev/ifMatch, timestamps
+  table.ts                     — FileSystemTable (one folder, one <id>.json per record) and FileSystemSingleFileTable (<table>/data.json); every table has <table>/.meta/table.json + .meta/trash + .meta/history; $rev/ifMatch, timestamps; read/check/write mutations serialized per record (per data file for single-file)
   fields.ts                    — text/number/bool/date/datetime/json/choice/multiChoice/primaryKey, InferRecord, phantom T, Standard-Schema validation
   errors.ts                    — FileSystemStorageError + FileSystemConflictError, DOMException/Node error classification (permission/locked/read-only/quota/io/conflict/...)
   retry.ts                     — StorageRetryPolicy + bounded backoff/jitter (reads opt-in default-on, writes/deletes opt-in)
+  locks.ts                     — Web Locks (cross-tab) + in-process fallback serialization for read/check/write mutations
   storage.ts                   — File System Access handle helpers, safe segment/record file-name codec, manifest constant (fsdb.json), structured storage errors
   types.ts                     — FsDirectoryHandle/FsFileHandle structural types, manifest/options/trash/history/revision types
   watch.ts                     — Chromium FileSystemObserver wrapper + record watch event types
@@ -158,8 +170,8 @@ packages/filesystem/src/
 ### Imports
 - ES module imports (`import`/`export`), never CommonJS
 - Use relative paths with `./` prefix for local imports
-- Three barrels match the three published entries: `src/index.ts` (core), `src/sync/index.ts` (`dataverse-schema/sync`) and `src/sync/tanstack.ts` (`dataverse-schema/sync/tanstack`). The root must never re-export sync code (there is a test for this)
-- When importing from the library in tests, use `"../src"`, `"../src/sync"` or `"../src/sync/tanstack"`
+- Four barrels match the four published entries: `src/index.ts` (core), `src/provision/index.ts` (`dataverse-schema/provision`), `src/sync/index.ts` (`dataverse-schema/sync`) and `src/sync/tanstack.ts` (`dataverse-schema/sync/tanstack`). The root must never re-export sync or provision code (there is a test for this)
+- When importing from the library in tests, use `"../src"`, `"../src/provision"`, `"../src/sync"` or `"../src/sync/tanstack"`
 - `import type` is used for type-only imports in newer modules; older modules use plain imports. Match the surrounding file.
 - Import order: group by external deps, then local modules. No enforced sorting.
 
@@ -192,7 +204,8 @@ packages/filesystem/src/
 - Validation uses [valibot](https://valibot.dev/); validation errors surface as valibot issues, not the Standard Schema V1 shape
 
 ### Classes and Patterns
-- **DataverseTable<TProperties>** is the central class. It is constructed with an options object: `{ client, entitySetName, logicalName, fields, schema?, primaryKey? }`. It provides `schema`, `getDefault()`, CRUD methods (`getRecord`, `getRecords`, `createRecord`, `updateRecord`, `upsertRecord`, `deleteRecord`, `activateRecord`, `deactivateRecord`), query building (`getRecords` with options, or `fetchOdata`/`fetchXml`), navigation property handling, actions/functions, and bulk operations (`createMultiple`, `updateMultiple`, `deleteMultiple`). There is **no** `table()` factory function — always use `new DataverseTable({...})`.
+- **DataverseTable<TProperties>** is the central class. It is constructed with an options object: `{ client, entitySetName, logicalName, fields, schema?, primaryKey?, schemaName?, displayName?, displayCollectionName?, description?, ownership?, primaryName? }`. It provides `schema`, `getDefault()`, CRUD methods (`getRecord`, `getRecords`, `createRecord`, `updateRecord`, `upsertRecord`, `deleteRecord`, `activateRecord`, `deactivateRecord`), query building (`getRecords` with options, or `fetchOdata`/`fetchXml`), navigation property handling, actions/functions, and bulk operations (`createMultiple`, `updateMultiple`, `deleteMultiple`). There is **no** `table()` factory function — always use `new DataverseTable({...})`.
+- **Definition metadata is first-class**: `displayName` / `description` are `FieldOptions` properties on every field kind (labels for UIs and for Dataverse `DisplayName`/`Description`), and `DataverseTable` takes `displayName`/`displayCollectionName`/`description`/`ownership`/`schemaName`/`primaryName`. Kind-specific options stay on their kind: `string({ maxLength, format, autoNumberFormat })`, `number({ columnType: "integer"|"bigint"|"decimal"|"money", minValue, maxValue, precision })`, `boolean({ trueLabel, falseLabel })`, `json({ maxLength })`, `file({ maxSizeInKB })`, `image({ maxSizeInKB, canStoreFullImage, primary })`, `lookup/lookupId({ relationshipName, targetAttribute })`. Fields expose them as readonly properties, plus `getRequired()` / `getSystem()` / `getReadOnly()`. `required: true` is validation-only at runtime and becomes `RequiredLevel: ApplicationRequired` when provisioning.
 
 - **Mutation options**: `createRecord`, `updateRecord`, `upsertRecord`, and `deleteRecord` accept a trailing `MutationOptions` object (`{ ifMatch?, ifNoneMatch?, signal? }`). `updateRecord` defaults `ifMatch` to `"*"` when omitted (updates only if the record exists). The client layer keeps HTTP-verb method names (`postRecord`, `patchRecord`, `deleteRecord`); `patchRecord` takes `ifMatch`/`ifNoneMatch` (so it can act as update, upsert, or idempotent create depending on the headers), while `deleteRecord`/`updatePropertyValue` take `ifMatch` only, and `getRecord` takes `ifNoneMatch` (conditional GET).
 - **Field classes** extend `FieldBase<T>`. They override `getDefault()`, `transformValueFromDataverse()`, `transformValueToDataverse()`, and may define `afterSave()`. Nullability is a per-kind generic (`NumberField<Nullable>` etc.), not a wrapper: null policy is centralized in `FieldBase.nullToRead()` — nullable kinds resolve a wire `null` to `null`, non-nullable kinds fail fast.
@@ -207,6 +220,7 @@ packages/filesystem/src/
 - **Lazy initialization**: Navigation properties use `#getTable` thunk + lazy `#table` cache (see `LookupProperty`, `CollectionProperty`)
 - **Proxy pattern**: OData and FetchXML builders use proxy objects (`ODataFieldProxy`, `FieldProxy`) for type-safe field references via `FieldRef`
 - **Aggregation helpers** (`groupby`, `sum`, `min`, `max`, `average`, `count`) are re-exported from `query/odata/builder.ts` (and therefore from the package root) so they can be used inside `.apply()` callbacks
+- **Provisioning** (`dataverse-schema/provision`): the table/field definitions are the source of truth — there is no separate schema document. `planProvision(client, tables)` reads `EntityDefinitions` and diffs it into create/skip/conflict items; `provision(...)` applies the plan when there are no conflicts; `applyProvisionPlan` (or `buildProvisionPlan` + a custom writer) keeps the two halves separable; `publishTables(client, names)` retries the publish step alone. Apply order is tables → columns → lookups → one `PublishXml`, and it only ever POSTs (plus one PATCH when promoting a freshly created primary image). Every request runs under `options.signal` + a timeout (`timeoutMs` 60s, `publishTimeoutMs` 180s); reads retry 429/5xx/network failures (`readRetries`, honoring `Retry-After`), writes never retry. Definitions are collision-checked before any request (duplicate logical names, schema names, entity set names, primary-name/column clashes). Existing tables are skipped after validating the declared `entitySetName` and primary key (a mismatch is a conflict because every request would target the wrong URL); a missing primary name on an existing table is a conflict because Dataverse cannot add one later. Conflicts also include a differing `AttributeTypeName` and a primary image that differs from the org's. `primaryName` is required to create a table; only logical names with a customization prefix can be created. `number()` provisions as `decimal` unless `columnType` says otherwise. String formats are normalized/validated (`email` → `Email`). File/image columns become `FileAttributeMetadata`/`ImageAttributeMetadata` with `MaxSizeInKB` (defaults 32768 / 10240); `image({ primary: true })` is patched after creation because Dataverse rejects `IsPrimaryImage` at create time, and an existing non-primary image is a conflict (never patched). Lookups reference the target definition's declared primary key (`activityid` for an appointment), not a `<logicalname>id` guess. N:N (`collection`/`collectionIds`), `list()` and dynamic `multiChoice()` (global option sets) are reported as warnings; `primaryKey`, `system` and `formatted` are skipped silently. Display names default to the humanized logical name minus the publisher prefix (`nnsyc200_due_date` → "Due Date").
 
 ### Validation
 - All fields carry a [valibot](https://valibot.dev/) schema (`ValidationSchema<T>`)

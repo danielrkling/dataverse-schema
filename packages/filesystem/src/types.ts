@@ -49,9 +49,10 @@ export type ReadOptions = {
 
 export type WriteOptions = ReadOptions & {
   /**
-   * Accepted for parity with the other schema packages' mutation options.
-   * File-backed records have no server etag, so this value is currently
-   * ignored.
+   * Optimistic-concurrency revision (`$rev`). The mutation is rejected with
+   * `FileSystemConflictError` when it no longer matches; `"*"` bypasses the check.
+   * The read/check/write sequence is serialized per record (or per data file for
+   * single-file tables).
    */
   ifMatch?: string;
 };

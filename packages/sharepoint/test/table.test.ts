@@ -64,6 +64,30 @@ test("table.fromSharePoint maps fields and hoists __metadata as $-keys", () => {
     });
 });
 
+test("field Standard Schemas validate and transform reads and writes", () => {
+    const uppercase = {
+        "~standard": {
+            version: 1,
+            vendor: "test",
+            validate(value: unknown) {
+                return typeof value === "string" && value.length >= 2
+                    ? { value: value.toUpperCase() }
+                    : { issues: [{ message: "expected at least two characters" }] };
+            },
+        },
+    } as any;
+    const Tasks = new SharePointTable({
+        client,
+        listTitle: "Tasks",
+        fields: { id: primaryKey(), title: text("Title", { schema: uppercase }) },
+    });
+
+    expect(Tasks.transformItemFromSharePoint({ Id: 1, Title: "ok" }).title).toBe("OK");
+    expect(Tasks.transformValueToSharePoint({ title: "go" }).Title).toBe("GO");
+    expect(() => Tasks.transformItemFromSharePoint({ Id: 1, Title: "x" })).toThrow("failed schema validation");
+    expect(() => Tasks.transformValueToSharePoint({ title: "x" })).toThrow("failed schema validation");
+});
+
 test("table.toSharePoint maps back and skips $-keys", () => {
     const Tasks = makeTable();
     const wire = Tasks.transformValueToSharePoint({ title: "abc", done: true, n: 4, $etag: '"9"' } as any);
@@ -88,7 +112,9 @@ test("createRecord builds the verbose POST body with __metadata.type", async () 
 test("updateRecord builds MERGE with If-Match from the record's $etag", async () => {
     const Tasks = makeTable();
     const spy = vi.spyOn(Tasks.client, "mergeRecord").mockResolvedValue(undefined);
-    await Tasks.updateRecord(12, { done: true, $etag: '"7"' } as any);
+    vi.spyOn(Tasks.client, "getRecord").mockResolvedValue({ Id: 12, Title: "x", IsDone: true, __metadata: { etag: '"7"' } });
+    const updated = await Tasks.updateRecord(12, { done: true, $etag: '"7"' } as any);
+    expect(updated).toMatchObject({ id: 12, done: true, $etag: '"7"' });
     const [, id, value, options] = spy.mock.lastCall!;
     expect(id).toBe(12);
     expect(value).toEqual({
@@ -124,6 +150,7 @@ test("updateRecord etag precedence: explicit ifMatch > $etag; delete passes If-M
     const Tasks = makeTable();
     const mergeSpy = vi.spyOn(Tasks.client, "mergeRecord").mockResolvedValue(undefined);
     const deleteSpy = vi.spyOn(Tasks.client, "deleteRecord").mockResolvedValue("7");
+    vi.spyOn(Tasks.client, "getRecord").mockResolvedValue({ Id: 7, IsDone: true, __metadata: { etag: '"2"' } });
 
     // explicit option wins over the record snapshot's $etag
     await Tasks.updateRecord(7, { done: true, $etag: '"2"' } as any, { ifMatch: '"9"' });

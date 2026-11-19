@@ -83,6 +83,33 @@ test("itemsPath URL-encodes the list title", () => {
     );
 });
 
+test("unwrapVerbose preserves __next without changing enumerable rows", () => {
+    const rows = unwrapVerbose({ d: { results: [{ Id: 1 }], __next: "https://x/page2" } });
+    expect(rows).toEqual([{ Id: 1 }]);
+    expect((rows as any).__next).toBe("https://x/page2");
+});
+
+test("getRecords follows verbose __next pagination", async () => {
+    const client = new SharePointClient({ url: "https://x", token: "T" });
+    let page = 0;
+    stubFetch(() => jsonResponse(page++ === 0
+        ? { d: { results: [{ Id: 1 }], __next: "https://x/page2" } }
+        : { d: { results: [{ Id: 2 }] } }));
+
+    expect(await client.getRecords("Tasks")).toEqual([{ Id: 1 }, { Id: 2 }]);
+    expect(mock).toHaveBeenCalledTimes(2);
+});
+
+test("deleteRecord tunnels DELETE through POST with an optional If-Match", async () => {
+    const client = new SharePointClient({ url: "https://x", token: "T" });
+    stubFetch(() => new Response(null, { status: 204 }));
+    await client.deleteRecord("Tasks", 7, { ifMatch: '"2"' });
+    const [, init] = lastFetch();
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["X-HTTP-Method"]).toBe("DELETE");
+    expect((init.headers as Record<string, string>)["If-Match"]).toBe('"2"');
+});
+
 // --- custom fetch option ---
 
 test("options.fetch is used instead of the global fetch", async () => {

@@ -60,6 +60,19 @@ export class FieldBase<T> {
     toSharePoint(value: T): unknown {
         return value;
     }
+
+    /** Validates a local value through the field's synchronous Standard Schema. */
+    validate(value: unknown, label = `field "${this.name}"`): T {
+        if (!this.options.schema || value == null) return value as T;
+        const result = this.options.schema["~standard"].validate(value);
+        if (result instanceof Promise) {
+            throw new Error(`${label} uses an async schema — provide a synchronous one`);
+        }
+        if (result.issues) {
+            throw new Error(`${label} failed schema validation (${result.issues.length} issue${result.issues.length === 1 ? "" : "s"})`);
+        }
+        return result.value as T;
+    }
 }
 
 export class StringField<T extends string = string> extends FieldBase<T> {
@@ -156,15 +169,7 @@ export class JsonField<T = any> extends FieldBase<T | null> {
             throw new Error(`Invalid JSON in column "${this.name}"`);
         }
         if (!this.schema) return parsed as T;
-        // Standard-Schema validation: sync only (table transforms are sync).
-        const result = this.schema["~standard"].validate(parsed);
-        if (result instanceof Promise) {
-            throw new Error(`json column "${this.name}" uses an async schema — provide a synchronous one`);
-        }
-        if (result.issues) {
-            throw new Error(`json column "${this.name}" failed schema validation (${result.issues.length} issue${result.issues.length === 1 ? "" : "s"})`);
-        }
-        return result.value as T;
+        return this.validate(parsed, `json column "${this.name}"`);
     }
 
     override toSharePoint(value: T | null): unknown {

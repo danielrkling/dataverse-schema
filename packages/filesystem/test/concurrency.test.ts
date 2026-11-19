@@ -102,6 +102,36 @@ test("single-file tables use a file-level revision", async () => {
     .resolves.toMatchObject({ title: "A2" });
 });
 
+test("concurrent conditional updates serialize and one writer conflicts", async () => {
+  const { Tasks } = await makeTasks();
+  await Tasks.createRecord({ id: "1", title: "original" });
+  const stale = await Tasks.getRecord("1");
+
+  const outcomes = await Promise.allSettled([
+    Tasks.updateRecord("1", { title: "writer A" }, { ifMatch: stale!.$rev }),
+    Tasks.updateRecord("1", { title: "writer B" }, { ifMatch: stale!.$rev }),
+  ]);
+  expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
+  const rejected = outcomes.find((outcome) => outcome.status === "rejected") as PromiseRejectedResult;
+  expect(rejected.reason).toBeInstanceOf(FileSystemConflictError);
+  expect(["writer A", "writer B"]).toContain((await Tasks.getRecord("1"))?.title);
+});
+
+test("concurrent single-file creates do not lose records", async () => {
+  const root = createMemoryRoot("acme-db");
+  const db = await FileSystemDatabase.initialize(root, { version: 1, brandId: "acme" });
+  const Settings = db.singleFileTable({
+    name: "settings",
+    fields: { id: primaryKey(), title: text("title") },
+  });
+
+  await Promise.all([
+    Settings.createRecord({ id: "a", title: "A" }),
+    Settings.createRecord({ id: "b", title: "B" }),
+  ]);
+  expect((await Settings.getRecords()).map((record) => record.id)).toEqual(["a", "b"]);
+});
+
 test("batch reads include revisions for every record", async () => {
   const { Tasks } = await makeTasks();
   await Tasks.createRecord({ id: "1", title: "A" });

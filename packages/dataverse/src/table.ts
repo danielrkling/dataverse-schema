@@ -15,7 +15,7 @@ import {
   Infer,
   NarrowKeysByValue,
 } from "./types";
-import { ETAG, select } from "./util";
+import { ETAG, select, wrapString } from "./util";
 
 export type TableRequestOptions = {
   pageSize?: number;
@@ -36,6 +36,9 @@ export type MutationOptions = {
   overriddenCreatedOn?: Date | string;
 };
 
+/** Ownership model of a custom table. */
+export type TableOwnership = "UserOwned" | "OrganizationOwned";
+
 export type DataverseTableOptions<TProperties extends GenericProperties> = {
   client: DataverseClient;
   entitySetName: string;
@@ -49,6 +52,22 @@ export type DataverseTableOptions<TProperties extends GenericProperties> = {
    * responses regardless of `$select`, so row identity still works.
    */
   primaryKey?: { key: string; property: PrimaryKeyField };
+  /** Canonical schema name (defaults to the publisher-prefixed PascalCase logical name). */
+  schemaName?: string;
+  /** Human-readable label. Used by UIs, and as the table's `DisplayName` when provisioning. */
+  displayName?: string;
+  /** Plural label (e.g. "Projects"). Defaults to `${displayName}s`. */
+  displayCollectionName?: string;
+  /** Longer explanation. Used by UIs, and as the table's `Description` when provisioning. */
+  description?: string;
+  /** Table ownership (default `"UserOwned"`). */
+  ownership?: TableOwnership;
+  /**
+   * Field key of the string column that is the table's primary name attribute.
+   * Required to create a table (Dataverse creates it together with the table);
+   * ignored when the table already exists.
+   */
+  primaryName?: keyof TProperties & string;
 };
 
 /**
@@ -99,6 +118,18 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
    */
   schema: ValidationSchema<Infer<TProperties>>;
   primaryKey: { key: string; property: PrimaryKeyField };
+  /** Canonical schema name, when declared. */
+  readonly schemaName?: string;
+  /** Human-readable label. */
+  readonly displayName?: string;
+  /** Plural label. */
+  readonly displayCollectionName?: string;
+  /** Longer explanation. */
+  readonly description?: string;
+  /** Ownership model (default `"UserOwned"`). */
+  readonly ownership: TableOwnership;
+  /** Field key of the primary name column, when declared. */
+  readonly primaryName?: string;
 
   /**
    * @param options Options including the DataverseClient, entity set name, logical name, and field definitions.
@@ -108,6 +139,12 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
     this.entitySetName = options.entitySetName;
     this.logicalName = options.logicalName;
     this.fields = options.fields;
+    this.schemaName = options.schemaName;
+    this.displayName = options.displayName;
+    this.displayCollectionName = options.displayCollectionName;
+    this.description = options.description;
+    this.ownership = options.ownership ?? "UserOwned";
+    this.primaryName = options.primaryName;
     this.schema = options.schema ?? composeFieldSchemas(this.fields);
     if (options.primaryKey) {
       this.primaryKey = options.primaryKey;
@@ -155,7 +192,7 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
 
   getAlternateKeys(value: Partial<Infer<TProperties>>): AlternateKey {
     return Object.entries(value)
-      .map((kv) => `${this.fields[kv[0]].logicalName}=${kv[1]}`)
+      .map(([key, entry]) => `${this.fields[key].logicalName}=${wrapString(entry)}`)
       .join(",") as AlternateKey;
   }
 
@@ -353,7 +390,11 @@ export class DataverseTable<TProperties extends GenericProperties> implements Va
   >(key: TKey, id: DataverseKey, childId: GUID): Promise<GUID> {
     const prop = this.fields[key];
     if (prop.kind === "navigation") {
-      return this.client.associateRecord(
+      const associate = prop.type === "collection" || prop.type === "collectionIds"
+        ? this.client.associateCollectionRecord
+        : this.client.associateRecord;
+      return associate.call(
+        this.client,
         this.entitySetName,
         id,
         prop.schemaName,

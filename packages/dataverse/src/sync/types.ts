@@ -4,7 +4,10 @@ export type QueuedMutation = {
     key: string;
     value?: any;
     changes: any;
+    /** Backend table/entity-set identifier used to route the mutation. */
     entitySetName: string;
+    /** Local collection/cache store. Defaults to entitySetName for legacy queued mutations. */
+    collectionId?: string;
     timestamp: number;
     sequence: number;
     attempts: number;

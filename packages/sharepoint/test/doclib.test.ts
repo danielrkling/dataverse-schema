@@ -148,8 +148,13 @@ test("update MERGEs metadata then overwrites the file content via Files/Add", as
         if (u.includes("Items(5)")) { mergeSpyBody.push(init.body); return new Response(null, { status: 204 }); }
         throw new Error(`Unexpected fetch: ${u}`);
     });
+    vi.spyOn(Docs.client, "getRecord").mockResolvedValue({
+        Id: 5, Title: "Q3", FileLeafRef: "report.pdf", FileRef: "/Documents/report.pdf",
+        __metadata: { etag: '"3"', type: "SP.Data.DocumentsListItem" },
+    });
 
-    await Docs.updateRecord(5, { file: { name: "report.pdf", data: BLOB }, title: "Q3" } as any);
+    const updated = await Docs.updateRecord(5, { file: { name: "report.pdf", data: BLOB }, title: "Q3" } as any);
+    expect(updated).toMatchObject({ id: 5, title: "Q3", file: { name: "report.pdf" } });
 
     // MERGE carries the item body (metadata only), then content overwrite
     expect(JSON.parse(mergeSpyBody[0])).toEqual({ __metadata: { type: "SP.Data.DocumentsListItem" }, Title: "Q3" });
@@ -168,7 +173,12 @@ test("update without file content issues no Files/Add", async () => {
         fields: { id: primaryKey(), file: document(), title: text("Title") },
     });
     stubRoutes([[`Items(5)`, new Response(null, { status: 204 })]]);
-    await Docs.updateRecord(5, { title: "Q3" } as any);
+    vi.spyOn(Docs.client, "getRecord").mockResolvedValue({
+        Id: 5, Title: "Q3", FileLeafRef: "report.pdf", FileRef: "/Documents/report.pdf",
+        __metadata: { etag: '"3"' },
+    });
+    const updated = await Docs.updateRecord(5, { title: "Q3" } as any);
+    expect(updated).toMatchObject({ id: 5, title: "Q3" });
     expect(mock.mock.calls.every(([u]) => !String(u).includes("Files/Add"))).toBe(true);
 });
 

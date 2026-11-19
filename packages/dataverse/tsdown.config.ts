@@ -4,6 +4,7 @@ export default defineConfig({
   // 1. Define your entry points exactly like you did in Vite
   entry: {
     index: 'src/index.ts',
+    'provision/index': 'src/provision/index.ts',
     'sync/index': 'src/sync/index.ts',
     'sync/tanstack': 'src/sync/tanstack.ts',
   },

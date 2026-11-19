@@ -126,6 +126,81 @@ test("postRecord injects overriddencreatedon into the request body", async () =>
   expect(body.overriddencreatedon).toBe("2026-09-13T14:22:00.000Z")
 })
 
+test("getRecord returns null for a 404 not-found response", async () => {
+  const client = new DataverseClient({
+    url: "https://org.crm.dynamics.com",
+    fetch: async () => new Response(JSON.stringify({ error: { code: "0x80060891", message: "missing" } }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    }),
+  })
+  await expect(client.getRecord("accounts", "guid-1")).resolves.toBeNull()
+})
+
+test("batch emits valid multipart/http parts with CRLF separators", async () => {
+  let batchBody = ""
+  const client = new DataverseClient({
+    url: "https://org.crm.dynamics.com",
+    fetch: async (url, init) => {
+      if (String(url).endsWith("$batch")) batchBody = String(init?.body ?? "")
+      return new Response("batch-response", { status: 200, headers: { "Content-Type": "text/plain" } })
+    },
+  })
+
+  await client.batch(async () => {
+    await client.getRecord("accounts", "guid-1")
+    await client.patchRecord("accounts", "guid-1", { name: "Updated" })
+  })
+
+  expect(batchBody).toContain("\r\n")
+  expect(batchBody).toContain("Content-Type: application/http")
+  expect(batchBody).toContain("Content-Transfer-Encoding: binary")
+  expect(batchBody).toContain("GET /api/data/v9.2/accounts(guid-1) HTTP/1.1")
+  expect(batchBody).toContain("PATCH /api/data/v9.2/accounts(guid-1) HTTP/1.1")
+  expect(batchBody).not.toContain("undefined /api")
+  expect(batchBody).toMatch(/content-type: application\/json; type=entry/i)
+})
+
+test("changesets reject GET requests instead of emitting invalid batches", async () => {
+  const client = new DataverseClient({ url: "https://org.crm.dynamics.com", fetch: async () => new Response("{}") })
+  await expect(client.changeset(async () => {
+    await client.getRecord("accounts", "guid-1")
+  })).rejects.toThrow("not allowed inside a changeset")
+})
+
+test("post/patch merge per-operation Prefer values with client defaults", async () => {
+  const preferences: string[] = []
+  const client = new DataverseClient({
+    url: "https://org.crm.dynamics.com",
+    prefer: [{ annotations: "*" }, { maxPageSize: 250 }],
+    fetch: async (_url, init) => {
+      preferences.push(new Headers(init?.headers).get("Prefer") ?? "")
+      return new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })
+    },
+  })
+  await client.postRecord("accounts", { name: "A" })
+  await client.patchRecord("accounts", "guid-1", { name: "B" })
+  for (const prefer of preferences) {
+    expect(prefer).toContain('odata.include-annotations="*"')
+    expect(prefer).toContain("odata.maxpagesize=250")
+    expect(prefer.match(/return=representation/g)).toHaveLength(1)
+  }
+})
+
+test("single- and collection-valued associations use PUT and POST respectively", async () => {
+  const methods: string[] = []
+  const client = new DataverseClient({
+    url: "https://org.crm.dynamics.com",
+    fetch: async (_url, init) => {
+      methods.push(String(init?.method))
+      return new Response(null, { status: 204 })
+    },
+  })
+  await client.associateRecord("accounts", "parent", "primarycontactid", "contacts", "child-1")
+  await client.associateCollectionRecord("accounts", "parent", "contact_customer_accounts", "contacts", "child-2")
+  expect(methods).toEqual(["PUT", "POST"])
+})
+
 test("postRecord accepts an ISO string for overriddenCreatedOn", async () => {
   const client = new DataverseClient({ url: "https://org.crm.dynamics.com/api/data/v9.2" })
   let body: any

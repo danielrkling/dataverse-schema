@@ -332,14 +332,19 @@ export function syncCollectionOptions<TRow extends object>(
  * IndexedDB payloads small and means the flush's updateRecord call sends a
  * delta instead of a full-row PATCH that could clobber unrelated fields.
  */
-export function serializeMutation(engine: SyncEngine, mutation: PendingMutation<any>): QueuedMutation {
+export function serializeMutation(
+    engine: SyncEngine,
+    mutation: PendingMutation<any>,
+    entitySetName = mutation.collection.id,
+): QueuedMutation {
     return {
         id: mutation.mutationId,
         type: mutation.type,
         value: plainClone(mutation.modified),
         changes: plainClone(mutation.changes),
         key: mutation.key,
-        entitySetName: mutation.collection.id,
+        entitySetName,
+        collectionId: mutation.collection.id,
         timestamp: mutation.createdAt.valueOf(),
         sequence: engine.nextSequence(),
         attempts: 0,
@@ -385,7 +390,7 @@ export function offlineCollectionOptions<TRow extends object>(
     // store (which may not exist yet if the table was registered after the
     // DB was first opened) go through the engine's version-bump machinery.
     const cacheReady = Promise.all([
-        engine.ensureCollectionStore(collectionId),
+        engine.ensureCollectionStore(collectionId, pk.key),
         engine.ensureTableStore(table.entitySetName),
     ]);
     void cacheReady;
@@ -588,7 +593,7 @@ export function offlineCollectionOptions<TRow extends object>(
         engine.channel.postMessage({ type: "ABORT_ACTIVE_FETCHES" });
 
         // 2. Queue mutations into IndexedDB
-        const serialized = transaction.mutations.map(v => serializeMutation(engine, v));
+        const serialized = transaction.mutations.map(v => serializeMutation(engine, v, table.entitySetName));
         await engine.queueMutations(serialized);
         engine.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: serialized });
 

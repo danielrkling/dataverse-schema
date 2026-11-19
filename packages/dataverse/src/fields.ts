@@ -44,13 +44,82 @@ export type FieldOptions<T> = {
   default?: DefaultValue<T>;
   /** Exclude the field from request bodies / updates. Implied by `system`. */
   readonly?: boolean;
-  /** Validation-only: reject `null`/`undefined`/empty strings via `table.schema`. */
+  /** Validation-only: reject `null`/`undefined`/empty strings via `table.schema`.
+   *  Provisioning turns this into `RequiredLevel: ApplicationRequired`. */
   required?: boolean;
   /** Server-managed field that Dataverse always populates (createdon, statecode, …).
    *  Implies `readonly`. Reads are non-null: a null from the wire fails fast instead
-   *  of folding silently into a default. */
+   *  of folding silently into a default. System fields are never provisioned. */
   system?: boolean;
+  /** Human-readable label. Used by UIs, and as the column's `DisplayName` when provisioning. */
+  displayName?: string;
+  /** Longer explanation. Used by UIs, and as the column's `Description` when provisioning. */
+  description?: string;
   schema?: ValidationSchema<T>;
+};
+
+/** Wire types a `number()` field can be provisioned as. Defaults to `"decimal"`. */
+export type NumberColumnType = "integer" | "bigint" | "decimal" | "money";
+
+/** Options for {@link number} and numeric `choice()` fields. */
+export type NumberFieldOptions<T> = FieldOptions<T> & {
+  /** Dataverse column type to create (default `"decimal"`). */
+  columnType?: NumberColumnType;
+  minValue?: number;
+  maxValue?: number;
+  /** Decimal places (decimal/money only). */
+  precision?: number;
+};
+
+/** Options for {@link string}. Also used for autonumber columns. */
+export type StringFieldOptions = FieldOptions<string> & {
+  /** Dataverse `MaxLength` (default 200, maximum 4000). */
+  maxLength?: number;
+  /** Dataverse `FormatName` (default `"Text"`; also `"Email"`, `"Url"`, `"Phone"`, …). */
+  format?: string;
+  /** Dataverse `AutoNumberFormat`, e.g. `"PRJ-{SEQNUM:5}"`. Implies `format: "Text"`. */
+  autoNumberFormat?: string;
+};
+
+/** Options for {@link boolean}. */
+export type BooleanFieldOptions = FieldOptions<boolean> & {
+  trueLabel?: string;
+  falseLabel?: string;
+};
+
+/** Options for {@link json}. JSON columns are provisioned as memo (multiline text). */
+export type JsonFieldOptions<T> = FieldOptions<T> & {
+  schema: ValidationSchema<T>;
+  /** Dataverse `MaxLength` (default 2000). */
+  maxLength?: number;
+};
+
+/** Options for {@link file}. */
+export type FileFieldOptions = FieldOptions<FileRef | null> & {
+  /** Dataverse `MaxSizeInKB` (default 32768; the API maximum is 10485760). */
+  maxSizeInKB?: number;
+};
+
+/** Options for {@link image}. */
+export type ImageFieldOptions = FieldOptions<ImageRef | null> & {
+  /** Dataverse `MaxSizeInKB` (default 10240; the API maximum is 30720). */
+  maxSizeInKB?: number;
+  /** Store the full-size image as well as the thumbnail (default `false`). */
+  canStoreFullImage?: boolean;
+  /**
+   * Make this the table's primary image. Dataverse cannot set this at creation,
+   * so the provisioner applies it in a follow-up metadata update on the column
+   * it just created.
+   */
+  primary?: boolean;
+};
+
+/** Options for {@link lookup} and {@link lookupId}. */
+export type LookupFieldOptions<T> = FieldOptions<T> & {
+  /** Relationship schema name (default `<table>_<column>`). Must carry the publisher prefix. */
+  relationshipName?: string;
+  /** Referenced primary key attribute (default `<target logical name>id`). */
+  targetAttribute?: string;
 };
 
 type FieldDefinition<T> = {
@@ -111,6 +180,10 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
   logicalName: string
   fromDataverseName: string
   toDataverseName: string
+  /** Human-readable label (from the `displayName` option). */
+  displayName?: string
+  /** Longer explanation (from the `description` option). */
+  description?: string
   kind!: string
   type!: string
   schema: ValidationSchema<T>
@@ -118,6 +191,8 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
   #getDefault: () => T;
   #readOnly: boolean
   #nullable: boolean
+  #required: boolean
+  #system: boolean
 
   constructor(
     name: string,
@@ -128,6 +203,8 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
     this.logicalName = name.toLowerCase();
     this.fromDataverseName = this.logicalName;
     this.toDataverseName = this.logicalName;
+    this.displayName = options?.displayName;
+    this.description = options?.description;
 
     // Use an own-property check so `default: undefined` can still be
     // intentional if a future field type supports it.
@@ -139,6 +216,8 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
     this.#getDefault = asDefaultFactory(defaultValue);
     this.#readOnly = options?.system === true || options?.readonly === true;
     this.#nullable = definition.nullable ?? false;
+    this.#required = options?.required === true;
+    this.#system = options?.system === true;
 
     const baseSchema = options?.schema ?? definition.schema;
     const withNull = this.#nullable ? nullableOf(baseSchema) : baseSchema;
@@ -151,6 +230,16 @@ export abstract class FieldBase<T> implements ValidationSchema<T> {
 
   getReadOnly(): boolean {
     return this.#readOnly
+  }
+
+  /** Whether `required: true` was set (validation-only; provisioning maps it to `ApplicationRequired`). */
+  getRequired(): boolean {
+    return this.#required
+  }
+
+  /** Whether `system: true` was set. System fields are server-managed and never provisioned. */
+  getSystem(): boolean {
+    return this.#system
   }
 
   protected isNullable(): boolean {
@@ -185,8 +274,14 @@ export type FieldValue<T, Nullable extends boolean> = T | (Nullable extends true
 export class BooleanField extends FieldBase<boolean> {
   kind = "value" as const;
   type = "boolean" as const;
-  constructor(name: string, options?: FieldOptions<boolean>) {
+  /** Label of the `true` option (provisioned as `TrueOption`). */
+  readonly trueLabel: string;
+  /** Label of the `false` option (provisioned as `FalseOption`). */
+  readonly falseLabel: string;
+  constructor(name: string, options?: BooleanFieldOptions) {
     super(name, { defaultValue: false, schema: BOOLEAN_SCHEMA }, options);
+    this.trueLabel = options?.trueLabel ?? "True";
+    this.falseLabel = options?.falseLabel ?? "False";
   }
 
   transformValueFromDataverse(value: any): boolean {
@@ -198,12 +293,22 @@ export class BooleanField extends FieldBase<boolean> {
 
 export class NumberField<Nullable extends boolean = true> extends FieldBase<FieldValue<number, Nullable>> {
   kind = "value" as const;
-  type = "number" as const;  constructor(name: string, options?: FieldOptions<FieldValue<number, Nullable>> & { system?: boolean }) {
+  type = "number" as const;
+  /** Dataverse column type used when provisioning (default `"decimal"`). */
+  readonly columnType: NumberColumnType;
+  readonly minValue?: number;
+  readonly maxValue?: number;
+  readonly precision?: number;
+  constructor(name: string, options?: NumberFieldOptions<FieldValue<number, Nullable>> & { system?: boolean }) {
     super(name, {
       defaultValue: ((options?.system === true ? 0 : null) as any),
       schema: NUMBER_SCHEMA as ValidationSchema<FieldValue<number, Nullable>>,
       nullable: options?.system !== true,
     }, options);
+    this.columnType = options?.columnType ?? "decimal";
+    this.minValue = options?.minValue;
+    this.maxValue = options?.maxValue;
+    this.precision = options?.precision;
   }
 
   transformValueFromDataverse(value: unknown): FieldValue<number, Nullable> {
@@ -225,8 +330,17 @@ export class NumberField<Nullable extends boolean = true> extends FieldBase<Fiel
 export class StringField extends FieldBase<string> {
   kind = "value" as const;
   type = "string" as const;
-  constructor(name: string, options?: FieldOptions<string>) {
+  /** Dataverse `MaxLength` (default 200). */
+  readonly maxLength: number;
+  /** Dataverse `FormatName` (default `"Text"`). */
+  readonly format: string;
+  /** Dataverse `AutoNumberFormat`, when set. */
+  readonly autoNumberFormat?: string;
+  constructor(name: string, options?: StringFieldOptions) {
     super(name, { defaultValue: "", schema: STRING_SCHEMA }, options);
+    this.maxLength = options?.maxLength ?? 200;
+    this.format = options?.format ?? "Text";
+    this.autoNumberFormat = options?.autoNumberFormat;
   }
 
   transformValueFromDataverse(value: any): string {
@@ -568,7 +682,13 @@ export class FormattedField extends FieldBase<string | null> {
 export class ImageField extends FieldBase<ImageRef | null> {
   kind = "value" as const;
   type = "image" as const;
-  constructor(name: string, options?: FieldOptions<ImageRef | null>) {
+  /** Dataverse `MaxSizeInKB` (default 10240). */
+  readonly maxSizeInKB: number;
+  /** Whether the full-size image is stored alongside the thumbnail. */
+  readonly canStoreFullImage: boolean;
+  /** Whether this column is the table's primary image. */
+  readonly isPrimaryImage: boolean;
+  constructor(name: string, options?: ImageFieldOptions) {
     super(name, {
       defaultValue: null,
       schema: nullableOf(composeRecordSchema({
@@ -577,6 +697,9 @@ export class ImageField extends FieldBase<ImageRef | null> {
         data: optionalOf(nullableOf(BLOB_SCHEMA)),
       })),
     }, options);
+    this.maxSizeInKB = options?.maxSizeInKB ?? 10240;
+    this.canStoreFullImage = options?.canStoreFullImage ?? false;
+    this.isPrimaryImage = options?.primary ?? false;
   }
 
   transformValueFromDataverse(value: any, ctx?: TransformContext): ImageRef | null {
@@ -631,8 +754,10 @@ export type ImageRef = {
 export class FileField extends FieldBase<FileRef | null> {
   kind = "value" as const;
   type = "file" as const;
+  /** Dataverse `MaxSizeInKB` (default 32768). */
+  readonly maxSizeInKB: number;
 
-  constructor(name: string, options?: FieldOptions<FileRef | null>) {
+  constructor(name: string, options?: FileFieldOptions) {
     super(name, {
       defaultValue: null,
       schema: nullableOf(composeRecordSchema({
@@ -641,6 +766,7 @@ export class FileField extends FieldBase<FileRef | null> {
         data: optionalOf(nullableOf(BLOB_SCHEMA)),
       })),
     }, options);
+    this.maxSizeInKB = options?.maxSizeInKB ?? 32768;
     this.fromDataverseName = `${name}_name`;
   }
 
@@ -673,9 +799,12 @@ export class FileField extends FieldBase<FileRef | null> {
 export class JsonField<T> extends FieldBase<T> {
   kind = "value" as const;
   type = "json" as const;
+  /** Dataverse `MaxLength` used when provisioned as a memo column (default 2000). */
+  readonly maxLength: number;
 
-  constructor(name: string, options: FieldOptions<T> & { schema: ValidationSchema<T> }) {
+  constructor(name: string, options: JsonFieldOptions<T>) {
     super(name, { defaultValue: undefined as T, schema: options.schema }, options);
+    this.maxLength = options.maxLength ?? 2000;
   }
 
   async transformValueFromDataverse(value: any): Promise<T> {
@@ -701,7 +830,7 @@ export class JsonField<T> extends FieldBase<T> {
  * });
  * // Infer<typeof table>["isActive"] → boolean
  */
-export function boolean(name: string, options?: FieldOptions<boolean>) {
+export function boolean(name: string, options?: BooleanFieldOptions) {
   return new BooleanField(name, options);
 }
 
@@ -719,9 +848,9 @@ export function boolean(name: string, options?: FieldOptions<boolean>) {
  *   state: number("statecode", { system: true }),// number (readonly)
  * });
  */
-export function number(name: string, options?: FieldOptions<number | null> & { system?: false | undefined; required?: boolean }): NumberField<true>;
-export function number(name: string, options: FieldOptions<number> & { system: true; required?: boolean }): NumberField<false>;
-export function number(name: string, options?: FieldOptions<number | null> & { system?: boolean; required?: boolean }): NumberField<boolean> {
+export function number(name: string, options?: NumberFieldOptions<number | null> & { system?: false | undefined; required?: boolean }): NumberField<true>;
+export function number(name: string, options: NumberFieldOptions<number> & { system: true; required?: boolean }): NumberField<false>;
+export function number(name: string, options?: NumberFieldOptions<number | null> & { system?: boolean; required?: boolean }): NumberField<boolean> {
   return new NumberField(name, options);
 }
 
@@ -738,7 +867,7 @@ export function number(name: string, options?: FieldOptions<number | null> & { s
  * });
  * // Infer<typeof table>["name"] → string
  */
-export function string(name: string, options?: FieldOptions<string>) {
+export function string(name: string, options?: StringFieldOptions) {
   return new StringField(name, options);
 }
 
@@ -830,8 +959,8 @@ export { multiChoice };
  * // Infer<typeof table>["status"] → "Active" | "Inactive" | "Archived" | null
  */
 function choice<const T extends Record<number, string>>(name: string, choices: T, options?: FieldOptions<T[keyof T] | null>): ChoiceField<T, true>;
-function choice(name: string, options?: FieldOptions<number | null> & { system?: false | undefined; required?: boolean }): NumberField<true>;
-function choice(name: string, options: FieldOptions<number> & { system: true; required?: boolean }): NumberField<false>;
+function choice(name: string, options?: NumberFieldOptions<number | null> & { system?: false | undefined; required?: boolean }): NumberField<true>;
+function choice(name: string, options: NumberFieldOptions<number> & { system: true; required?: boolean }): NumberField<false>;
 function choice(...args: any[]): any {
   const name = args[0] as string;
   // Typed choices: (name, choices, options?); a choices map has numeric keys
@@ -902,7 +1031,7 @@ export function formatted(name: string, options?: FieldOptions<string | null>) {
  *
  * @param name The Dataverse logical name of the image column.
  */
-export function image(name: string, options?: FieldOptions<ImageRef | null>) {
+export function image(name: string, options?: ImageFieldOptions) {
   return new ImageField(name, options);
 }
 
@@ -912,7 +1041,7 @@ export function image(name: string, options?: FieldOptions<ImageRef | null>) {
  *
  * @param name The Dataverse logical name of the file column.
  */
-export function file(name: string, options?: FieldOptions<FileRef | null>) {
+export function file(name: string, options?: FileFieldOptions) {
   return new FileField(name, options)
 }
 
@@ -931,21 +1060,27 @@ export function file(name: string, options?: FieldOptions<FileRef | null>) {
  * });
  * // Infer<typeof table>["address"] → { street: string; city: string }
  */
-export function json<T>(name: string, options: FieldOptions<T> & { schema: ValidationSchema<T> }) {
+export function json<T>(name: string, options: JsonFieldOptions<T>) {
   return new JsonField<T>(name, options);
 }
 
 export class LookupIdProperty<Nullable extends boolean = true> extends FieldBase<FieldValue<GUID, Nullable>> {
   kind = "navigation" as const;
   type = "lookupId" as const;
+  /** Relationship schema name used when provisioning (default `<table>_<column>`). */
+  readonly relationshipName?: string;
+  /** Referenced primary key attribute used when provisioning (default `<target>id`). */
+  readonly targetAttribute?: string;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable, options?: FieldOptions<FieldValue<GUID, Nullable>> & { system?: boolean }) {
+  constructor(name: string, getTable: GetTable, options?: LookupFieldOptions<FieldValue<GUID, Nullable>> & { system?: boolean }) {
     super(name, {
       defaultValue: null as FieldValue<GUID, Nullable>,
       schema: GUID_SCHEMA as ValidationSchema<FieldValue<GUID, Nullable>>,
       nullable: options?.system !== true,
     }, options);
+    this.relationshipName = options?.relationshipName;
+    this.targetAttribute = options?.targetAttribute;
     this.#getTable = getTable;
     this.fromDataverseName = `_${this.logicalName}_value`
     this.toDataverseName = `${this.schemaName}@odata.bind`
@@ -1158,12 +1293,12 @@ export function collectionIds(name: string, getTable: GetTable, options?: FieldO
  * // Infer<typeof Person>["primaryAddressId"] → `${string}-${string}-${string}-${string}-${string}` | null
  */
 export const lookupId: {
-  (name: string, getTable: GetTable, options?: FieldOptions<GUID | null> & { system?: false | undefined; required?: boolean }): LookupIdProperty<true>;
-  (name: string, getTable: GetTable, options: FieldOptions<GUID> & { system: true; required?: boolean }): LookupIdProperty<false>;
+  (name: string, getTable: GetTable, options?: LookupFieldOptions<GUID | null> & { system?: false | undefined; required?: boolean }): LookupIdProperty<true>;
+  (name: string, getTable: GetTable, options: LookupFieldOptions<GUID> & { system: true; required?: boolean }): LookupIdProperty<false>;
 } = (
   name: string,
   getTable: GetTable,
-  options?: FieldOptions<GUID | null> & { system?: boolean },
+  options?: LookupFieldOptions<GUID | null> & { system?: boolean },
 ): LookupIdProperty<boolean> =>
   new LookupIdProperty(name, getTable, options);
 
@@ -1201,13 +1336,19 @@ export class LookupProperty<
 > extends FieldBase<Infer<TProperties> | null> {
   kind = "navigation" as const;
   type = "lookup" as const;
+  /** Relationship schema name used when provisioning (default `<table>_<column>`). */
+  readonly relationshipName?: string;
+  /** Referenced primary key attribute used when provisioning (default `<target>id`). */
+  readonly targetAttribute?: string;
   #getTable: GetTable<DataverseTable<GenericProperties>>;
 
-  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: FieldOptions<Infer<TProperties> | null>) {
+  constructor(name: string, getTable: GetTable<DataverseTable<TProperties>>, options?: LookupFieldOptions<Infer<TProperties> | null>) {
     super(name, {
       defaultValue: null,
       schema: nullableOf(lazyOf(() => composeRecordSchema(schemasOf(getTable().fields)))),
     }, options);
+    this.relationshipName = options?.relationshipName;
+    this.targetAttribute = options?.targetAttribute;
     this.#getTable = getTable as unknown as GetTable<DataverseTable<GenericProperties>>;
     // Navigation properties are referenced by their schema name for $expand/association.
     this.fromDataverseName = this.schemaName;
@@ -1269,7 +1410,7 @@ export class LookupProperty<
 export function lookup<TProperties extends GenericProperties>(
   name: string,
   getTable: GetTable<DataverseTable<TProperties>>,
-  options?: FieldOptions<Infer<TProperties> | null>,
+  options?: LookupFieldOptions<Infer<TProperties> | null>,
 ) {
   return new LookupProperty(name, getTable, options);
 }

@@ -16,6 +16,7 @@ npm i @tanstack/db
 | Entry point | What it provides |
 | --- | --- |
 | `dataverse-schema` | Client, tables, fields, query builders, validation |
+| `dataverse-schema/provision` | Additive table/column/lookup provisioning from the same table definitions |
 | `dataverse-schema/sync` | Offline `SyncEngine`, Dataverse adapter, conflict/error helpers |
 | `dataverse-schema/sync/tanstack` | TanStack DB collection factories |
 
@@ -526,7 +527,9 @@ const PersonNameOnly = Person.pickProperties("name");
 
 Calling `choice(name)` **without a choices map** is just a numeric column: it returns a `number`-typed field (nullable `number | null`), exactly like `number()` — use it for option sets not known at compile time.
 
-All factories accept an optional trailing `options` object (`{ default?, required?, readonly?, schema?, system? }`) — including the navigation factories (`lookup`, `lookupId`, `collection`, `collectionIds`).
+All factories accept an optional trailing `options` object (`{ default?, required?, readonly?, schema?, system?, displayName?, description? }`) — including the navigation factories (`lookup`, `lookupId`, `collection`, `collectionIds`).
+
+Kind-specific options are accepted where they make sense: `string({ maxLength, format, autoNumberFormat })`, `number({ columnType, minValue, maxValue, precision })`, `boolean({ trueLabel, falseLabel })`, `json({ maxLength })`, `file({ maxSizeInKB })` (default 32768, API maximum 10485760) and `image({ maxSizeInKB, canStoreFullImage, primary })` (default 10240, API maximum 30720). The same values drive `dataverse-schema/provision`.
 
 Allowed values are exposed at runtime as frozen arrays: `list().list`, `choice().choices`, and `multiChoice().choices`.
 
@@ -586,6 +589,100 @@ const roles = await RetrieveAadUserRoles(client, "aad-user-id");
 const choices = await RetrieveChoices(client, "gender");
 // [{ value: number; color: string; label: string; description: string }]
 ```
+
+## Provisioning tables and columns
+
+`dataverse-schema/provision` creates the tables, columns and lookups described by your
+existing `DataverseTable` definitions. There is no second schema document — the runtime
+definitions are the source of truth. Provisioning is **additive only**: it creates what is
+missing and never updates or deletes an existing component.
+
+```typescript
+import { DataverseClient, DataverseTable, choice, lookup, number, primaryKey, string } from "dataverse-schema";
+import { formatProvisionPlan, planProvision, provision } from "dataverse-schema/provision";
+
+const client = new DataverseClient({ url: "https://org.crm.dynamics.com", token });
+
+const Account = new DataverseTable({
+  client,
+  entitySetName: "accounts",
+  logicalName: "account",
+  fields: { id: primaryKey("accountid"), name: string("name") },
+});
+
+const Project = new DataverseTable({
+  client,
+  entitySetName: "nnsyc200_projects",   // must match what Dataverse creates
+  logicalName: "nnsyc200_project",
+  schemaName: "nnsyc200_Project",       // optional; derived from the logical name
+  displayName: "Project",
+  displayCollectionName: "Projects",
+  description: "Delivery projects",
+  primaryName: "name",                  // required to create the table
+  fields: {
+    id: primaryKey("nnsyc200_projectid"),
+    name: string("nnsyc200_name", { displayName: "Project name", maxLength: 300 }),
+    status: choice("nnsyc200_status", { 100000000: "Active", 100000001: "Closed" }),
+    budget: number("nnsyc200_budget", { columnType: "money", precision: 2 }),
+    account: lookup("nnsyc200_accountid", () => Account),
+    created: createdOn(),
+  },
+});
+
+// 1. Preview. Never writes.
+const plan = await planProvision(client, [Project, Account]);
+console.log(formatProvisionPlan(plan));
+
+// 2. Apply. Plans first, then creates tables → columns → lookups and publishes once.
+const { plan: applied, result } = await provision(client, [Project, Account], {
+  solution: "MySolution", // optional MSCRM.SolutionUniqueName
+});
+```
+
+Display labels default to the humanized logical name minus the publisher prefix
+(`nnsyc200_due_date` → "Due Date"). Everything the definitions can express is used
+directly: option values/labels, lookup targets, date-only vs date-and-time, required
+levels (`required: true` → `ApplicationRequired`), auto-number formats, numeric kinds,
+and file/image columns with their `maxSizeInKB` (plus `canStoreFullImage` and `primary`).
+
+The plan classifies every component as `+` create, `=` skip or `!` conflict. Conflicts
+block `provision()` entirely. Typical conflicts:
+
+- an existing column has a different `AttributeTypeName`;
+- the existing entity set or primary key differs from the definition (every request would
+  target the wrong URL);
+- a declared primary name column is missing from an existing table (Dataverse cannot add
+  one after creation);
+- a table would have to be created without `primaryName`, or with a logical name that has
+  no customization prefix.
+
+Skipped silently: `primaryKey`, `system` fields (including `createdOn()` etc.) and
+`formatted`. Reported as warnings: `collection`/`collectionIds` (N:N is out of scope),
+`list()` (app-level only) and dynamic `multiChoice()` (global option sets are not
+provisioned).
+
+File and image columns are created as `FileAttributeMetadata` / `ImageAttributeMetadata`.
+`image(..., { primary: true })` is promoted with a follow-up metadata update on the column
+the run just created, because Dataverse rejects `IsPrimaryImage` at create time; existing
+image columns are never patched, and a conflicting primary image in the org is reported as
+a conflict.
+
+`buildProvisionPlan(tables, reader)` and `applyProvisionPlan(writer, tables, plan)` are
+exported separately if you want to plug in your own metadata transport; `provision()` is
+the batteries-included path over `DataverseClient`. If a run creates metadata but its
+single publish step fails, `publishTables(client, [...logicalNames])` retries just the
+publish — re-running the definitions would find nothing left to create.
+
+Provisioning is safe to run against a real org:
+
+- pass `signal` to cancel the in-flight request and stop the plan/apply loops;
+- `timeoutMs` (default 60s) and `publishTimeoutMs` (default 180s) bound every request;
+- metadata **reads** retry 429/5xx/network failures (`readRetries`, default 3, honoring
+  `Retry-After`), while **writes are never retried** — a timed-out POST may already have
+  been applied;
+- definitions are checked for collisions before any request: duplicate logical names,
+  schema names, entity set names and primary-name/column clashes throw instead of failing
+  halfway through a run.
 
 ## Offline Sync + `@tanstack/db` Integration
 

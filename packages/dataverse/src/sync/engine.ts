@@ -40,6 +40,9 @@ export type EtagReader = (value: any) => string | undefined;
 /** Default etag reader: the library's `$etag` record convention. */
 const defaultGetEtag: EtagReader = (value) => value?.["$etag"];
 
+/** Etags are scoped to a backend table as well as its record key. */
+const etagCacheKey = (entitySetName: string, key: string) => `${entitySetName}\0${key}`;
+
 /** Options for constructing a generic {@link SyncEngine}. */
 export type SyncEngineOptions = {
     /** Name for the engine's IndexedDB database and BroadcastChannel. Unique per instance — two DBs with the same name share the flush lock. */
@@ -186,6 +189,7 @@ export class SyncEngine {
     // stores derived from entitySetName, these exist so multiple filtered
     // collections over the same entity don't overwrite each other's snapshots.
     private collectionStores = new Set<string>()
+    private collectionStoreKeyPaths = new Map<string, string | undefined>()
     private collectionStorePromises = new Map<string, Promise<void>>()
     // The version passed to openDB — grows when a late-registered collection
     // needs its own object store and the DB must be reopened to create it.
@@ -325,6 +329,16 @@ export class SyncEngine {
                         database.createObjectStore(self.ERRORED_MUTATIONS_NAME, { keyPath: "id" });
                     }
 
+                    // Custom filtered/read-only collection caches are durable too.
+                    // A store shared with a table is created below with that table's
+                    // primary key; independent read-only stores use explicit keys.
+                    for (const storeName of self.collectionStores) {
+                        if (!database.objectStoreNames.contains(storeName)) {
+                            const keyPath = self.collectionStoreKeyPaths.get(storeName);
+                            database.createObjectStore(storeName, keyPath ? { keyPath } : undefined);
+                        }
+                    }
+
                     for (const table of self.tables.values()) {
                         if (!database.objectStoreNames.contains(table.entitySetName)) {
                             // keyPath uses the TypeScript property name (e.g. "id"),
@@ -374,13 +388,15 @@ export class SyncEngine {
      * wait for every other tab's connection to be closed on versionchange
      * (each getDB registers that handler itself).
      */
-    public ensureCollectionStore(name: string): Promise<void> {
+    public ensureCollectionStore(name: string, keyPath?: string): Promise<void> {
+        if (keyPath !== undefined) this.collectionStoreKeyPaths.set(name, keyPath);
         let p = this.collectionStorePromises.get(name);
         if (!p) {
             p = (async () => {
                 // Register before any DB work so a concurrent upgrade's
                 // migration callback preserves this store.
                 this.collectionStores.add(name);
+                if (!this.collectionStoreKeyPaths.has(name)) this.collectionStoreKeyPaths.set(name, keyPath);
                 const tail = this.dbReopenPromise ?? Promise.resolve();
                 this.dbReopenPromise = (async () => {
                     await tail;
@@ -413,7 +429,7 @@ export class SyncEngine {
      * are otherwise only created inside the upgrade callback.
      */
     public ensureTableStore(entitySetName: string): Promise<void> {
-        return this.ensureCollectionStore(entitySetName);
+        return this.ensureCollectionStore(entitySetName, this.tables.get(entitySetName)?.primaryKey.key);
     }
 
     /**
@@ -480,7 +496,24 @@ export class SyncEngine {
      * MUTATIONS_ADDED so every collection reconciles its in-memory row and IDB
      * cache store — see the offline adapter's handleTabMessage.
      */
+    private scheduleRetry(nextAttemptAt: number | undefined): void {
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+        }
+        if (nextAttemptAt === undefined || this.closed || !navigator.onLine) return;
+        const delay = Math.max(0, nextAttemptAt - Date.now());
+        this.retryTimer = setTimeout(() => {
+            this.retryTimer = undefined;
+            void this.flushQueue().catch((error) => console.error("[sync-engine] Retry flush failed:", error));
+        }, delay);
+    }
+
     public async flushQueue() {
+        if (this.retryTimer) {
+            clearTimeout(this.retryTimer);
+            this.retryTimer = undefined;
+        }
         // The Web Lock is keyed by the database name (this.name). Cross-tab
         // serialization of flushQueue relies on this name being unique per
         // SyncEngine instance — two DBs with the same name share the lock
@@ -496,23 +529,34 @@ export class SyncEngine {
             // Whether the queue or errored store was modified; searched and
             // MUTATIONS_ADDED broadcasts make collections reconcile regardless.
             let changed = false;
+            let nextRetryAt: number | undefined;
 
             while (true) {
                 const tx = db.transaction(this.MUTATION_QUEUE_NAME, "readonly");
-                const index = tx.store.index("by_timestamp");
-                const cursor = await index.openCursor(null, "next");
-
-                if (!cursor) break; // Queue is empty
-
-                const mutation = cursor.value as QueuedMutation;
-                if (mutation.nextAttemptAt && mutation.nextAttemptAt > Date.now()) {
+                const queued = await tx.store.index("by_timestamp").getAll() as QueuedMutation[];
+                const now = Date.now();
+                let mutation: QueuedMutation | undefined;
+                for (const candidate of queued) {
+                    if (candidate.nextAttemptAt && candidate.nextAttemptAt > now) {
+                        nextRetryAt = Math.min(nextRetryAt ?? candidate.nextAttemptAt, candidate.nextAttemptAt);
+                        continue;
+                    }
+                    mutation = candidate;
                     break;
                 }
+                if (!mutation) break; // Nothing due; delayed entries have a wakeup below.
+
                 const table = this.tables.get(mutation.entitySetName);
 
                 if (!table) {
                     console.error(`Table ${mutation.entitySetName} not registered in DB`);
+                    mutation.error = serializeError(new Error(`Table ${mutation.entitySetName} is not registered in this SyncEngine`));
+                    mutation.lastAttemptAt = Date.now();
+                    mutation.nextAttemptAt = undefined;
+                    mutation.attempts = this.maxAttempts;
                     await db.delete(this.MUTATION_QUEUE_NAME, mutation.id);
+                    await db.put(this.ERRORED_MUTATIONS_NAME, mutation);
+                    changed = true;
                     continue;
                 }
 
@@ -525,7 +569,7 @@ export class SyncEngine {
                 // re-inherit the stale etag or the conflict they are being
                 // forced through would just repeat.
                 if ((mutation.type === "update" || mutation.type === "delete") && !mutation.force) {
-                    const fresh = this.keyEtags.get(mutation.key);
+                    const fresh = this.keyEtags.get(etagCacheKey(mutation.entitySetName, mutation.key));
                     if (fresh && fresh !== mutation.ifMatch) {
                         mutation.ifMatch = fresh;
                     }
@@ -555,7 +599,7 @@ export class SyncEngine {
                             // Persist the new etag so a later flush (or a
                             // sibling update still queued for this key) uses it
                             // instead of the stale snapshot etag.
-                            this.keyEtags.set(mutation.key, etag);
+                            this.keyEtags.set(etagCacheKey(mutation.entitySetName, mutation.key), etag);
                             mutation.ifMatch = etag;
                             await db.put(this.MUTATION_QUEUE_NAME, mutation);
                         }
@@ -563,7 +607,7 @@ export class SyncEngine {
                     } else if (mutation.type === "delete") {
                         await table.deleteRecord(mutation.key, { ifMatch: mutation.force ? undefined : mutation.ifMatch });
                         // The record is gone — drop any cached etag for it.
-                        this.keyEtags.delete(mutation.key);
+                        this.keyEtags.delete(etagCacheKey(mutation.entitySetName, mutation.key));
                         flushed.push({ id: mutation.id, type: "delete", key: mutation.key, value: undefined, entitySetName: mutation.entitySetName });
                     }
 
@@ -594,16 +638,7 @@ export class SyncEngine {
                         );
                         mutation.nextAttemptAt = mutation.lastAttemptAt + delay;
                         await db.put(this.MUTATION_QUEUE_NAME, mutation)
-                        // Self-heal: wake flushQueue when this retry is due, so a
-                        // failed mutation re-attempts even with no further user
-                        // activity (the lock + online guard keep it safe).
-                        if (navigator.onLine) {
-                            if (this.retryTimer) clearTimeout(this.retryTimer);
-                            this.retryTimer = setTimeout(() => {
-                                this.retryTimer = undefined;
-                                void this.flushQueue();
-                            }, delay);
-                        }
+                        nextRetryAt = Math.min(nextRetryAt ?? mutation.nextAttemptAt, mutation.nextAttemptAt);
                         break;
                     }
 
@@ -619,6 +654,7 @@ export class SyncEngine {
                 this.channel.postMessage({ type: "MUTATIONS_ADDED", mutations: flushed });
             }
             if (changed) this.notifyMutationsChanged();
+            this.scheduleRetry(nextRetryAt);
         })
     }
 
@@ -771,18 +807,18 @@ export class SyncEngine {
                     // freshest etag this DB has already successfully
                     // written for the key (the same source flushQueue
                     // uses) instead of abandoning the retry outright.
-                    fresh = this.keyEtags.get(mutation.key);
+                    fresh = this.keyEtags.get(etagCacheKey(mutation.entitySetName, mutation.key));
                 }
                 if (fresh && fresh !== mutation.ifMatch) {
                     mutation.ifMatch = fresh;
-                    this.keyEtags.set(mutation.key, fresh);
+                    this.keyEtags.set(etagCacheKey(mutation.entitySetName, mutation.key), fresh);
                 }
             }
         } else if (mutation.ifMatch === undefined) {
             // Un-forcing a mutation previously sent bare: a missing etag
             // would behave exactly like force (If-Match: * / unconditional
             // delete), so restore the freshest etag we know.
-            const fresh = this.keyEtags.get(mutation.key);
+            const fresh = this.keyEtags.get(etagCacheKey(mutation.entitySetName, mutation.key));
             if (fresh) mutation.ifMatch = fresh;
         }
 
@@ -819,25 +855,20 @@ export class SyncEngine {
      */
     async queueMutations(mutations: QueuedMutation[]) {
         if (mutations.length === 0) return;
-        // A freshly arrived mutation may make a previously-delayed retry due now;
-        // drop any pending retry wake-up so the upcoming flush re-evaluates.
-        if (this.retryTimer) {
-            clearTimeout(this.retryTimer);
-            this.retryTimer = undefined;
-        }
         try {
             const db = await this.getDB();
+            const cacheStore = (mutation: QueuedMutation) => mutation.collectionId ?? mutation.entitySetName;
             const storeNames = [
                 this.MUTATION_QUEUE_NAME,
-                ...new Set(mutations.map((mutation) => mutation.entitySetName)),
+                ...new Set(mutations.map(cacheStore)),
             ];
             const tx = db.transaction(storeNames, "readwrite");
 
             for (const mutation of mutations) {
                 if (mutation.type === "insert" || mutation.type === "update") {
-                    tx.objectStore(mutation.entitySetName).put(mutation.value);
+                    tx.objectStore(cacheStore(mutation)).put(mutation.value);
                 } else if (mutation.type === "delete") {
-                    tx.objectStore(mutation.entitySetName).delete(mutation.key);
+                    tx.objectStore(cacheStore(mutation)).delete(mutation.key);
                 }
                 tx.objectStore(this.MUTATION_QUEUE_NAME).put(mutation);
             }

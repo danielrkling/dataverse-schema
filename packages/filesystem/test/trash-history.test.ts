@@ -171,6 +171,72 @@ test("managed timestamps are set on create and refreshed on update", async () =>
   expect(raw.updatedAt).toBe(updated.updatedAt!.toISOString());
 });
 
+test("restore rehydrates mapped storage names and Date values", async () => {
+  const root = createMemoryRoot("acme-db");
+  const db = await FileSystemDatabase.initialize(root, { version: 1, brandId: "acme" });
+  const Tasks = db.table({
+    name: "tasks",
+    trash: true,
+    history: true,
+    fields: {
+      id: primaryKey(),
+      title: text("TitleWire"),
+      due: datetime("DueWire"),
+    },
+  });
+  const due = new Date("2026-01-02T03:04:05.000Z");
+  await Tasks.createRecord({ id: "1", title: "A", due });
+  await Tasks.updateRecord("1", { title: "B", due });
+  const history = await Tasks.listHistory("1");
+
+  const restoredHistory = await Tasks.restoreHistory("1", history[0]!.fileName);
+  expect(restoredHistory).toMatchObject({ title: "A", due });
+  expect(restoredHistory.due).toBeInstanceOf(Date);
+
+  await Tasks.deleteRecord("1");
+  const restoredTrash = await Tasks.restoreRecord("1");
+  expect(restoredTrash).toMatchObject({ title: "A", due });
+  expect((await Tasks.getRecord("1"))?.due).toBeInstanceOf(Date);
+});
+
+test("single-file restore preserves mapped fields and Date values", async () => {
+  const root = createMemoryRoot("acme-db");
+  const db = await FileSystemDatabase.initialize(root, { version: 1, brandId: "acme" });
+  const Settings = db.singleFileTable({
+    name: "settings",
+    trash: true,
+    history: true,
+    fields: {
+      id: primaryKey(),
+      title: text("TitleWire"),
+      due: datetime("DueWire"),
+    },
+  });
+  const due = new Date("2026-02-03T04:05:06.000Z");
+  await Settings.createRecord({ id: "a", title: "A", due });
+  await Settings.updateRecord("a", { title: "B", due });
+  const history = await Settings.listHistory("a");
+  expect(await Settings.restoreHistory("a", history[0]!.fileName)).toMatchObject({ title: "A", due });
+
+  await Settings.deleteRecord("a");
+  expect(await Settings.restoreRecord("a")).toMatchObject({ title: "A", due });
+});
+
+test("restoreRecord honors a specific trash file name", async () => {
+  const { Tasks } = await makeTasks({ trash: true });
+  await Tasks.createRecord({ id: "1", title: "first" });
+  await Tasks.deleteRecord("1");
+  const firstDeletion = (await Tasks.listTrash()).find((entry) => entry.id === "1")!;
+  await Tasks.createRecord({ id: "1", title: "second" });
+  await Tasks.deleteRecord("1");
+
+  const entries = (await Tasks.listTrash()).filter((entry) => entry.id === "1");
+  expect(entries).toHaveLength(2);
+  const restored = await Tasks.restoreRecord("1", { trashFileName: firstDeletion.fileName });
+  expect(restored.title).toBe("first");
+  expect((await Tasks.listTrash()).filter((entry) => entry.id === "1")).toHaveLength(1);
+});
+
 test("timestamps require the managed fields to be declared", async () => {
   const root = createMemoryRoot("acme-db");
   const db = await FileSystemDatabase.initialize(root, { version: 1, brandId: "acme" });

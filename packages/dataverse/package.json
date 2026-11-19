@@ -1,11 +1,12 @@
 {
   "name": "dataverse-schema",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "A Schema library designed for Microsoft Dataverse to aid in Web API calls",
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -13,15 +14,23 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./provision": {
+      "types": "./dist/provision/index.d.ts",
+      "import": "./dist/provision/index.js",
+      "default": "./dist/provision/index.js"
     },
     "./sync": {
       "types": "./dist/sync/index.d.ts",
-      "import": "./dist/sync/index.js"
+      "import": "./dist/sync/index.js",
+      "default": "./dist/sync/index.js"
     },
     "./sync/tanstack": {
       "types": "./dist/sync/tanstack.d.ts",
-      "import": "./dist/sync/tanstack.js"
+      "import": "./dist/sync/tanstack.js",
+      "default": "./dist/sync/tanstack.js"
     }
   },
   "keywords": [
@@ -30,7 +39,9 @@
     "schema",
     "dynamics",
     "crm",
-    "api"
+    "api",
+    "provisioning",
+    "metadata"
   ],
   "repository": {
     "type": "git",
@@ -42,6 +53,12 @@
   "homepage": "https://github.com/danielrkling/dataverse-schema/tree/main/packages/dataverse#readme",
   "bugs": {
     "url": "https://github.com/danielrkling/dataverse-schema/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "build": "tsdown",

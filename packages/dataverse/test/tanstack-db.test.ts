@@ -49,6 +49,30 @@ test("serializeMutation strips proxies so the payload is structuredClone-safe", 
   db.close();
 });
 
+test("serializeMutation keeps backend identity separate from a filtered collection id", () => {
+  const table = new DataverseTable({
+    client: new DataverseClient({ url: "https://org.crm.dynamics.com" }),
+    entitySetName: "contacts",
+    logicalName: "contact",
+    fields: { id: primaryKey("contactid"), name: string("fullname") },
+  });
+  const db = new SyncEngine({ name: "test-db-filtered", tables: [table], version: 1 });
+  const queued = serializeMutation(db, {
+    mutationId: "m-filtered",
+    type: "update",
+    key: "guid-1",
+    modified: { id: "guid-1", name: "Ada" },
+    changes: { name: "Ada" },
+    collection: { id: "active-contacts" },
+    createdAt: new Date(),
+  } as any, table.entitySetName);
+
+  expect(queued.entitySetName).toBe("contacts");
+  expect(queued.collectionId).toBe("active-contacts");
+  expect(db.tables.has(queued.entitySetName)).toBe(true);
+  db.close();
+});
+
 test("serializeMutation preserves binary payloads (file/image upload channels)", async () => {
   const table = new DataverseTable({
     client: new DataverseClient({ url: "https://org.crm.dynamics.com/api/data/v9.2" }),
@@ -206,7 +230,7 @@ test("retryErroredMutation un-forces a previously forced mutation on a plain ret
     // etag must be restored from the etag cache, because a bare precondition
     // would silently behave like force again.
     // Seed the freshest-known etag the way a prior successful write would.
-    (db as any).keyEtags.set("guid-f", 'W/"2"');
+    (db as any).keyEtags.set("tasks\0guid-f", 'W/"2"');
     await db.retryErroredMutation("f1");
     queued = await dbi.get(db.MUTATION_QUEUE_NAME, "f1");
     expect(queued.force).toBeFalsy();

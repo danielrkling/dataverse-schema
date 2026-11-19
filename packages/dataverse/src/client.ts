@@ -249,6 +249,18 @@ export class DataverseClient {
             .join(",");
     }
 
+    /** Merges per-operation preferences with the client defaults without duplicates. */
+    private _mergePrefer(required: string[] = [], excluded: string[] = []): string {
+        const keyOf = (value: string) => value.split("=")[0]!.trim().toLowerCase();
+        const replaced = new Set([...required, ...excluded].map(keyOf));
+        const merged = this._resolvePrefer(this.options.prefer ?? [])
+            .split(",")
+            .map((value) => value.trim())
+            .filter((value) => value && !replaced.has(keyOf(value)));
+        merged.push(...required);
+        return merged.join(",");
+    }
+
     private async *_iteratePages(
         resource: string,
         pageSize?: number,
@@ -256,10 +268,7 @@ export class DataverseClient {
     ): AsyncGenerator<any[]> {
         const extraHeaders: Record<string, string> = {};
         if (pageSize) {
-            const basePrefer = this._resolvePrefer(this.options.prefer ?? []);
-            extraHeaders["Prefer"] = basePrefer
-                ? `${basePrefer},odata.maxpagesize=${pageSize}`
-                : `odata.maxpagesize=${pageSize}`;
+            extraHeaders["Prefer"] = this._mergePrefer([`odata.maxpagesize=${pageSize}`]);
         }
         let nextLink: string | undefined = resource;
         while (nextLink) {
@@ -300,7 +309,7 @@ export class DataverseClient {
                 signal: options.signal,
             });
         } catch (error: any) {
-            if (error?.code === "0x80060891") return null;
+            if (error?.status === 404 || error?.code === "0x80060891" || error?.body?.code === "0x80060891") return null;
             throw error;
         }
     }
@@ -397,9 +406,14 @@ export class DataverseClient {
         if (options.overriddenCreatedOn !== undefined) {
             value = { ...value, overriddencreatedon: toTimestampValue(options.overriddenCreatedOn) };
         }
+        const prefer = returnRepresentation
+            ? this._mergePrefer(["return=representation"])
+            : this._mergePrefer([], ["return=representation"]);
         const result = await this.fetch(this._resource(getName(entitySetName), options.query), {
             method: "POST",
-            ...(returnRepresentation ? { headers: { Prefer: "return=representation" } } : {}),
+            // An explicit empty value also suppresses a client-level
+            // return=representation when the caller opted out.
+            ...((prefer || this.options.prefer?.length) ? { headers: { Prefer: prefer } } : {}),
             body: JSON.stringify(value),
             signal: options.signal,
         });
@@ -423,7 +437,7 @@ export class DataverseClient {
         value: object,
         options: PatchRecordOptions = {},
     ) {
-        const extraHeaders: Record<string, string> = { Prefer: "return=representation" };
+        const extraHeaders: Record<string, string> = { Prefer: this._mergePrefer(["return=representation"]) };
         if (options.ifMatch) extraHeaders["If-Match"] = options.ifMatch;
         if (options.ifNoneMatch) extraHeaders["If-None-Match"] = options.ifNoneMatch;
         return this.fetch(this._resource(`${getName(entitySetName)}(${id})`, options.query), {
@@ -614,6 +628,25 @@ export class DataverseClient {
         return childId as GUID;
     }
 
+    /** Adds a record to a collection-valued navigation property (`POST .../$ref`). */
+    async associateCollectionRecord(
+        entitySetName: Name,
+        parentId: string,
+        propertyName: Name,
+        childEntitySetName: Name,
+        childId: string,
+        options?: RequestOptions,
+    ): Promise<GUID> {
+        await this.fetch(`${getName(entitySetName)}(${parentId})/${getName(propertyName)}/$ref`, {
+            method: "POST",
+            body: JSON.stringify({
+                "@odata.id": `${this.options.url}/api/data/v9.2/${getName(childEntitySetName)}(${childId})`,
+            }),
+            ...options,
+        });
+        return childId as GUID;
+    }
+
     /**
      * Dissociates two records. If childId is omitted, all references are removed.
      *
@@ -707,7 +740,7 @@ export class DataverseClient {
         // Associate new records
         for (const id of childIds) {
             if (!currentIds.includes(id)) {
-                promises.push(this.associateRecord(entitySetName, parentId, propertyName, childEntitySetName, id));
+                promises.push(this.associateCollectionRecord(entitySetName, parentId, propertyName, childEntitySetName, id));
             }
         }
 
@@ -896,7 +929,7 @@ export class DataverseClient {
 
         const batchId = crypto.randomUUID();
 
-        const body = [tx.map((v, i) => [`--batch_${batchId}`, v]), `--batch_${batchId}--`].flat(10).join("\n");
+        const body = [tx.map((v) => [`--batch_${batchId}`, v]), `--batch_${batchId}--`].flat(10).join("\r\n");
 
         const result = await this.fetch("$batch", {
             method: "POST",
@@ -910,9 +943,13 @@ export class DataverseClient {
     }
 
     private _batchRequestLine(resource: string, method: string | undefined, options: RequestInit): NestedStringArray {
-        const lines: NestedStringArray = [`${method} /api/data/v9.2/${resource} HTTP/1.1`];
-        const contentType = (options.headers as Record<string, string>)?.["Content-Type"];
-        if (contentType) lines.push(`Content-Type: ${contentType}`);
+        const verb = (method ?? "GET").toUpperCase();
+        const lines: NestedStringArray = [`${verb} /api/data/v9.2/${resource} HTTP/1.1`];
+        const headers = new Headers(options.headers);
+        if (options.body != null && !headers.has("Content-Type")) {
+            headers.set("Content-Type", "application/json; type=entry");
+        }
+        headers.forEach((value, name) => lines.push(`${name}: ${value}`));
         lines.push("", options.body?.toString() ?? "");
         return lines;
     }
@@ -920,7 +957,12 @@ export class DataverseClient {
     _processBatch(resource: string, options: RequestInit): boolean {
         if (!this._batchTxs) return false;
 
-        this._batchTxs.push(this._batchRequestLine(resource, options.method, options));
+        this._batchTxs.push([
+            "Content-Type: application/http",
+            "Content-Transfer-Encoding: binary",
+            "",
+            this._batchRequestLine(resource, options.method, options),
+        ]);
 
         return true;
     }
@@ -967,14 +1009,11 @@ export class DataverseClient {
         if (!this._batchTxs) return false;
         if (!this._changeSetTxs) return false;
 
-        // console.log("processChangeset", resource, options)
-
-        this._changeSetTxs.push([
-            `${options.method} /api/data/v9.2/${resource} HTTP/1.1`,
-            `Content-Type: application/json; type=entry`,
-            "",
-            options.body?.toString() ?? "",
-        ]);
+        const method = (options.method ?? "GET").toUpperCase();
+        if (method === "GET" || method === "HEAD") {
+            throw new Error("GET/HEAD requests are not allowed inside a changeset");
+        }
+        this._changeSetTxs.push(this._batchRequestLine(resource, options.method, options));
 
         return true;
     }

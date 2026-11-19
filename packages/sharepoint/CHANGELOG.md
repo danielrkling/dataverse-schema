@@ -2,6 +2,18 @@
 
 All notable changes to `sharepoint-schema` are documented here.
 
+## 0.1.1
+
+### Fixed
+
+- Verbose collection pagination now preserves `d.__next`, so `getRecords`,
+  `iterateRecords`, and `iteratePages` fetch every page.
+- Item deletes now tunnel through `POST` with `X-HTTP-Method: DELETE`.
+- `SharePointTable.updateRecord()` re-reads and returns the authoritative item,
+  including its fresh etag, for callers and the offline sync engine.
+- Field-level Standard Schemas now validate and transform values on both reads
+  and writes, not only for JSON fields.
+
 ## 0.1.0
 
 Initial public release.

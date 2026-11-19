@@ -1,0 +1,76 @@
+name: Release to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish
+        required: true
+        type: choice
+        default: dataverse-schema
+        options:
+          - dataverse-schema
+          - sharepoint-schema
+          - filesystem-schema
+          - all
+      dry_run:
+        description: Run npm publish with --dry-run (recommended first)
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release:check
+
+  publish:
+    name: Publish ${{ inputs.package }}
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Publish package(s)
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.package }}" == "all" ]]; then
+            packages=(dataverse-schema sharepoint-schema filesystem-schema)
+          else
+            packages=("${{ inputs.package }}")
+          fi
+
+          for package in "${packages[@]}"; do
+            args=(publish --workspace "$package" --provenance --access public)
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+              args+=(--dry-run)
+            fi
+            echo "Running: npm ${args[*]}"
+            npm "${args[@]}"
+          done

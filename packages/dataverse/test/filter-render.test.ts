@@ -89,8 +89,9 @@ test("toFetchXml renders field-to-field compare with valueof", () => {
   expect(ne(ref("a"), ref("b")).toFetchXml()).toBe(`<condition attribute="a" operator="ne" valueof="b" />`)
 })
 
-test("toFetchXml omits value for null comparisons", () => {
-  expect(eq(ref("field"), null).toFetchXml()).toBe(`<condition attribute="field" operator="eq" value="" />`)
+test("toFetchXml renders null comparisons with null operators", () => {
+  expect(eq(ref("field"), null).toFetchXml()).toBe(`<condition attribute="field" operator="null" />`)
+  expect(ne(ref("field"), null).toFetchXml()).toBe(`<condition attribute="field" operator="not-null" />`)
 })
 
 // --- CRM functions ---
@@ -129,11 +130,20 @@ test("toFetchXml nests or conditions", () => {
   )
 })
 
-test("toFetchXml renders not as nested or inside and", () => {
-  const expr = not(eq(ref("age"), 20))
-  expect(expr.toFetchXml()).toBe(
-    `<filter type="and"><filter type="or"><condition attribute="age" operator="eq" value="20" /></filter></filter>`,
+test("toFetchXml lowers not through operator inversion and De Morgan", () => {
+  expect(not(eq(ref("age"), 20)).toFetchXml()).toBe(
+    `<condition attribute="age" operator="ne" value="20" />`,
   )
+  expect(not(isNull(ref("email"))).toFetchXml()).toBe(
+    `<condition attribute="email" operator="not-null" />`,
+  )
+  expect(not(and(eq(ref("a"), 1), eq(ref("b"), 2))).toFetchXml()).toBe(
+    `<filter type="or"><condition attribute="a" operator="ne" value="1" /><condition attribute="b" operator="ne" value="2" /></filter>`,
+  )
+  expect(not(not(eq(ref("a"), 1))).toFetchXml()).toBe(
+    `<condition attribute="a" operator="eq" value="1" />`,
+  )
+  expect(() => not(contains(ref("a"), "x")).toFetchXml()).toThrow("does not support negating")
 })
 
 test("toFetchXml returns empty string for empty and/or", () => {

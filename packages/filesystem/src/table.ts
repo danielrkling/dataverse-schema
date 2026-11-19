@@ -2,6 +2,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { FileSystemDatabase } from "./database";
 import { FileSystemConflictError, type FileSystemOperation } from "./errors";
 import { FieldBase, validateStandardSync, type InferRecord } from "./fields";
+import { withFileSystemLock } from "./locks";
 import type { StorageRetryPolicy } from "./retry";
 import {
   assertSafeSegment,
@@ -460,6 +461,15 @@ export abstract class FileSystemTableBase<
     return out;
   }
 
+  /** Converts a raw trash/history snapshot back through the read transform before restoring it. */
+  protected prepareRestoredStorage(raw: unknown, id: string) {
+    const transformed = this.transformRecordFromStorage(raw, id);
+    return {
+      storage: this.transformRecordToStorage(transformed as AnyRecord),
+      transformed,
+    };
+  }
+
   protected validateRecord(record: InferRecord<TFields>): InferRecord<TFields> {
     if (!this.schema) return record;
     return validateStandardSync(this.schema, record, `record in table "${this.name}"`) as InferRecord<TFields>;
@@ -472,6 +482,15 @@ export abstract class FileSystemTableBase<
   /** Path used in revision-conflict errors for a record. */
   protected recordPathFor(id: RecordId): string {
     return this.pathFor(recordFileName(id));
+  }
+
+  /** Serializes one record mutation (or the whole array file for single-file tables). */
+  protected withRecordLock<T>(
+    id: RecordId,
+    options: ReadOptions,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    return withFileSystemLock(this.db.root, this.recordPathFor(id), options.signal, task);
   }
 
   /** Throws a conflict when an `ifMatch` revision no longer matches. */
@@ -625,25 +644,28 @@ export abstract class FileSystemTableBase<
 
   protected async readTrashEntryData(
     id: RecordId,
-    options: ReadOptions = {},
+    options: RestoreRecordOptions = {},
   ): Promise<{ fileName: string; entry: TrashEntry } | null> {
     const entries = (await this.listTrashEntries(options)).filter(
       (entry) => entry.id === String(id),
     );
     if (entries.length === 0) return null;
-    const newest = entries[0]!;
+    const selected = options.trashFileName === undefined
+      ? entries[0]!
+      : entries.find((entry) => entry.fileName === options.trashFileName);
+    if (!selected) return null;
     const directory = await this.trashDirectory(false, options);
     if (!directory) return null;
     const text = await readTextFile(
       directory,
-      newest.fileName,
+      selected.fileName,
       options,
-      this.contextAt("read", this.trashPath(newest.fileName), String(id)),
+      this.contextAt("read", this.trashPath(selected.fileName), String(id)),
     );
     if (text === null) return null;
     return {
-      fileName: newest.fileName,
-      entry: parseTrashEntry(text, this.trashPath(newest.fileName)),
+      fileName: selected.fileName,
+      entry: parseTrashEntry(text, this.trashPath(selected.fileName)),
     };
   }
 
@@ -919,29 +941,31 @@ export class FileSystemTable<
     options: WriteOptions = {},
   ): Promise<WithRevision<InferRecord<TFields>>> {
     const id = this.resolveCreateId(value);
-    await this.ensureTableMetadata(options);
-    const directory = (await this.tableDirectory(true, options))!;
-    const fileName = recordFileName(id);
-    if (await fileExists(directory, fileName, options, this.contextFor("read", fileName, id))) {
-      throw new Error(`record "${id}" already exists in table "${this.name}"`);
-    }
-    const record = this.applyCreateTimestamps({
-      ...(value as AnyRecord),
-      [this.primaryKey.key]: id,
+    return this.withRecordLock(id, options, async () => {
+      await this.ensureTableMetadata(options);
+      const directory = (await this.tableDirectory(true, options))!;
+      const fileName = recordFileName(id);
+      if (await fileExists(directory, fileName, options, this.contextFor("read", fileName, id))) {
+        throw new Error(`record "${id}" already exists in table "${this.name}"`);
+      }
+      const record = this.applyCreateTimestamps({
+        ...(value as AnyRecord),
+        [this.primaryKey.key]: id,
+      });
+      const storage = this.transformRecordToStorage(record);
+      // Validate (including the table-level schema) before touching the file.
+      const transformed = this.transformRecordFromStorage(storage, id);
+      const text = serializeJson(storage);
+      await this.ensureTableMetadata(options);
+      await writeTextFile(
+        directory,
+        fileName,
+        text,
+        options,
+        this.contextFor("write", fileName, id),
+      );
+      return this.withRevision(transformed, revisionOfText(text));
     });
-    const storage = this.transformRecordToStorage(record);
-    // Validate (including the table-level schema) before touching the file.
-    const transformed = this.transformRecordFromStorage(storage, id);
-    const text = serializeJson(storage);
-    await this.ensureTableMetadata(options);
-    await writeTextFile(
-      directory,
-      fileName,
-      text,
-      options,
-      this.contextFor("write", fileName, id),
-    );
-    return this.withRevision(transformed, revisionOfText(text));
   }
 
   async updateRecord(
@@ -950,45 +974,47 @@ export class FileSystemTable<
     options: WriteOptions = {},
   ): Promise<WithRevision<InferRecord<TFields>>> {
     this.assertPatchId(id, value);
-    const directory = await this.directory(options);
-    const fileName = recordFileName(id);
-    const text = directory
-      ? await readTextFile(
-          directory,
-          fileName,
-          options,
-          this.contextFor("read", fileName, String(id)),
-        )
-      : null;
-    if (!directory || text === null || text.trim() === "") {
-      throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
-    }
-    const raw = parseJsonText(text, `record "${String(id)}" in table "${this.name}"`);
-    const existing = this.transformRecordFromStorage(raw, String(id));
-    this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
+    return this.withRecordLock(id, options, async () => {
+      const directory = await this.directory(options);
+      const fileName = recordFileName(id);
+      const text = directory
+        ? await readTextFile(
+            directory,
+            fileName,
+            options,
+            this.contextFor("read", fileName, String(id)),
+          )
+        : null;
+      if (!directory || text === null || text.trim() === "") {
+        throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
+      }
+      const raw = parseJsonText(text, `record "${String(id)}" in table "${this.name}"`);
+      const existing = this.transformRecordFromStorage(raw, String(id));
+      this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
 
-    const merged = {
-      ...(existing as AnyRecord),
-      ...withoutUndefined(value as AnyRecord),
-      [this.primaryKey.key]: String(id),
-    };
-    const timestamped = this.applyUpdateTimestamps(merged, existing as AnyRecord);
-    const storage = this.transformRecordToStorage(timestamped);
-    const transformed = this.transformRecordFromStorage(storage, String(id));
+      const merged = {
+        ...(existing as AnyRecord),
+        ...withoutUndefined(value as AnyRecord),
+        [this.primaryKey.key]: String(id),
+      };
+      const timestamped = this.applyUpdateTimestamps(merged, existing as AnyRecord);
+      const storage = this.transformRecordToStorage(timestamped);
+      const transformed = this.transformRecordFromStorage(storage, String(id));
 
-    await this.ensureTableMetadata(options);
-    if (this.history) {
-      await this.writeHistorySnapshot(id, raw, options);
-    }
-    const nextText = serializeJson(storage);
-    await writeTextFile(
-      directory,
-      fileName,
-      nextText,
-      options,
-      this.contextFor("write", fileName, String(id)),
-    );
-    return this.withRevision(transformed, revisionOfText(nextText));
+      await this.ensureTableMetadata(options);
+      if (this.history) {
+        await this.writeHistorySnapshot(id, raw, options);
+      }
+      const nextText = serializeJson(storage);
+      await writeTextFile(
+        directory,
+        fileName,
+        nextText,
+        options,
+        this.contextFor("write", fileName, String(id)),
+      );
+      return this.withRevision(transformed, revisionOfText(nextText));
+    });
   }
 
   async upsertRecord(
@@ -1003,128 +1029,131 @@ export class FileSystemTable<
   }
 
   async deleteRecord(id: RecordId, options: DeleteOptions = {}): Promise<string> {
-    const directory = await this.directory(options);
-    const fileName = recordFileName(id);
-    if (!directory) {
-      if (options.ifMissing === "ignore") return String(id);
-      throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
-    }
-
-    const soft = this.trashEnabled && options.permanent !== true;
-    const needsRead = Boolean(options.ifMatch || soft || this.history);
-    let text: string | null = null;
-    let raw: AnyRecord | undefined;
-    if (needsRead) {
-      text = await readTextFile(
-        directory,
-        fileName,
-        options,
-        this.contextFor("read", fileName, String(id)),
-      );
-      if (text === null || text.trim() === "") {
+    return this.withRecordLock(id, options, async () => {
+      const directory = await this.directory(options);
+      const fileName = recordFileName(id);
+      if (!directory) {
         if (options.ifMissing === "ignore") return String(id);
         throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
       }
-      const parsed = parseJsonText(text, `record "${String(id)}" in table "${this.name}"`);
-      if (!isRecord(parsed)) {
-        throw new Error(`record "${String(id)}" in table "${this.name}" must be a JSON object`);
-      }
-      raw = parsed;
-      this.transformRecordFromStorage(raw, String(id)); // validate before side effects
-      this.assertRevision("delete", id, revisionOfText(text), options.ifMatch);
-    }
 
-    await this.ensureTableMetadata(options);
-    if (soft) {
-      const trashFile = await this.writeTrashEntry(id, raw, options);
-      try {
-        await removeFile(
+      const soft = this.trashEnabled && options.permanent !== true;
+      const needsRead = Boolean(options.ifMatch || soft || this.history);
+      let text: string | null = null;
+      let raw: AnyRecord | undefined;
+      if (needsRead) {
+        text = await readTextFile(
           directory,
           fileName,
           options,
-          this.contextFor("delete", fileName, String(id)),
+          this.contextFor("read", fileName, String(id)),
         );
-      } catch (error) {
-        await this.removeTrashFile(trashFile, { signal: options.signal }).catch(() => {});
-        throw error;
+        if (text === null || text.trim() === "") {
+          if (options.ifMissing === "ignore") return String(id);
+          throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
+        }
+        const parsed = parseJsonText(text, `record "${String(id)}" in table "${this.name}"`);
+        if (!isRecord(parsed)) {
+          throw new Error(`record "${String(id)}" in table "${this.name}" must be a JSON object`);
+        }
+        raw = parsed;
+        this.transformRecordFromStorage(raw, String(id)); // validate before side effects
+        this.assertRevision("delete", id, revisionOfText(text), options.ifMatch);
+      }
+
+      await this.ensureTableMetadata(options);
+      if (soft) {
+        const trashFile = await this.writeTrashEntry(id, raw, options);
+        try {
+          await removeFile(
+            directory,
+            fileName,
+            options,
+            this.contextFor("delete", fileName, String(id)),
+          );
+        } catch (error) {
+          await this.removeTrashFile(trashFile, { signal: options.signal }).catch(() => {});
+          throw error;
+        }
+        return String(id);
+      }
+
+      if (this.history && raw !== undefined) {
+        await this.writeHistorySnapshot(id, raw, options);
+      }
+      const removed = await removeFile(
+        directory,
+        fileName,
+        options,
+        this.contextFor("delete", fileName, String(id)),
+      );
+      if (!removed && options.ifMissing !== "ignore") {
+        throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
       }
       return String(id);
-    }
-
-    if (this.history && raw !== undefined) {
-      await this.writeHistorySnapshot(id, raw, options);
-    }
-    const removed = await removeFile(
-      directory,
-      fileName,
-      options,
-      this.contextFor("delete", fileName, String(id)),
-    );
-    if (!removed && options.ifMissing !== "ignore") {
-      throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
-    }
-    return String(id);
+    });
   }
 
   async restoreRecord(
     id: RecordId,
     options: RestoreRecordOptions = {},
   ): Promise<WithRevision<InferRecord<TFields>>> {
-    const found = await this.readTrashEntryData(id, options);
-    if (!found) {
-      throw new Error(`no trash entry for record "${String(id)}" in table "${this.name}"`);
-    }
-    if (!isRecord(found.entry.data)) {
-      throw new Error(`trash entry "${found.fileName}" for table "${this.name}" has invalid record data`);
-    }
-    const directory = await getSubdirectory(
-      this.db.root,
-      this.name,
-      { create: true, signal: options.signal },
-      this.containerContext("create-directory"),
-    );
-    const fileName = recordFileName(id);
-    const exists = await fileExists(
-      directory,
-      fileName,
-      options,
-      this.contextFor("read", fileName, String(id)),
-    );
-    if (exists && options.ifExists !== "overwrite") {
-      throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
-    }
-    if (exists) {
-      const currentText = await readTextFile(
+    return this.withRecordLock(id, options, async () => {
+      const found = await this.readTrashEntryData(id, options);
+      if (!found) {
+        throw new Error(`no trash entry for record "${String(id)}" in table "${this.name}"`);
+      }
+      if (!isRecord(found.entry.data)) {
+        throw new Error(`trash entry "${found.fileName}" for table "${this.name}" has invalid record data`);
+      }
+      const directory = await getSubdirectory(
+        this.db.root,
+        this.name,
+        { create: true, signal: options.signal },
+        this.containerContext("create-directory"),
+      );
+      const fileName = recordFileName(id);
+      const exists = await fileExists(
         directory,
         fileName,
         options,
         this.contextFor("read", fileName, String(id)),
       );
-      if (currentText !== null && currentText.trim() !== "") {
-        this.assertRevision("write", id, revisionOfText(currentText), options.ifMatch);
-        if (this.history) {
-          const currentRaw = parseJsonText(
-            currentText,
-            `record "${String(id)}" in table "${this.name}"`,
-          );
-          if (isRecord(currentRaw)) await this.writeHistorySnapshot(id, currentRaw, options);
+      if (exists && options.ifExists !== "overwrite") {
+        throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
+      }
+      if (exists) {
+        const currentText = await readTextFile(
+          directory,
+          fileName,
+          options,
+          this.contextFor("read", fileName, String(id)),
+        );
+        if (currentText !== null && currentText.trim() !== "") {
+          this.assertRevision("write", id, revisionOfText(currentText), options.ifMatch);
+          if (this.history) {
+            const currentRaw = parseJsonText(
+              currentText,
+              `record "${String(id)}" in table "${this.name}"`,
+            );
+            if (isRecord(currentRaw)) await this.writeHistorySnapshot(id, currentRaw, options);
+          }
         }
       }
-    }
 
-    const storage = this.transformRecordToStorage(found.entry.data);
-    const transformed = this.transformRecordFromStorage(storage, String(id));
-    const text = serializeJson(storage);
-    await this.ensureTableMetadata(options);
-    await writeTextFile(
-      directory,
-      fileName,
-      text,
-      options,
-      this.contextFor("write", fileName, String(id)),
-    );
-    await this.removeTrashFile(found.fileName, options);
-    return this.withRevision(transformed, revisionOfText(text));
+      const { storage, transformed } = this.prepareRestoredStorage(found.entry.data, String(id));
+      const text = serializeJson(storage);
+      await this.ensureTableMetadata(options);
+      await writeTextFile(
+        directory,
+        fileName,
+        text,
+        options,
+        this.contextFor("write", fileName, String(id)),
+      );
+      await this.removeTrashFile(found.fileName, options);
+      return this.withRevision(transformed, revisionOfText(text));
+    });
   }
 
   async restoreHistory(
@@ -1132,57 +1161,58 @@ export class FileSystemTable<
     fileName: string,
     options: RestoreHistoryOptions = {},
   ): Promise<WithRevision<InferRecord<TFields>>> {
-    const entry = await this.readHistoryEntry(id, fileName, options);
-    if (!isRecord(entry.data)) {
-      throw new Error(`history snapshot "${fileName}" for table "${this.name}" has invalid record data`);
-    }
-    const directory = await getSubdirectory(
-      this.db.root,
-      this.name,
-      { create: true, signal: options.signal },
-      this.containerContext("create-directory"),
-    );
-    const recordFile = recordFileName(id);
-    const exists = await fileExists(
-      directory,
-      recordFile,
-      options,
-      this.contextFor("read", recordFile, String(id)),
-    );
-    if (exists && options.ifExists === "throw") {
-      throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
-    }
-    if (exists) {
-      const currentText = await readTextFile(
+    return this.withRecordLock(id, options, async () => {
+      const entry = await this.readHistoryEntry(id, fileName, options);
+      if (!isRecord(entry.data)) {
+        throw new Error(`history snapshot "${fileName}" for table "${this.name}" has invalid record data`);
+      }
+      const directory = await getSubdirectory(
+        this.db.root,
+        this.name,
+        { create: true, signal: options.signal },
+        this.containerContext("create-directory"),
+      );
+      const recordFile = recordFileName(id);
+      const exists = await fileExists(
         directory,
         recordFile,
         options,
         this.contextFor("read", recordFile, String(id)),
       );
-      if (currentText !== null && currentText.trim() !== "") {
-        this.assertRevision("write", id, revisionOfText(currentText), options.ifMatch);
-        if (this.history) {
-          const currentRaw = parseJsonText(
-            currentText,
-            `record "${String(id)}" in table "${this.name}"`,
-          );
-          if (isRecord(currentRaw)) await this.writeHistorySnapshot(id, currentRaw, options);
+      if (exists && options.ifExists === "throw") {
+        throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
+      }
+      if (exists) {
+        const currentText = await readTextFile(
+          directory,
+          recordFile,
+          options,
+          this.contextFor("read", recordFile, String(id)),
+        );
+        if (currentText !== null && currentText.trim() !== "") {
+          this.assertRevision("write", id, revisionOfText(currentText), options.ifMatch);
+          if (this.history) {
+            const currentRaw = parseJsonText(
+              currentText,
+              `record "${String(id)}" in table "${this.name}"`,
+            );
+            if (isRecord(currentRaw)) await this.writeHistorySnapshot(id, currentRaw, options);
+          }
         }
       }
-    }
 
-    const storage = this.transformRecordToStorage(entry.data);
-    const transformed = this.transformRecordFromStorage(storage, String(id));
-    const text = serializeJson(storage);
-    await this.ensureTableMetadata(options);
-    await writeTextFile(
-      directory,
-      recordFile,
-      text,
-      options,
-      this.contextFor("write", recordFile, String(id)),
-    );
-    return this.withRevision(transformed, revisionOfText(text));
+      const { storage, transformed } = this.prepareRestoredStorage(entry.data, String(id));
+      const text = serializeJson(storage);
+      await this.ensureTableMetadata(options);
+      await writeTextFile(
+        directory,
+        recordFile,
+        text,
+        options,
+        this.contextFor("write", recordFile, String(id)),
+      );
+      return this.withRevision(transformed, revisionOfText(text));
+    });
   }
 
   /**
@@ -1371,19 +1401,21 @@ export class FileSystemSingleFileTable<
     options: WriteOptions = {},
   ): Promise<WithRevision<InferRecord<TFields>>> {
     const id = this.resolveCreateId(value);
-    const { records } = await this.readRaw(options, id);
-    if (this.findIndex(records, id) >= 0) {
-      throw new Error(`record "${id}" already exists in table "${this.name}"`);
-    }
-    const record = this.applyCreateTimestamps({
-      ...(value as AnyRecord),
-      [this.primaryKey.key]: id,
+    return this.withRecordLock(id, options, async () => {
+      const { records } = await this.readRaw(options, id);
+      if (this.findIndex(records, id) >= 0) {
+        throw new Error(`record "${id}" already exists in table "${this.name}"`);
+      }
+      const record = this.applyCreateTimestamps({
+        ...(value as AnyRecord),
+        [this.primaryKey.key]: id,
+      });
+      const storage = this.transformRecordToStorage(record);
+      const transformed = this.transformRecordFromStorage(storage, id);
+      records.push(storage);
+      const text = await this.writeRawRecords(records, options, id);
+      return this.withRevision(transformed, revisionOfText(text));
     });
-    const storage = this.transformRecordToStorage(record);
-    const transformed = this.transformRecordFromStorage(storage, id);
-    records.push(storage);
-    const text = await this.writeRawRecords(records, options, id);
-    return this.withRevision(transformed, revisionOfText(text));
   }
 
   async updateRecord(
@@ -1392,24 +1424,26 @@ export class FileSystemSingleFileTable<
     options: WriteOptions = {},
   ): Promise<WithRevision<InferRecord<TFields>>> {
     this.assertPatchId(id, value);
-    const { records, text } = await this.readRaw(options, String(id));
-    const index = this.findIndex(records, id);
-    if (index < 0) throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
-    if (text !== null) this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
-    const oldRaw = records[index]!;
-    const existing = this.transformRecordFromStorage(oldRaw, String(id));
-    const merged = {
-      ...(existing as AnyRecord),
-      ...withoutUndefined(value as AnyRecord),
-      [this.primaryKey.key]: String(id),
-    };
-    const timestamped = this.applyUpdateTimestamps(merged, existing as AnyRecord);
-    const storage = this.transformRecordToStorage(timestamped);
-    const transformed = this.transformRecordFromStorage(storage, String(id));
-    if (this.history) await this.writeHistorySnapshot(id, oldRaw, options);
-    records[index] = storage;
-    const nextText = await this.writeRawRecords(records, options, String(id));
-    return this.withRevision(transformed, revisionOfText(nextText));
+    return this.withRecordLock(id, options, async () => {
+      const { records, text } = await this.readRaw(options, String(id));
+      const index = this.findIndex(records, id);
+      if (index < 0) throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
+      if (text !== null) this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
+      const oldRaw = records[index]!;
+      const existing = this.transformRecordFromStorage(oldRaw, String(id));
+      const merged = {
+        ...(existing as AnyRecord),
+        ...withoutUndefined(value as AnyRecord),
+        [this.primaryKey.key]: String(id),
+      };
+      const timestamped = this.applyUpdateTimestamps(merged, existing as AnyRecord);
+      const storage = this.transformRecordToStorage(timestamped);
+      const transformed = this.transformRecordFromStorage(storage, String(id));
+      if (this.history) await this.writeHistorySnapshot(id, oldRaw, options);
+      records[index] = storage;
+      const nextText = await this.writeRawRecords(records, options, String(id));
+      return this.withRevision(transformed, revisionOfText(nextText));
+    });
   }
 
   async upsertRecord(
@@ -1424,31 +1458,33 @@ export class FileSystemSingleFileTable<
   }
 
   async deleteRecord(id: RecordId, options: DeleteOptions = {}): Promise<string> {
-    const { records, text } = await this.readRaw(options, String(id));
-    const index = this.findIndex(records, id);
-    if (index < 0) {
-      if (options.ifMissing === "ignore") return String(id);
-      throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
-    }
-    if (text !== null) this.assertRevision("delete", id, revisionOfText(text), options.ifMatch);
-    const oldRaw = records[index]!;
-
-    if (this.trashEnabled && options.permanent !== true) {
-      const trashFile = await this.writeTrashEntry(id, oldRaw, options);
-      records.splice(index, 1);
-      try {
-        await this.writeRawRecords(records, options, String(id));
-      } catch (error) {
-        await this.removeTrashFile(trashFile, { signal: options.signal }).catch(() => {});
-        throw error;
+    return this.withRecordLock(id, options, async () => {
+      const { records, text } = await this.readRaw(options, String(id));
+      const index = this.findIndex(records, id);
+      if (index < 0) {
+        if (options.ifMissing === "ignore") return String(id);
+        throw new Error(`record "${String(id)}" not found in table "${this.name}"`);
       }
-      return String(id);
-    }
+      if (text !== null) this.assertRevision("delete", id, revisionOfText(text), options.ifMatch);
+      const oldRaw = records[index]!;
 
-    if (this.history) await this.writeHistorySnapshot(id, oldRaw, options);
-    records.splice(index, 1);
-    await this.writeRawRecords(records, options, String(id));
-    return String(id);
+      if (this.trashEnabled && options.permanent !== true) {
+        const trashFile = await this.writeTrashEntry(id, oldRaw, options);
+        records.splice(index, 1);
+        try {
+          await this.writeRawRecords(records, options, String(id));
+        } catch (error) {
+          await this.removeTrashFile(trashFile, { signal: options.signal }).catch(() => {});
+          throw error;
+        }
+        return String(id);
+      }
+
+      if (this.history) await this.writeHistorySnapshot(id, oldRaw, options);
+      records.splice(index, 1);
+      await this.writeRawRecords(records, options, String(id));
+      return String(id);
+    });
   }
 
   async restoreRecord(
@@ -1462,25 +1498,26 @@ export class FileSystemSingleFileTable<
     if (!isRecord(found.entry.data)) {
       throw new Error(`trash entry "${found.fileName}" for table "${this.name}" has invalid record data`);
     }
-    const { records, text } = await this.readRaw(options, String(id));
-    if (text !== null && text.trim() !== "") {
-      this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
-    }
-    const index = this.findIndex(records, id);
-    if (index >= 0 && options.ifExists !== "overwrite") {
-      throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
-    }
-    const storage = this.transformRecordToStorage(found.entry.data);
-    const transformed = this.transformRecordFromStorage(storage, String(id));
-    if (index >= 0) {
-      if (this.history) await this.writeHistorySnapshot(id, records[index]!, options);
-      records[index] = storage;
-    } else {
-      records.push(storage);
-    }
-    const nextText = await this.writeRawRecords(records, options, String(id));
-    await this.removeTrashFile(found.fileName, options);
-    return this.withRevision(transformed, revisionOfText(nextText));
+    return this.withRecordLock(id, options, async () => {
+      const { records, text } = await this.readRaw(options, String(id));
+      if (text !== null && text.trim() !== "") {
+        this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
+      }
+      const index = this.findIndex(records, id);
+      if (index >= 0 && options.ifExists !== "overwrite") {
+        throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
+      }
+      const { storage, transformed } = this.prepareRestoredStorage(found.entry.data, String(id));
+      if (index >= 0) {
+        if (this.history) await this.writeHistorySnapshot(id, records[index]!, options);
+        records[index] = storage;
+      } else {
+        records.push(storage);
+      }
+      const nextText = await this.writeRawRecords(records, options, String(id));
+      await this.removeTrashFile(found.fileName, options);
+      return this.withRevision(transformed, revisionOfText(nextText));
+    });
   }
 
   async restoreHistory(
@@ -1492,22 +1529,23 @@ export class FileSystemSingleFileTable<
     if (!isRecord(entry.data)) {
       throw new Error(`history snapshot "${fileName}" for table "${this.name}" has invalid record data`);
     }
-    const { records, text } = await this.readRaw(options, String(id));
-    if (text !== null) this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
-    const index = this.findIndex(records, id);
-    if (index >= 0 && options.ifExists === "throw") {
-      throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
-    }
-    const storage = this.transformRecordToStorage(entry.data);
-    const transformed = this.transformRecordFromStorage(storage, String(id));
-    if (index >= 0) {
-      if (this.history) await this.writeHistorySnapshot(id, records[index]!, options);
-      records[index] = storage;
-    } else {
-      records.push(storage);
-    }
-    const nextText = await this.writeRawRecords(records, options, String(id));
-    return this.withRevision(transformed, revisionOfText(nextText));
+    return this.withRecordLock(id, options, async () => {
+      const { records, text } = await this.readRaw(options, String(id));
+      if (text !== null) this.assertRevision("write", id, revisionOfText(text), options.ifMatch);
+      const index = this.findIndex(records, id);
+      if (index >= 0 && options.ifExists === "throw") {
+        throw new Error(`record "${String(id)}" already exists in table "${this.name}"`);
+      }
+      const { storage, transformed } = this.prepareRestoredStorage(entry.data, String(id));
+      if (index >= 0) {
+        if (this.history) await this.writeHistorySnapshot(id, records[index]!, options);
+        records[index] = storage;
+      } else {
+        records.push(storage);
+      }
+      const nextText = await this.writeRawRecords(records, options, String(id));
+      return this.withRevision(transformed, revisionOfText(nextText));
+    });
   }
 
   /**

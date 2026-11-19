@@ -327,7 +327,7 @@ export class SharePointClient {
      * await client.deleteRecord("Tasks", 12, { ifMatch: '"2"' });
      */
     async deleteRecord(listTitle: string, id: ListItemId | number, options: DeleteRecordOptions = {}): Promise<ListItemId> {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { "X-HTTP-Method": "DELETE" };
         if (options.ifMatch) headers["If-Match"] = options.ifMatch;
         const resource = `${this.itemsPath(listTitle)}(${id})`;
         await this.fetch(resource, { method: "POST", headers, signal: options.signal });
@@ -523,7 +523,18 @@ export function encodePath(serverRelativeUrl: string): string {
 export function unwrapVerbose(data: any): any {
     if (data && typeof data === "object" && "d" in data) {
         const d = data.d;
-        if (d && typeof d === "object" && Array.isArray((d as any).results)) return (d as any).results;
+        if (d && typeof d === "object" && Array.isArray((d as any).results)) {
+            const results = (d as any).results as any[];
+            // Keep the collection's pagination link without changing the array's
+            // enumerable shape (callers and deep-equality checks still see rows only).
+            if (typeof (d as any).__next === "string") {
+                Object.defineProperty(results, "__next", {
+                    value: (d as any).__next,
+                    configurable: true,
+                });
+            }
+            return results;
+        }
         if (d && typeof d === "object" && "results" in (d as any)) return (d as any).results;
         return d;
     }

@@ -169,7 +169,8 @@ test("createRecord/updateRecord throw when a comments value is passed in the rec
     ]);
     await expect(table.createRecord({ title: "T", feed: [] } as any)).rejects.toThrow("append-only");
     await expect(table.updateRecord(12, { title: "T2", feed: [{ id: "1" }] as any })).rejects.toThrow("append-only");
+    vi.spyOn(table, "getRecord").mockResolvedValue({ id: 12, title: "T3", feed: [] } as any);
     // a spread of a getRecords shape (comments absent) passes through fine
-    await expect(table.updateRecord(12, { title: "T3" })).resolves.toBeUndefined();
+    await expect(table.updateRecord(12, { title: "T3" })).resolves.toMatchObject({ id: 12, title: "T3" });
     expect(JSON.parse(mock.mock.calls.at(-1)![1].body).Title).toBe("T3");
 });

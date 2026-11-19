@@ -133,7 +133,7 @@ test("retryErroredMutation with useFreshEtag adopts the server's current etag", 
     expect(queued.attempts).toBe(0);
     // And the etag cache is primed so a sibling mutation for the same record
     // doesn't 412 against the old etag.
-    expect((engine as any).keyEtags.get("k")).toBe('W/"fresh"');
+    expect((engine as any).keyEtags.get("tasks\0k")).toBe('W/"fresh"');
     expect((await dbi.getAll(engine.ERRORED_MUTATIONS_NAME)).length).toBe(0);
   } finally {
     unlock();
@@ -150,7 +150,7 @@ test("rebase falls back to the freshest cached etag when the server is unreachab
     (engine.tables.get("tasks") as any).getRecord = async () => { throw new Error("unreachable") };
     const dbi = await (engine as any).getDB();
     await dbi.put(engine.ERRORED_MUTATIONS_NAME, { ...errored, id: "rebase-2", ifMatch: 'W/"stale"' });
-    (engine as any).keyEtags.set("k", 'W/"cached"');
+    (engine as any).keyEtags.set("tasks\0k", 'W/"cached"');
 
     await engine.retryErroredMutation("rebase-2", { useFreshEtag: true });
 
